@@ -17,6 +17,9 @@
 
 package org.connectbot.ui.components
 
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -143,10 +146,19 @@ fun FloatingTextInputDialog(
     }
 
     // Send text helper function
+    val sendScope = rememberCoroutineScope()
     fun sendText() {
         if (text.isNotEmpty()) {
             bridge.injectString(text)
             text = ""
+            // Attaché: sending means running it, so Return follows. Written
+            // separately and a moment later: a TUI such as an agent prompt
+            // treats text and a CR arriving in one burst as a paste, and
+            // inserts a newline instead of submitting.
+            sendScope.launch {
+                delay(80)
+                bridge.injectString("\r")
+            }
         }
     }
 

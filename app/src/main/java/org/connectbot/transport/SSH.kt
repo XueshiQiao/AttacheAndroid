@@ -754,23 +754,28 @@ open class SSH : AbsTransport {
 
     /** Attaché trial: a second channel on the same connection, running
      * `tmux -C`, beside the shell channel the terminal draws from. */
-    private fun startTmuxControl(sessionName: String) {
+    private fun startTmuxControl(target: org.attache.tmux.TmuxTrial.Target) {
         val job = scope.launch {
             var channel: org.connectbot.sshlib.SshSession? = null
             try {
                 channel = client?.openSession() ?: return@launch
-                if (!channel.requestExec(org.attache.tmux.TmuxTrial.controlCommand(sessionName))) {
+                if (!channel.requestExec(org.attache.tmux.TmuxTrial.controlCommand(target))) {
                     Timber.w("tmux -C exec rejected")
                     return@launch
                 }
                 val currentBridge = bridge
-                val control = org.attache.tmux.TmuxControl(channel, scope) { ended ->
-                    synchronized(tmuxLock) { if (tmuxControl === ended) tmuxControl = null }
-                    // Only this connection's own control is cleared: an old
-                    // connection closing late must not take down the one a
-                    // reconnect has just published on the same bridge.
-                    currentBridge?.tmuxControl?.compareAndSet(ended, null)
-                }
+                val control = org.attache.tmux.TmuxControl(
+                    channel,
+                    scope,
+                    onEnded = { ended ->
+                        synchronized(tmuxLock) { if (tmuxControl === ended) tmuxControl = null }
+                        // Only this connection's own control is cleared: an old
+                        // connection closing late must not take down the one a
+                        // reconnect has just published on the same bridge.
+                        currentBridge?.tmuxControl?.compareAndSet(ended, null)
+                    },
+                    exec = { command -> runOnce(command) },
+                )
                 synchronized(tmuxLock) {
                     if (locallyClosed) return@launch
                     tmuxControl = control
@@ -788,6 +793,23 @@ open class SSH : AbsTransport {
             }
         }
         synchronized(tmuxLock) { tmuxStart = job }
+    }
+
+    /** Attaché trial: one command on a channel of its own, its stdout. */
+    private suspend fun runOnce(command: String): String? {
+        val channel = client?.openSession() ?: return null
+        return try {
+            if (!channel.requestExec(command)) return null
+            val out = java.io.ByteArrayOutputStream()
+            for (chunk in channel.stdout) out.write(chunk)
+            out.toString(Charsets.UTF_8.name())
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            Timber.w(e, "exec failed: %s", command)
+            null
+        } finally {
+            channel.close()
+        }
     }
 
     private fun closeTmuxControl() {
@@ -850,9 +872,9 @@ open class SSH : AbsTransport {
 
             sessionOpen = true
 
-            org.attache.tmux.TmuxTrial.sessionFor(currentHost.nickname)?.let { name ->
-                openedSession.write((org.attache.tmux.TmuxTrial.attachCommand(name) + "\r").toByteArray())
-                startTmuxControl(name)
+            org.attache.tmux.TmuxTrial.targetFor(currentHost.nickname)?.let { target ->
+                openedSession.write((org.attache.tmux.TmuxTrial.attachCommand(target) + "\r").toByteArray())
+                startTmuxControl(target)
             }
 
             bridge?.onConnected()

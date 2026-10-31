@@ -97,6 +97,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.flow.MutableStateFlow
+import org.attache.tmux.TmuxActionsButton
+import org.attache.tmux.TmuxWindowChips
+import org.attache.tmux.tmuxTouch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
@@ -368,6 +372,8 @@ private fun Modifier.sessionSwipeNavigation(
     }
 }
 
+private val noTmuxControl = MutableStateFlow<org.attache.tmux.TmuxControl?>(null)
+
 @Composable
 private fun ConsoleTerminalPage(
     bridge: TerminalBridge,
@@ -427,17 +433,14 @@ private fun ConsoleTerminalPage(
             }
         }
 
-        val tmuxControl by bridge.tmuxControl.collectAsState()
-        tmuxControl?.let { org.attache.tmux.TmuxWindowStrip(it, Modifier.align(Alignment.TopCenter)) }
-
         Terminal(
             terminalEmulator = bridge.terminalEmulator,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(
-                    top = if (tmuxControl != null) org.attache.tmux.TmuxWindowStripHeight else 0.dp,
                     bottom = if (keyboardAlwaysVisible) keyboardHeight else 0.dp,
                 )
+
                 .then(terminalModifier)
                 .testTag("terminal"),
             typeface = fontResult.typeface,
@@ -651,6 +654,7 @@ fun ConsoleScreen(
     var showMenu by remember { mutableStateOf(false) }
     var resizeSuspended by remember { mutableStateOf(false) }
     var menuImeWasVisible by remember { mutableStateOf(false) }
+    var showTmuxMenu by remember { mutableStateOf(false) }
     var showUrlScanDialog by remember { mutableStateOf(false) }
     var showResizeDialog by remember { mutableStateOf(false) }
     var showDisconnectDialog by remember { mutableStateOf(false) }
@@ -708,7 +712,7 @@ fun ConsoleScreen(
     val isBiometricPromptActive = promptState is PromptRequest.BiometricPrompt
 
     // Check if any modal (menu or dialog) is currently active
-    val anyModalActive = showKeyboardSettings || showMenu || showUrlScanDialog || showResizeDialog ||
+    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showUrlScanDialog || showResizeDialog ||
         showDisconnectDialog || showSessionPickerDialog || showTextInputDialog || showConnectionInfoDialog ||
         isBiometricPromptActive || currentAuthBanner != null
 
@@ -1078,6 +1082,7 @@ fun ConsoleScreen(
                             .weight(1f),
                     ) {
                         val bridge = uiState.bridges[uiState.currentBridgeIndex]
+                        val pageTmuxControl by bridge.tmuxControl.collectAsState()
                         val terminalModifier = if (swipeBetweenSessions) {
                             Modifier.sessionSwipeNavigation(
                                 currentIndex = uiState.currentBridgeIndex,
@@ -1088,7 +1093,14 @@ fun ConsoleScreen(
                             )
                         } else {
                             Modifier
-                        }
+                        }.then(
+                            // Attaché: swipes scroll tmux and taps pick a pane —
+                            // except while text is being selected, whose handle
+                            // drags must reach the terminal.
+                            pageTmuxControl?.takeIf { !terminalSelectionActive }?.let { control ->
+                                Modifier.tmuxTouch(control) { bridge.terminalEmulator.dimensions }
+                            } ?: Modifier,
+                        )
 
                         key(bridge.host.id) {
                             ConsoleTerminalPage(
@@ -1241,15 +1253,24 @@ fun ConsoleScreen(
         // or temporarily visible when titleBarHide is true and showTitleBar is true
         if (!titleBarHide || showTitleBar) {
             val density = LocalDensity.current
+            val tmuxControl by (currentBridge?.tmuxControl ?: noTmuxControl).collectAsState()
             TopAppBar(
                 title = {
-                    Text(
+                    // Attaché: a tmux host's windows are the title, so the
+                    // chips and the bar share one row instead of stacking.
+                    tmuxControl?.let {
+                        androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+                            org.attache.tmux.TmuxSessionsButton(it)
+                            TmuxWindowChips(it)
+                        }
+                    } ?: Text(
                         currentBridge?.host?.nickname
                             ?: stringResource(R.string.console_default_title),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 },
+                expandedHeight = if (tmuxControl != null) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
                 modifier = Modifier
                     .testTag("top_app_bar")
                     .onSizeChanged {
@@ -1273,6 +1294,25 @@ fun ConsoleScreen(
                     TopAppBarDefaults.topAppBarColors()
                 },
                 actions = {
+                    tmuxControl?.let {
+                        // Opened and closed the way the overflow menu is, so the
+                        // keyboard, the PTY size and the title bar's auto-hide
+                        // treat it the same.
+                        TmuxActionsButton(
+                            control = it,
+                            expanded = showTmuxMenu,
+                            onOpen = {
+                                menuImeWasVisible = imeVisible
+                                resizeSuspended = true
+                                autoHideJobRef.titleBarJob?.cancel()
+                                showTmuxMenu = true
+                            },
+                            onDismiss = {
+                                showTmuxMenu = false
+                                termFocusRequester.requestFocus()
+                            },
+                        )
+                    }
                     if (hasMultipleSessions) {
                         IconButton(onClick = { showSessionPickerDialog = true }) {
                             Icon(
@@ -1294,8 +1334,10 @@ fun ConsoleScreen(
                         )
                     }
 
-                    // Paste button - always visible
-                    IconButton(
+                    // Paste button - always visible, except on a tmux host,
+                    // where the chips need the width more; the text input
+                    // dialog still takes a paste.
+                    if (tmuxControl == null) IconButton(
                         onClick = {
                             pasteClipboardContents()
                         },
