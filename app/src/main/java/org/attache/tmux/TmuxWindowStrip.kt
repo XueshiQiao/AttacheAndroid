@@ -114,8 +114,13 @@ fun Modifier.tmuxTouch(control: TmuxControl, dimensions: () -> TerminalDimension
         val slop = viewConfiguration.touchSlop
         val longPress = viewConfiguration.longPressTimeoutMillis
         val scope = CoroutineScope(currentCoroutineContext())
+        var fling: kotlinx.coroutines.Job? = null
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            // A new touch stops a fling still running, as in any list.
+            fling?.cancel()
+            fling = null
+            val velocity = androidx.compose.ui.input.pointer.util.VelocityTracker()
             val dims = dimensions()
             val rows = dims?.rows?.takeIf { it > 0 } ?: return@awaitEachGesture
             val columns = dims.columns.takeIf { it > 0 } ?: return@awaitEachGesture
@@ -131,6 +136,31 @@ fun Modifier.tmuxTouch(control: TmuxControl, dimensions: () -> TerminalDimension
                 val change = event.changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
                 val total = change.position - down.position
                 if (!change.pressed) {
+                    if (scrolling) {
+                        val pane = target ?: return@awaitEachGesture
+                        val v = velocity.calculateVelocity().y
+                        val column = (down.position.x / cellWidth).toInt() - pane.left + 1
+                        val row = (down.position.y / lineHeight).toInt() - pane.top + 1
+                        // Momentum: keep scrolling at the release speed and
+                        // let it decay, so a flick travels like it does in
+                        // any native list.
+                        if (abs(v) > FLING_MIN_VELOCITY) {
+                            fling = scope.launch {
+                                var speed = v
+                                var carry = pending
+                                while (abs(speed) > FLING_STOP_VELOCITY) {
+                                    kotlinx.coroutines.delay(FLING_FRAME_MS)
+                                    carry += speed * FLING_FRAME_MS / 1000f
+                                    val lines = (carry / lineHeight).toInt()
+                                    if (lines != 0) {
+                                        control.scroll(pane.id, lines, column, row)
+                                        carry -= lines * lineHeight
+                                    }
+                                    speed *= FLING_DECAY
+                                }
+                            }
+                        }
+                    }
                     if (!moved && !scrolling && change.uptimeMillis - down.uptimeMillis < longPress) {
                         val column = (down.position.x / cellWidth).toInt()
                         val row = (down.position.y / lineHeight).toInt()
@@ -156,6 +186,7 @@ fun Modifier.tmuxTouch(control: TmuxControl, dimensions: () -> TerminalDimension
                         return@awaitEachGesture
                     }
                 }
+                velocity.addPosition(change.uptimeMillis, change.position)
                 if (scrolling) {
                     // Finger down is older text, which is tmux's scroll-up.
                     pending += change.position.y - change.previousPosition.y
@@ -175,6 +206,11 @@ fun Modifier.tmuxTouch(control: TmuxControl, dimensions: () -> TerminalDimension
             }
         }
     }
+
+private const val FLING_FRAME_MS = 16L
+private const val FLING_DECAY = 0.95f
+private const val FLING_MIN_VELOCITY = 400f
+private const val FLING_STOP_VELOCITY = 60f
 
 /**
  * The current session's name; a tap opens every session on the server, each

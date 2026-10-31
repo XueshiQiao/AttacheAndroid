@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -141,18 +142,20 @@ class TmuxControl(
                 for (request in refreshRequests) refresh()
             }
             jobs += scope.launch {
+                // Every 50ms what piled up is merged per pane and sent
+                // without waiting for tmux's reply: over a relayed link one
+                // round trip measured 580-780ms, and waiting for each made
+                // a swipe advance in jerks of that size.
                 for (first in scrollRequests) {
-                    var batch = first
-                    while (true) {
-                        val next = scrollRequests.tryReceive().getOrNull() ?: break
-                        if (next.pane != batch.pane) {
-                            sendScroll(batch)
-                            batch = next
-                        } else {
-                            batch = next.copy(lines = batch.lines + next.lines)
-                        }
+                    delay(SCROLL_BATCH_MS)
+                    val merged = LinkedHashMap<String, ScrollRequest>()
+                    var next: ScrollRequest? = first
+                    while (next != null) {
+                        val r = next
+                        merged[r.pane] = merged[r.pane]?.let { r.copy(lines = it.lines + r.lines) } ?: r
+                        next = scrollRequests.tryReceive().getOrNull()
                     }
-                    sendScroll(batch)
+                    merged.values.forEach { r -> scope.launch { sendScroll(r) } }
                 }
             }
         }
@@ -257,8 +260,8 @@ class TmuxControl(
         val up = lines > 0
         val history = "send-keys -X -N $n -t $pane ${if (up) "scroll-up" else "scroll-down"}"
         val wheel = "if-shell -F -t $pane '#{mouse_sgr_flag}' " +
-            "{ send-keys -H -t $pane ${wheelBytes(up, column, row, sgr = true, count = n)} } " +
-            "{ send-keys -H -t $pane ${wheelBytes(up, column, row, sgr = false, count = n)} }"
+            "{ send-keys -H -N $n -t $pane ${wheelBytes(up, column, row, sgr = true)} } " +
+            "{ send-keys -H -N $n -t $pane ${wheelBytes(up, column, row, sgr = false)} }"
         val keys = "send-keys -N $n -t $pane ${if (up) "Up" else "Down"}"
         val otherwise = if (up) "{ copy-mode -e -t $pane ; $history }" else "''"
         val command = "if-shell -F -t $pane '#{pane_in_mode}' { $history } " +
@@ -271,10 +274,11 @@ class TmuxControl(
         }
     }
 
-    /** [count] wheel events at a cell, as hex for `send-keys -H`: SGR
+    /** One wheel event at a cell, as hex for `send-keys -H` (`-N` repeats
+     * it — measured on tmux 3.6a: `-H -N 7` moved less --mouse 7 lines): SGR
      * (`ESC [ < 64 ; x ; y M`) when the program asked for it, otherwise the
      * original encoding, which cannot address past column or row 223. */
-    private fun wheelBytes(up: Boolean, column: Int, row: Int, sgr: Boolean, count: Int): String {
+    private fun wheelBytes(up: Boolean, column: Int, row: Int, sgr: Boolean): String {
         val button = if (up) 64 else 65
         val one = if (sgr) {
             "\u001b[<$button;$column;${row}M".toByteArray()
@@ -282,7 +286,7 @@ class TmuxControl(
             byteArrayOf(0x1b, '['.code.toByte(), 'M'.code.toByte(), (32 + button).toByte(),
                 (32 + column.coerceAtMost(223)).toByte(), (32 + row.coerceAtMost(223)).toByte())
         }
-        return (1..count).joinToString(" ") { one.joinToString(" ") { "%02x".format(it.toInt() and 0xff) } }
+        return one.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
     }
 
     private suspend fun refresh() {
@@ -464,6 +468,7 @@ class TmuxControl(
 
     private companion object {
         const val SEP = "\u0001"
+        const val SCROLL_BATCH_MS = 50L
         val SESSION_ID = Regex("^\\$\\d+$")
         val WINDOW_ID = Regex("^@\\d+$")
         val PANE_ID = Regex("^%\\d+$")

@@ -146,19 +146,21 @@ fun FloatingTextInputDialog(
     }
 
     // Send text helper function
-    val sendScope = rememberCoroutineScope()
     fun sendText() {
         if (text.isNotEmpty()) {
-            bridge.injectString(text)
+            val sent = text
+            bridge.injectString(sent)
             text = ""
-            // Attaché: sending means running it, so Return follows. Written
-            // separately and a moment later: a TUI such as an agent prompt
-            // treats text and a CR arriving in one burst as a paste, and
-            // inserts a newline instead of submitting.
-            sendScope.launch {
-                delay(80)
-                bridge.injectString("\r")
+            // Attaché: sending means running it, so Return follows — unless
+            // the text already ends a line. Written separately and a moment
+            // later: a TUI such as an agent prompt treats text and a CR
+            // arriving in one burst as a paste and inserts a newline instead
+            // of submitting. Posted on the main looper rather than this
+            // dialog's scope, because the dialog closes right now.
+            if (!sent.endsWith("\n") && !sent.endsWith("\r")) {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ bridge.injectString("\r") }, 80)
             }
+            onDismiss()
         }
     }
 
