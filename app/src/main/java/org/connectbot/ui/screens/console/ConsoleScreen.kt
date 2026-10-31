@@ -98,8 +98,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import kotlinx.coroutines.flow.MutableStateFlow
-import org.attache.tmux.TmuxActionsButton
-import org.attache.tmux.TmuxWindowChips
+import org.attache.tmux.AttacheAccessoryRow
+import org.attache.tmux.sendAgentCommand
 import org.attache.tmux.tmuxTouch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -409,6 +409,7 @@ private fun ConsoleTerminalPage(
     onShortcutModifierChange: () -> Unit,
     modifier: Modifier = Modifier,
     terminalModifier: Modifier = Modifier,
+    accessoryRow: (@Composable () -> Unit)? = null,
 ) {
     val keyboardDensity = LocalDensity.current
     var keyboardHeight by remember { mutableStateOf(0.dp) }
@@ -494,8 +495,13 @@ private fun ConsoleTerminalPage(
                     .align(Alignment.BottomCenter)
                     .testTag("terminal_keyboard"),
             ) {
+                // Attaché: a tmux host's own row sits above the configured
+                // keys and is measured with them, so the terminal is padded
+                // for both.
+                Column(modifier = Modifier.onSizeChanged { keyboardHeight = with(keyboardDensity) { it.height.toDp() } }) {
+                accessoryRow?.invoke()
                 TerminalKeyboard(
-                    modifier = Modifier.heightIn(max = consoleHeight / 2).onSizeChanged { keyboardHeight = with(keyboardDensity) { it.height.toDp() } },
+                    modifier = Modifier.heightIn(max = consoleHeight / 2),
                     bridge = bridge,
                     onInteraction = { handleTerminalInteraction() },
                     onHideIme = {
@@ -514,6 +520,7 @@ private fun ConsoleTerminalPage(
                     onToggleComposeMode = onToggleComposeMode,
                     onShortcutModifierChange = onShortcutModifierChange,
                 )
+                }
             }
 
             val promptState by bridge.promptManager.promptState.collectAsState()
@@ -655,6 +662,7 @@ fun ConsoleScreen(
     var resizeSuspended by remember { mutableStateOf(false) }
     var menuImeWasVisible by remember { mutableStateOf(false) }
     var showTmuxMenu by remember { mutableStateOf(false) }
+    var showSlashMenu by remember { mutableStateOf(false) }
     var showUrlScanDialog by remember { mutableStateOf(false) }
     var showResizeDialog by remember { mutableStateOf(false) }
     var showDisconnectDialog by remember { mutableStateOf(false) }
@@ -712,7 +720,7 @@ fun ConsoleScreen(
     val isBiometricPromptActive = promptState is PromptRequest.BiometricPrompt
 
     // Check if any modal (menu or dialog) is currently active
-    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showUrlScanDialog || showResizeDialog ||
+    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showUrlScanDialog || showResizeDialog ||
         showDisconnectDialog || showSessionPickerDialog || showTextInputDialog || showConnectionInfoDialog ||
         isBiometricPromptActive || currentAuthBanner != null
 
@@ -1151,6 +1159,41 @@ fun ConsoleScreen(
                                 },
                                 modifier = Modifier.fillMaxSize(),
                                 terminalModifier = terminalModifier,
+                                accessoryRow = pageTmuxControl?.let { control ->
+                                    {
+                                        // Menus open and close the way the overflow menu
+                                        // does, so the keyboard, the PTY size and the
+                                        // title bar's auto-hide treat them the same.
+                                        fun openMenu(open: () -> Unit) {
+                                            menuImeWasVisible = imeVisible
+                                            resizeSuspended = true
+                                            autoHideJobRef.titleBarJob?.cancel()
+                                            open()
+                                        }
+                                        AttacheAccessoryRow(
+                                            control = control,
+                                            onTextInput = { showTextInputDialog = true },
+                                            onPaste = ::pasteClipboardContents,
+                                            onSendSlashCommand = { command ->
+                                                termFocusRequester.requestFocus()
+                                                sendAgentCommand(bridge, command)
+                                            },
+                                            slashMenuOpen = showSlashMenu,
+                                            onOpenSlashMenu = { openMenu { showSlashMenu = true } },
+                                            onDismissSlashMenu = {
+                                                showSlashMenu = false
+                                                termFocusRequester.requestFocus()
+                                            },
+                                            tmuxMenuOpen = showTmuxMenu,
+                                            onOpenTmuxMenu = { openMenu { showTmuxMenu = true } },
+                                            onDismissTmuxMenu = {
+                                                showTmuxMenu = false
+                                                termFocusRequester.requestFocus()
+                                            },
+                                            onInteraction = { handleTerminalInteraction(resetTitleBarTimer = false) },
+                                        )
+                                    }
+                                },
                             )
                         }
                     }
@@ -1256,13 +1299,11 @@ fun ConsoleScreen(
             val tmuxControl by (currentBridge?.tmuxControl ?: noTmuxControl).collectAsState()
             TopAppBar(
                 title = {
-                    // Attaché: a tmux host's windows are the title, so the
-                    // chips and the bar share one row instead of stacking.
+                    // Attaché: a tmux host's session and current window are
+                    // the title; switching windows happens in the sheet the
+                    // title opens, and the tools live in the row above the keys.
                     tmuxControl?.let {
-                        androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
-                            org.attache.tmux.TmuxSessionsButton(it)
-                            TmuxWindowChips(it)
-                        }
+                        org.attache.tmux.TmuxSessionsButton(it)
                     } ?: Text(
                         currentBridge?.host?.nickname
                             ?: stringResource(R.string.console_default_title),
@@ -1294,25 +1335,6 @@ fun ConsoleScreen(
                     TopAppBarDefaults.topAppBarColors()
                 },
                 actions = {
-                    tmuxControl?.let {
-                        // Opened and closed the way the overflow menu is, so the
-                        // keyboard, the PTY size and the title bar's auto-hide
-                        // treat it the same.
-                        TmuxActionsButton(
-                            control = it,
-                            expanded = showTmuxMenu,
-                            onOpen = {
-                                menuImeWasVisible = imeVisible
-                                resizeSuspended = true
-                                autoHideJobRef.titleBarJob?.cancel()
-                                showTmuxMenu = true
-                            },
-                            onDismiss = {
-                                showTmuxMenu = false
-                                termFocusRequester.requestFocus()
-                            },
-                        )
-                    }
                     if (hasMultipleSessions) {
                         IconButton(onClick = { showSessionPickerDialog = true }) {
                             Icon(
@@ -1322,8 +1344,9 @@ fun ConsoleScreen(
                         }
                     }
 
-                    // Text Input button
-                    IconButton(
+                    // Text Input button — on a tmux host it is in the row
+                    // above the keys instead.
+                    if (tmuxControl == null) IconButton(
                         onClick = { showTextInputDialog = true },
                         enabled = currentBridge != null,
                         modifier = Modifier.testTag("title_bar_text_input"),

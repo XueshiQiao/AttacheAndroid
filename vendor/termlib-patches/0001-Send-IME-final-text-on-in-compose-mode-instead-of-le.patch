@@ -1,0 +1,302 @@
+From d4763a76808eb5b6d0376cbf71f4b4d886c3531b Mon Sep 17 00:00:00 2001
+From: XueshiQiao <qiaoxueshi@gmail.com>
+Date: Sat, 31 Oct 2026 16:51:00 +0800
+Subject: [PATCH 1/2] Send IME-final text on in compose mode instead of leaving
+ it in the overlay
+
+A CJK IME that accepts a candidate with finishComposingText() left the
+text in the compose buffer, shown in the overlay as if typed; the Space
+or Enter that followed reached the terminal ahead of it, and a Space the
+IME sent as a key event was buffered too. Nothing reached the shell until
+compose mode was toggled off.
+
+The buffer now mirrors only the IME's live composing region: finishing
+the composition flushes it, committed text flushes it first so order is
+kept, and a key the IME sends with no composition in progress goes to the
+terminal. Hardware keys still buffer as before.
+---
+ .../org/connectbot/terminal/ImeInputView.kt   |  14 +-
+ .../connectbot/terminal/KeyboardHandler.kt    |  31 +++-
+ .../terminal/ComposeModeImeCommitTest.kt      | 175 ++++++++++++++++++
+ 3 files changed, 217 insertions(+), 3 deletions(-)
+ create mode 100644 lib/src/test/java/org/connectbot/terminal/ComposeModeImeCommitTest.kt
+
+diff --git a/lib/src/main/java/org/connectbot/terminal/ImeInputView.kt b/lib/src/main/java/org/connectbot/terminal/ImeInputView.kt
+index 5b5e9129..a0e9c4b9 100644
+--- a/lib/src/main/java/org/connectbot/terminal/ImeInputView.kt
++++ b/lib/src/main/java/org/connectbot/terminal/ImeInputView.kt
+@@ -448,6 +448,10 @@ internal class ImeInputView(
+             if (!fullEditor) return super.finishComposingText()
+ 
+             super.finishComposingText()
++            // The IME has accepted its composition as typed. The projected copy lives in the
++            // compose buffer, so send it on; left there it showed in the overlay as though
++            // typed, while the Space or Enter that followed went to the terminal ahead of it.
++            if (composingText.isNotEmpty()) keyboardHandler.flushComposeBuffer()
+             composingText = ""
+             trimEditableContext()
+             committedContext = editable?.toString().orEmpty()
+@@ -495,7 +499,15 @@ internal class ImeInputView(
+                 // Compose mode (TYPE_CLASS_TEXT): route through dispatchKeyEvent so the
+                 // setOnKeyListener chain handles it. Clear the editable buffer afterward so
+                 // Gboard does not accumulate terminal input as suggestion candidates.
+-                val result = this@ImeInputView.dispatchKeyEvent(event)
++                // With no composition in progress the key is final input, not more of a
++                // composition, so it must not be buffered (see KeyboardHandler.dispatchingImeKey).
++                val bypass = composingText.isEmpty()
++                if (bypass) keyboardHandler.dispatchingImeKey = true
++                val result = try {
++                    this@ImeInputView.dispatchKeyEvent(event)
++                } finally {
++                    if (bypass) keyboardHandler.dispatchingImeKey = false
++                }
+                 if (isKeyDown) {
+                     awaitingPostEnterCommitReplay = event.keyCode == KeyEvent.KEYCODE_ENTER
+                     postEnterSubmittedText = postEnterSubmittedBeforeDispatch
+diff --git a/lib/src/main/java/org/connectbot/terminal/KeyboardHandler.kt b/lib/src/main/java/org/connectbot/terminal/KeyboardHandler.kt
+index dd1a84e0..6c9e07f3 100644
+--- a/lib/src/main/java/org/connectbot/terminal/KeyboardHandler.kt
++++ b/lib/src/main/java/org/connectbot/terminal/KeyboardHandler.kt
+@@ -105,6 +105,15 @@ internal class KeyboardHandler(
+     var pendingDeadChar: Int by mutableStateOf(0)
+         internal set
+ 
++    /**
++     * Set while a key the IME sent through its InputConnection is dispatched. Such a key is
++     * already final as far as the IME is concerned — it composes in its own region, which is
++     * what the compose buffer mirrors — so it flushes the buffer and goes to the terminal
++     * rather than being buffered like a hardware key. Without this, a Space from a CJK IME
++     * vanished into the overlay and stayed there until compose mode was toggled off.
++     */
++    internal var dispatchingImeKey: Boolean = false
++
+     /**
+      * Process a Compose KeyEvent and send to terminal.
+      * Returns true if the event was handled.
+@@ -139,7 +148,10 @@ internal class KeyboardHandler(
+ 
+         // Buffer text while composing, but let terminal commands use the normal key path.
+         val compose = composeMode
+-        if (compose != null && compose.isActive) {
++        if (compose != null && compose.isActive && dispatchingImeKey) {
++            if (AndroidKeyEvent.isModifierKey(nativeEvent.keyCode)) return false
++            flushComposition()
++        } else if (compose != null && compose.isActive) {
+             if (AndroidKeyEvent.isModifierKey(nativeEvent.keyCode)) return false
+             val modifiers = buildModifierMask(ctrl, alt, shift)
+             val terminalShortcut = modifiers and TERMINAL_SHORTCUT_MODIFIERS != 0
+@@ -333,6 +345,18 @@ internal class KeyboardHandler(
+         composeMode?.commit()?.let { sendText(0, it, false) }
+     }
+ 
++    /**
++     * Send whatever the compose buffer holds to the terminal now. Called when the IME finishes
++     * its composition without committing it (finishComposingText), which many CJK IMEs do to
++     * accept a candidate: the text is final, and must not wait in the overlay while the next
++     * Space or Enter reaches the terminal ahead of it.
++     */
++    internal fun flushComposeBuffer() {
++        val text = composeMode?.commit() ?: return
++        sendText(0, text, false)
++        onInputProcessed?.invoke()
++    }
++
+     /**
+      * Process text input from IME (Input Method Editor).
+      * This handles multi-byte UTF-8 text from the software keyboard.
+@@ -376,7 +400,10 @@ internal class KeyboardHandler(
+             Normalizer.normalize(text, Normalizer.Form.NFC)
+         }
+         val modifiers = getModifierMask()
+-        if (composeMode?.isActive == true && modifiers and TERMINAL_SHORTCUT_MODIFIERS != 0) {
++        // Anything still in the buffer was typed before this text, so it goes first. A
++        // commit that replaces the IME's own composition has already deleted the projected
++        // copy from the buffer, so this sends only text that is really pending.
++        if (composeMode?.isActive == true) {
+             flushComposition()
+         }
+ 
+diff --git a/lib/src/test/java/org/connectbot/terminal/ComposeModeImeCommitTest.kt b/lib/src/test/java/org/connectbot/terminal/ComposeModeImeCommitTest.kt
+new file mode 100644
+index 00000000..c084ff40
+--- /dev/null
++++ b/lib/src/test/java/org/connectbot/terminal/ComposeModeImeCommitTest.kt
+@@ -0,0 +1,175 @@
++/*
++ * ConnectBot Terminal
++ * Copyright 2026 Kenny Root
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.connectbot.terminal
++
++import android.content.Context
++import android.view.KeyEvent
++import android.view.inputmethod.EditorInfo
++import android.view.inputmethod.InputConnection
++import android.view.inputmethod.InputMethodManager
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import androidx.test.platform.app.InstrumentationRegistry
++import org.junit.Assert.assertEquals
++import org.junit.Test
++import org.junit.runner.RunWith
++
++/**
++ * In compose mode the local buffer mirrors the IME's composing region and
++ * nothing else from the IME: once the IME considers text final it must reach
++ * the terminal, in the order it was typed. Otherwise a Chinese or Japanese
++ * IME that finishes a candidate with finishComposingText() leaves the text in
++ * the overlay, and the Space or Enter that follows reaches the shell ahead of
++ * it — the text looks typed but is not, until compose mode is toggled off.
++ */
++@RunWith(AndroidJUnit4::class)
++class ComposeModeImeCommitTest {
++
++    private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
++
++    private class Capture(val ic: InputConnection, val outputs: MutableList<ByteArray>, val composeMode: ComposeMode)
++
++    private fun capture(): Capture {
++        val outputs = mutableListOf<ByteArray>()
++        val composeMode = ComposeMode().also { it.activate() }
++        val emulator = TerminalEmulatorFactory.create(
++            initialRows = 24,
++            initialCols = 80,
++            onKeyboardInput = { data -> outputs.add(data.copyOf()) },
++        )
++        val handler = KeyboardHandler(emulator).also {
++            it.composeMode = composeMode
++            it.unicodeCharLookup = { _, keyCode, _ ->
++                when (keyCode) {
++                    KeyEvent.KEYCODE_SPACE -> ' '.code
++                    KeyEvent.KEYCODE_A -> 'a'.code
++                    else -> 0
++                }
++            }
++        }
++        var ic: InputConnection? = null
++        InstrumentationRegistry.getInstrumentation().runOnMainSync {
++            val view = ImeInputView(
++                context = context,
++                keyboardHandler = handler,
++                inputMethodManager = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager,
++                onRestartInput = {},
++            )
++            view.isComposeModeActive = true
++            // As Terminal wires it.
++            view.setOnKeyListener { _, _, event -> view.handleRawKeyEvent(event) }
++            ic = view.onCreateInputConnection(EditorInfo())
++        }
++        return Capture(ic!!, outputs, composeMode)
++    }
++
++    private fun Capture.run(block: InputConnection.() -> Unit) {
++        InstrumentationRegistry.getInstrumentation().runOnMainSync { ic.block() }
++        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
++    }
++
++    /** What the shell has been sent, with DEL/BS applied per code point and
++     * CR shown as \n. */
++    private fun Capture.sent(): String {
++        val text = outputs.fold(ByteArray(0)) { a, b -> a + b }.toString(Charsets.UTF_8)
++        val out = StringBuilder()
++        text.codePoints().forEach { cp ->
++            when (cp) {
++                0x7F, 0x08 -> if (out.isNotEmpty()) out.setLength(out.offsetByCodePoints(out.length, -1))
++                0x0D, 0x0A -> out.append('\n')
++                else -> if (cp >= 0x20) out.appendCodePoint(cp)
++            }
++        }
++        return out.toString()
++    }
++
++    private fun key(code: Int) = KeyEvent(KeyEvent.ACTION_DOWN, code)
++
++    @Test
++    fun finishComposingTextSendsTheComposition() {
++        val c = capture()
++        c.run {
++            setComposingText("ni", 1)
++            setComposingText("你好", 1)
++            finishComposingText()
++        }
++        assertEquals("你好", c.sent())
++        assertEquals("", c.composeMode.buffer)
++    }
++
++    @Test
++    fun spaceCommittedAfterAFinishedCompositionFollowsIt() {
++        val c = capture()
++        c.run {
++            setComposingText("你好", 1)
++            finishComposingText()
++            commitText(" ", 1)
++        }
++        assertEquals("你好 ", c.sent())
++    }
++
++    @Test
++    fun spaceKeyFromTheImeReachesTheShell() {
++        val c = capture()
++        c.run {
++            commitText("你好", 1)
++            sendKeyEvent(key(KeyEvent.KEYCODE_SPACE))
++        }
++        assertEquals("你好 ", c.sent())
++        assertEquals("", c.composeMode.buffer)
++    }
++
++    @Test
++    fun enterCommittedAsTextAfterAFinishedCompositionFollowsIt() {
++        val c = capture()
++        c.run {
++            setComposingText("你好", 1)
++            finishComposingText()
++            commitText("\n", 1)
++        }
++        assertEquals("你好\n", c.sent())
++    }
++
++    @Test
++    fun enterKeyAfterAFinishedCompositionFollowsIt() {
++        val c = capture()
++        c.run {
++            setComposingText("你好", 1)
++            finishComposingText()
++            sendKeyEvent(key(KeyEvent.KEYCODE_ENTER))
++        }
++        assertEquals("你好\n", c.sent())
++    }
++
++    @Test
++    fun aLiveCompositionStaysInTheOverlay() {
++        val c = capture()
++        c.run { setComposingText("nihao", 1) }
++        assertEquals("", c.sent())
++        assertEquals("nihao", c.composeMode.buffer)
++    }
++
++    @Test
++    fun committingACandidateReplacesTheComposition() {
++        val c = capture()
++        c.run {
++            setComposingText("nihao", 1)
++            commitText("你好", 1)
++        }
++        assertEquals("你好", c.sent())
++        assertEquals("", c.composeMode.buffer)
++    }
++}
+-- 
+2.54.0 (Apple Git-157)
+

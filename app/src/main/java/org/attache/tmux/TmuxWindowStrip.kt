@@ -71,15 +71,24 @@ fun TmuxWindowChips(control: TmuxControl, modifier: Modifier = Modifier) {
 /** The tmux operations that otherwise need the prefix key, one tap away.
  * Open state belongs to the caller, which owns the keyboard and focus. */
 @Composable
-fun TmuxActionsButton(control: TmuxControl, expanded: Boolean, onOpen: () -> Unit, onDismiss: () -> Unit) {
+fun TmuxActionsButton(
+    control: TmuxControl,
+    expanded: Boolean,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    trigger: @Composable (onClick: () -> Unit) -> Unit = { onClick ->
+        TextButton(onClick = onClick, modifier = Modifier.testTag("tmuxActions")) { Text("tmux") }
+    },
+) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
     fun run(name: String, action: suspend () -> Unit) {
         onDismiss()
         scope.tmuxAction(name, action)
     }
-    Box {
-        TextButton(onClick = onOpen, modifier = Modifier.testTag("tmuxActions")) { Text("tmux") }
+    Box(modifier) {
+        trigger(onOpen)
         DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             DropdownMenuItem(text = { Text("New window") }, onClick = { run("new-window") { control.newWindow() } })
             DropdownMenuItem(text = { Text("Split side by side") }, onClick = { run("split") { control.split(sideBySide = true) } })
@@ -213,9 +222,11 @@ private const val FLING_MIN_VELOCITY = 400f
 private const val FLING_STOP_VELOCITY = 60f
 
 /**
- * The current session's name; a tap opens every session on the server, each
- * with its windows — the phone's version of the desktop app's rail. A tap on
- * a session or a window moves this connection there; nothing changes locally
+ * The current session's name and, beside it, the current window's — the
+ * title bar is too narrow on a phone for a chip per window. A tap opens every
+ * session on the server, each with its windows — the phone's version of the
+ * desktop app's rail — and switching windows happens there. A tap on a
+ * session or a window moves this connection there; nothing changes locally
  * until tmux reports it.
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -225,8 +236,18 @@ fun TmuxSessionsButton(control: TmuxControl, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     val current = state.sessions.firstOrNull { it.id == state.sessionId }
+    val window = state.windows.firstOrNull { it.active }
     TextButton(onClick = { open = true }, modifier = modifier.testTag("tmuxSessions")) {
-        Text((current?.name ?: "tmux") + " ▾", maxLines = 1)
+        Text((current?.name ?: "tmux") + " ▾", maxLines = 1, softWrap = false)
+        if (window != null) {
+            Text(
+                "  ${window.index}: ${window.name}",
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("tmuxCurrentWindow"),
+            )
+        }
     }
     if (!open) return
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = { open = false }) {

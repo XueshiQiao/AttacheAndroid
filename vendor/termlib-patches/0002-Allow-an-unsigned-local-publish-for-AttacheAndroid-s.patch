@@ -1,0 +1,28 @@
+From 9827f9c18fdb71bea8d02762af7e77fe79517a82 Mon Sep 17 00:00:00 2001
+From: XueshiQiao <qiaoxueshi@gmail.com>
+Date: Sat, 31 Oct 2026 16:52:02 +0800
+Subject: [PATCH 2/2] Allow an unsigned local publish for AttacheAndroid's
+ vendored repo
+
+---
+ lib/build.gradle.kts | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/lib/build.gradle.kts b/lib/build.gradle.kts
+index 33fed35d..1ee0b195 100644
+--- a/lib/build.gradle.kts
++++ b/lib/build.gradle.kts
+@@ -267,7 +267,9 @@ dokka {
+ 
+ mavenPublishing {
+     publishToMavenCentral(automaticRelease = true, validateDeployment = DeploymentValidation.PUBLISHED)
+-    signAllPublications()
++    // Attaché: the fork is published unsigned into AttacheAndroid's
++    // vendor/maven with -PattacheUnsigned; releases still sign.
++    if (!project.hasProperty("attacheUnsigned")) signAllPublications()
+ 
+     coordinates(groupId = "org.connectbot", artifactId = "termlib")
+ 
+-- 
+2.54.0 (Apple Git-157)
+

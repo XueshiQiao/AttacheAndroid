@@ -34,6 +34,13 @@ subprojects {
 
 allprojects {
     repositories {
+        // Attaché: termlib with the compose-mode IME fix, built from the
+        // attache-ime branch of a termlib fork (see vendor/maven/README.md).
+        // Only that one module may come from here.
+        maven {
+            url = uri(rootProject.file("vendor/maven"))
+            content { includeModule("org.connectbot", "termlib") }
+        }
         mavenLocal()
         google()
         mavenCentral()

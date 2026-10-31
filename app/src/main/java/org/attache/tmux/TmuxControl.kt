@@ -188,6 +188,13 @@ class TmuxControl(
         send("new-window -t '$session:' -c '#{pane_current_path}'")
     }
 
+    /** The window after (or before) the active one, wrapping as tmux's own
+     * `prefix n` / `prefix p` do. */
+    suspend fun stepWindow(forward: Boolean) {
+        val session = _state.value.sessionId ?: return
+        send("${if (forward) "next-window" else "previous-window"} -t '$session'")
+    }
+
     suspend fun split(sideBySide: Boolean) {
         val pane = _state.value.activePane ?: return
         send("split-window ${if (sideBySide) "-h" else "-v"} -t ${pane.id} -c '#{pane_current_path}'")
