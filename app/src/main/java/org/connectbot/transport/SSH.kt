@@ -33,6 +33,7 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -744,6 +745,62 @@ open class SSH : AbsTransport {
         return pair
     }
 
+    /** Attaché trial: the control channel this connection opened, if any.
+     * Guarded by [tmuxLock] together with [locallyClosed], so a channel that
+     * finishes opening after close() is closed rather than published. */
+    private val tmuxLock = Any()
+    private var tmuxControl: org.attache.tmux.TmuxControl? = null
+    private var tmuxStart: Job? = null
+
+    /** Attaché trial: a second channel on the same connection, running
+     * `tmux -C`, beside the shell channel the terminal draws from. */
+    private fun startTmuxControl(sessionName: String) {
+        val job = scope.launch {
+            var channel: org.connectbot.sshlib.SshSession? = null
+            try {
+                channel = client?.openSession() ?: return@launch
+                if (!channel.requestExec(org.attache.tmux.TmuxTrial.controlCommand(sessionName))) {
+                    Timber.w("tmux -C exec rejected")
+                    return@launch
+                }
+                val currentBridge = bridge
+                val control = org.attache.tmux.TmuxControl(channel, scope) { ended ->
+                    synchronized(tmuxLock) { if (tmuxControl === ended) tmuxControl = null }
+                    // Only this connection's own control is cleared: an old
+                    // connection closing late must not take down the one a
+                    // reconnect has just published on the same bridge.
+                    currentBridge?.tmuxControl?.compareAndSet(ended, null)
+                }
+                synchronized(tmuxLock) {
+                    if (locallyClosed) return@launch
+                    tmuxControl = control
+                    channel = null
+                    // Published under the lock, so a close() can only come
+                    // after it — and then clears it through onEnded.
+                    currentBridge?.tmuxControl?.value = control
+                }
+                control.start()
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                Timber.e(e, "Could not open the tmux control channel")
+            } finally {
+                channel?.close()
+            }
+        }
+        synchronized(tmuxLock) { tmuxStart = job }
+    }
+
+    private fun closeTmuxControl() {
+        val (start, control) = synchronized(tmuxLock) {
+            (tmuxStart to tmuxControl).also {
+                tmuxStart = null
+                tmuxControl = null
+            }
+        }
+        start?.cancel()
+        control?.close()
+    }
+
     protected open suspend fun finishConnection() {
         authenticated = true
 
@@ -792,6 +849,11 @@ open class SSH : AbsTransport {
             }
 
             sessionOpen = true
+
+            org.attache.tmux.TmuxTrial.sessionFor(currentHost.nickname)?.let { name ->
+                openedSession.write((org.attache.tmux.TmuxTrial.attachCommand(name) + "\r").toByteArray())
+                startTmuxControl(name)
+            }
 
             bridge?.onConnected()
         } catch (e: Exception) {
@@ -1151,7 +1213,8 @@ open class SSH : AbsTransport {
         getSshConnectionInfo()
         policyClients.forEach { (sshClient, currentHost) -> capturePolicyWarnings(sshClient, currentHost) }
         policyClients.clear()
-        locallyClosed = true
+        synchronized(tmuxLock) { locallyClosed = true }
+        closeTmuxControl()
         connected = false
         sessionOpen = false
         outputDrained?.complete(Unit)

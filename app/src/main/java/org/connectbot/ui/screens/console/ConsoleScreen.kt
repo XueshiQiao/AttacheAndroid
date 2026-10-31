@@ -427,11 +427,15 @@ private fun ConsoleTerminalPage(
             }
         }
 
+        val tmuxControl by bridge.tmuxControl.collectAsState()
+        tmuxControl?.let { org.attache.tmux.TmuxWindowStrip(it, Modifier.align(Alignment.TopCenter)) }
+
         Terminal(
             terminalEmulator = bridge.terminalEmulator,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(
+                    top = if (tmuxControl != null) org.attache.tmux.TmuxWindowStripHeight else 0.dp,
                     bottom = if (keyboardAlwaysVisible) keyboardHeight else 0.dp,
                 )
                 .then(terminalModifier)

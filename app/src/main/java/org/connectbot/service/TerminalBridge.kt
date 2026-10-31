@@ -146,6 +146,9 @@ internal class AuthBannerQueue {
 @Suppress("DEPRECATION") // for ClipboardManager
 class TerminalBridge {
     private val scope: CoroutineScope
+
+    /** Attaché trial: the tmux control channel, when this host has one. */
+    val tmuxControl = MutableStateFlow<org.attache.tmux.TmuxControl?>(null)
     private var connectionJob: Job? = null
 
     private sealed class TransportOperation {
