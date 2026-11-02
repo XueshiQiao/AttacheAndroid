@@ -26,9 +26,11 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -76,12 +78,17 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import org.attache.tmux.AttacheToolbarPrefs
+import org.attache.tmux.AttacheToolbarStyle
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.preference.PreferenceManager
 import kotlinx.coroutines.delay
@@ -308,7 +315,8 @@ private fun KeyboardGridRegion(
     val columns = (items.maxOfOrNull { it.column + it.columnSpan } ?: 0).coerceIn(0, 1000)
     val rows = (items.maxOfOrNull { it.row + it.rowSpan } ?: 0).coerceIn(0, 1000)
     val width = layout.buttonWidth.takeIf { it.isFinite() && it > 0 }?.coerceAtMost(1000f) ?: 45f
-    val height = layout.buttonHeight.takeIf { it.isFinite() && it > 0 }?.coerceAtMost(1000f) ?: 30f
+    val rawHeight = layout.buttonHeight.takeIf { it.isFinite() && it > 0 }?.coerceAtMost(1000f) ?: 34f
+    val height = if (!editing && rawHeight < 34f) 34f else rawHeight
     Box(modifier = modifier.then(if (layout.fitToWidth) Modifier else Modifier.horizontalScroll(horizontal, enabled = interactive).verticalScroll(vertical, enabled = interactive))) {
         Layout(content = {
             visible.forEach { item ->
@@ -499,6 +507,125 @@ private fun GridButton(
             })
         }
     }
+    val toolbarStyle by AttacheToolbarPrefs.styleFlow.collectAsState()
+    val isComposeToggle = item.kind == "app" && item.target == "toggle_compose"
+    val isEscape = item.target == "escape"
+
+    if (!editing) {
+        val isActive = active != ModifierLevel.OFF
+        val shape = when (toolbarStyle) {
+            AttacheToolbarStyle.TERMINAL_DECK -> RoundedCornerShape(4.dp)
+            AttacheToolbarStyle.COPILOT_DOCK -> RoundedCornerShape(9.dp)
+        }
+        val keyBg = when (toolbarStyle) {
+            AttacheToolbarStyle.TERMINAL_DECK -> when (active) {
+                ModifierLevel.OFF -> Color(0xFF121720)
+                ModifierLevel.TRANSIENT -> Color(0xFFF59E0B)
+                ModifierLevel.LOCKED -> Color(0xFFD97706)
+            }
+            AttacheToolbarStyle.COPILOT_DOCK -> when (active) {
+                ModifierLevel.OFF -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+                ModifierLevel.TRANSIENT -> Color(0xFF3B82F6)
+                ModifierLevel.LOCKED -> Color(0xFF2563EB)
+            }
+        }.let { c -> if (enabled && item.visible) c else c.copy(alpha = 0.35f) }
+
+        val keyBorder = when (toolbarStyle) {
+            AttacheToolbarStyle.TERMINAL_DECK -> when {
+                isActive -> BorderStroke(1.dp, Color(0xFFFBBF24))
+                isEscape -> BorderStroke(1.dp, Color(0x66D29922))
+                else -> BorderStroke(1.dp, Color(0xFF2B323C))
+            }
+            AttacheToolbarStyle.COPILOT_DOCK -> if (isActive) {
+                BorderStroke(1.dp, Color(0xFF60A5FA))
+            } else {
+                null
+            }
+        }
+
+        val keyContentColor = when (toolbarStyle) {
+            AttacheToolbarStyle.TERMINAL_DECK -> when {
+                isActive -> Color(0xFF090C10)
+                isEscape -> Color(0xFFD29922)
+                else -> Color(0xFFC9D1D9)
+            }
+            AttacheToolbarStyle.COPILOT_DOCK -> if (isActive) {
+                Color.White
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        }
+
+        Box(modifier = gestures.padding(horizontal = 2.dp, vertical = 1.dp)) {
+            Surface(
+                modifier = Modifier.matchParentSize(),
+                shape = shape,
+                border = keyBorder,
+                color = keyBg,
+                contentColor = keyContentColor,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    val icon = when (item.target.takeIf { item.kind != "macro" }) {
+                        "arrow_up" -> Icons.Default.KeyboardArrowUp
+                        "arrow_down" -> Icons.Default.KeyboardArrowDown
+                        "arrow_left" -> Icons.AutoMirrored.Filled.KeyboardArrowLeft
+                        "arrow_right" -> Icons.AutoMirrored.Filled.KeyboardArrowRight
+                        "paste" -> Icons.Default.ContentPaste
+                        "text_input" -> Icons.Default.Edit
+                        "toggle_ime" -> if (active == ModifierLevel.OFF) Icons.Default.Keyboard else Icons.Default.KeyboardHide
+                        else -> null
+                    }
+                    if (toolbarStyle == AttacheToolbarStyle.TERMINAL_DECK && item.kind != "macro") {
+                        val termArrow = when (item.target) {
+                            "arrow_left" -> "◀"
+                            "arrow_down" -> "▼"
+                            "arrow_up" -> "▲"
+                            "arrow_right" -> "▶"
+                            else -> null
+                        }
+                        if (termArrow != null) {
+                            Text(
+                                text = termArrow,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = keyContentColor,
+                            )
+                        } else if (icon != null) {
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                Icon(icon, contentDescription = null, modifier = Modifier.size(17.dp))
+                            }
+                        } else {
+                            val displayText = if (isComposeToggle) "IME" else label.uppercase()
+                            Text(
+                                text = displayText,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 11.sp,
+                                color = keyContentColor,
+                                maxLines = 1,
+                            )
+                        }
+                    } else if (icon == null) {
+                        val displayText = if (isComposeToggle) "中/英" else label
+                        Text(
+                            text = displayText,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.5.sp,
+                            color = keyContentColor,
+                            maxLines = 1,
+                        )
+                    } else {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
     val background = when (active) {
         ModifierLevel.OFF -> (item.backgroundColor?.let { Color(it) } ?: MaterialTheme.colorScheme.surface)
             .copy(alpha = (item.backgroundOpacity ?: 0.85f) * if (enabled && item.visible) 1f else 0.35f / 0.85f)

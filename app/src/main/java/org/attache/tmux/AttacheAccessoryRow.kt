@@ -1,31 +1,232 @@
 package org.attache.tmux
 
+import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Image
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.edit
+import androidx.preference.PreferenceManager
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Visual and ergonomic style applied to BOTH the upper Attaché action row
+ * and the lower terminal modifier/arrow key row.
+ */
+enum class AttacheToolbarStyle(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+) {
+    TERMINAL_DECK(
+        id = "terminal_deck",
+        title = "方案 B · 极客纯血 Terminal 机械盘",
+        subtitle = "全等宽字体机械键帽 + 琥珀橙/极客蓝/翠绿语义分色 + 独立 ^C/^U 键",
+    ),
+    COPILOT_DOCK(
+        id = "copilot_dock",
+        title = "方案 D · 现代 AI Copilot 悬浮胶囊坞",
+        subtitle = "16dp 圆角悬浮玻璃坞 + 彩色胶囊按钮 + 无边框轻量化辅助键",
+    ),
+    ;
+
+    companion object {
+        fun fromId(id: String?): AttacheToolbarStyle =
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) || it.name.equals(id, ignoreCase = true) }
+                ?: COPILOT_DOCK
+    }
+}
+
+object AttacheToolbarPrefs {
+    const val PREF_KEY = "attache_toolbar_style"
+    private val _styleFlow = MutableStateFlow(AttacheToolbarStyle.COPILOT_DOCK)
+    val styleFlow: StateFlow<AttacheToolbarStyle> = _styleFlow.asStateFlow()
+    @Volatile private var initialized = false
+
+    fun syncFromContext(context: Context): AttacheToolbarStyle {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val style = AttacheToolbarStyle.fromId(prefs.getString(PREF_KEY, AttacheToolbarStyle.COPILOT_DOCK.id))
+        _styleFlow.value = style
+        initialized = true
+        return style
+    }
+
+    fun ensureLoaded(context: Context) {
+        if (!initialized) {
+            syncFromContext(context)
+        }
+    }
+
+    fun setStyle(context: Context, style: AttacheToolbarStyle) {
+        PreferenceManager.getDefaultSharedPreferences(context).edit {
+            putString(PREF_KEY, style.id)
+        }
+        _styleFlow.value = style
+        initialized = true
+    }
+}
+
+/**
+ * Dialog allowing the user to pick between Scheme B (`TERMINAL_DECK`) and
+ * Scheme D (`COPILOT_DOCK`) with immediate live preview.
+ */
+@Composable
+fun AttacheToolbarStyleDialog(
+    currentStyle: AttacheToolbarStyle,
+    onSelectStyle: (AttacheToolbarStyle) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("底部双排快捷栏风格", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AttacheToolbarStyle.entries.forEach { option ->
+                    val selected = option == currentStyle
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        border = BorderStroke(
+                            width = if (selected) 1.5.dp else 1.dp,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelectStyle(option) },
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        ) {
+                            RadioButton(
+                                selected = selected,
+                                onClick = { onSelectStyle(option) },
+                            )
+                            Column(modifier = Modifier.padding(start = 6.dp)) {
+                                Text(
+                                    text = option.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = option.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("完成")
+            }
+        },
+    )
+}
+
+/**
+ * Wraps BOTH [AttacheAccessoryRow] and the lower `TerminalKeyboard` row into a
+ * unified container matching either Scheme B (Terminal Deck) or Scheme D (Copilot Dock).
+ */
+@Composable
+fun AttacheToolbarContainer(
+    modifier: Modifier = Modifier,
+    isDark: Boolean = isSystemInDarkTheme(),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val context = LocalContext.current
+    LaunchedEffect(context) {
+        AttacheToolbarPrefs.ensureLoaded(context)
+    }
+    val style by AttacheToolbarPrefs.styleFlow.collectAsState()
+
+    when (style) {
+        AttacheToolbarStyle.TERMINAL_DECK -> {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF090C10))
+                    .border(width = 0.5.dp, color = Color(0xFF21262D))
+                    .padding(horizontal = 5.dp, vertical = 4.dp),
+                content = content,
+            )
+        }
+        AttacheToolbarStyle.COPILOT_DOCK -> {
+            val dockBg = if (isDark) Color(0xFF171D29) else Color(0xFFF8FAFC)
+            val dockBorder = if (isDark) Color(0x24FFFFFF) else Color(0x1F0F172A)
+            Box(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .background(Color.Transparent)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = dockBg,
+                    border = BorderStroke(1.dp, dockBorder),
+                    tonalElevation = 6.dp,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 5.dp, vertical = 5.dp),
+                        content = content,
+                    )
+                }
+            }
+        }
+    }
+}
 
 /**
  * A slash command an agent CLI takes at its prompt. [only] names the one
@@ -61,9 +262,9 @@ fun sendAgentCommand(bridge: org.connectbot.service.TerminalBridge, command: Str
 private val SLASH_COMMAND = Regex("^/[a-z][a-z-]*$")
 
 /**
- * The row above the terminal keys on a tmux host: what used to crowd the
- * title bar, plus the agent's slash commands. Every menu's open state is the
- * caller's, which owns the keyboard, the PTY size and focus.
+ * The row above the terminal keys on a tmux host: renders either as
+ * Scheme B (`TERMINAL_DECK` · 极客纯血 Terminal 机械盘) or
+ * Scheme D (`COPILOT_DOCK` · 现代 AI Copilot 悬浮胶囊坞).
  */
 @Composable
 fun AttacheAccessoryRow(
@@ -83,86 +284,334 @@ fun AttacheAccessoryRow(
     onOpenFileInbox: () -> Unit = {},
     onCopyText: () -> Unit = {},
     onClearInput: () -> Unit = {},
+    onInterrupt: () -> Unit = {},
+    isDark: Boolean = isSystemInDarkTheme(),
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .fillMaxWidth()
-            .height(ROW_HEIGHT)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .testTag("attacheAccessoryRow"),
-    ) {
-        AccessoryButton(onClick = { onInteraction(); onTextInput() }, tag = "accessoryTextInput", modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.Edit, contentDescription = "Text input")
-        }
-        Box(Modifier.weight(1f).fillMaxHeight()) {
-            AccessoryButton(onClick = onOpenSlashMenu, tag = "accessorySlash", modifier = Modifier.fillMaxWidth()) {
-                Text("/", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-            }
-            DropdownMenu(expanded = slashMenuOpen, onDismissRequest = onDismissSlashMenu) {
-                AGENT_SLASH_COMMANDS.forEach { command ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(command.text, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium)
-                                Text(
-                                    command.summary + (command.only?.let { " · $it" } ?: ""),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        onClick = {
-                            onDismissSlashMenu()
-                            onSendSlashCommand(command.text)
-                        },
-                        modifier = Modifier.testTag("slash-${command.text.removePrefix("/")}"),
+    val context = LocalContext.current
+    LaunchedEffect(context) {
+        AttacheToolbarPrefs.ensureLoaded(context)
+    }
+    val style by AttacheToolbarPrefs.styleFlow.collectAsState()
+
+    when (style) {
+        AttacheToolbarStyle.TERMINAL_DECK -> {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = modifier
+                    .fillMaxWidth()
+                    .height(35.dp)
+                    .testTag("attacheAccessoryRow"),
+            ) {
+                // 1. /cmd (Slash menu)
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    TerminalDeckKey(
+                        label = "/cmd",
+                        textColor = Color(0xFF58A6FF),
+                        borderColor = Color(0x6658A6FF),
+                        bgColor = Color(0x1858A6FF),
+                        tag = "accessorySlash",
+                        onClick = onOpenSlashMenu,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SlashCommandDropdown(
+                        expanded = slashMenuOpen,
+                        onDismiss = onDismissSlashMenu,
+                        onSendSlashCommand = onSendSlashCommand,
                     )
                 }
+
+                // 2. tmux (Pane / Window actions)
+                TmuxActionsButton(
+                    control = control,
+                    expanded = tmuxMenuOpen,
+                    onOpen = onOpenTmuxMenu,
+                    onDismiss = onDismissTmuxMenu,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                ) { onClick ->
+                    TerminalDeckKey(
+                        label = "tmux",
+                        textColor = Color(0xFF58A6FF),
+                        borderColor = Color(0x5958A6FF),
+                        bgColor = Color(0x1458A6FF),
+                        tag = "tmuxActions",
+                        onClick = onClick,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                // 3. +img (Send image)
+                TerminalDeckKey(
+                    label = "+img",
+                    tag = "accessoryImage",
+                    onClick = { onInteraction(); onPickImage() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 4. inbox (File Inbox)
+                TerminalDeckKey(
+                    label = "inbox",
+                    tag = "accessoryFileInbox",
+                    onClick = { onInteraction(); onOpenFileInbox() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 5. copy (Extract pane text)
+                TerminalDeckKey(
+                    label = "copy",
+                    tag = "accessoryCopy",
+                    onClick = { onInteraction(); onCopyText() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 6. paste (Clipboard paste)
+                TerminalDeckKey(
+                    label = "paste",
+                    textColor = Color(0xFF3FB950),
+                    borderColor = Color(0x663FB950),
+                    bgColor = Color(0x173FB950),
+                    tag = "accessoryPaste",
+                    onClick = { onInteraction(); onPaste() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 7. ^C (Interrupt)
+                TerminalDeckKey(
+                    label = "^C",
+                    textColor = Color(0xFFD29922),
+                    borderColor = Color(0x66D29922),
+                    bgColor = Color(0x14D29922),
+                    tag = "accessoryTextInput",
+                    onClick = { onInteraction(); onInterrupt() },
+                    modifier = Modifier.weight(0.85f),
+                )
+
+                // 8. ^U (Clear input line)
+                TerminalDeckKey(
+                    label = "^U",
+                    textColor = Color(0xFFF85149),
+                    borderColor = Color(0x66F85149),
+                    bgColor = Color(0x14F85149),
+                    tag = "accessoryClear",
+                    onClick = { onInteraction(); onClearInput() },
+                    modifier = Modifier.weight(0.85f),
+                )
             }
         }
-        TmuxActionsButton(
-            control = control,
-            expanded = tmuxMenuOpen,
-            onOpen = onOpenTmuxMenu,
-            onDismiss = onDismissTmuxMenu,
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-        ) { onClick ->
-            AccessoryButton(onClick = onClick, tag = "tmuxActions", modifier = Modifier.fillMaxWidth()) {
-                Text("tmux", style = MaterialTheme.typography.labelLarge)
+
+        AttacheToolbarStyle.COPILOT_DOCK -> {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = modifier
+                    .fillMaxWidth()
+                    .height(34.dp)
+                    .testTag("attacheAccessoryRow"),
+            ) {
+                // 1. ✦ /指令
+                Box(Modifier.weight(1.12f).fillMaxHeight()) {
+                    CopilotDockChip(
+                        label = "✦ /指令",
+                        isAiAccent = true,
+                        isDark = isDark,
+                        tag = "accessorySlash",
+                        onClick = onOpenSlashMenu,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SlashCommandDropdown(
+                        expanded = slashMenuOpen,
+                        onDismiss = onDismissSlashMenu,
+                        onSendSlashCommand = onSendSlashCommand,
+                    )
+                }
+
+                // 2. 🖼 传图
+                CopilotDockChip(
+                    label = "🖼 传图",
+                    isDark = isDark,
+                    tag = "accessoryImage",
+                    onClick = { onInteraction(); onPickImage() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 3. 📂 收件箱
+                CopilotDockChip(
+                    label = "📂 文件",
+                    isDark = isDark,
+                    tag = "accessoryFileInbox",
+                    onClick = { onInteraction(); onOpenFileInbox() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 4. 📋 提取
+                CopilotDockChip(
+                    label = "📋 提取",
+                    isDark = isDark,
+                    tag = "accessoryCopy",
+                    onClick = { onInteraction(); onCopyText() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 5. 📥 粘贴
+                CopilotDockChip(
+                    label = "📥 粘贴",
+                    isDark = isDark,
+                    tag = "accessoryPaste",
+                    onClick = { onInteraction(); onPaste() },
+                    modifier = Modifier.weight(1f),
+                )
+
+                // 6. ⊞ 窗格
+                TmuxActionsButton(
+                    control = control,
+                    expanded = tmuxMenuOpen,
+                    onOpen = onOpenTmuxMenu,
+                    onDismiss = onDismissTmuxMenu,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                ) { onClick ->
+                    CopilotDockChip(
+                        label = "⊞ 窗格",
+                        isDark = isDark,
+                        tag = "tmuxActions",
+                        onClick = onClick,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                // 7. ⌫ 清空
+                CopilotDockChip(
+                    label = "⌫ 清空",
+                    isDanger = true,
+                    isDark = isDark,
+                    tag = "accessoryClear",
+                    onClick = { onInteraction(); onClearInput() },
+                    modifier = Modifier.weight(1f),
+                )
             }
-        }
-        AccessoryButton(onClick = { onInteraction(); onPickImage() }, tag = "accessoryImage", modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.Image, contentDescription = "Send image")
-        }
-        AccessoryButton(onClick = { onInteraction(); onOpenFileInbox() }, tag = "accessoryFileInbox", modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.FolderOpen, contentDescription = "File inbox")
-        }
-        AccessoryButton(onClick = { onInteraction(); onCopyText() }, tag = "accessoryCopy", modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.ContentCopy, contentDescription = "Copy pane text")
-        }
-        AccessoryButton(onClick = { onInteraction(); onPaste() }, tag = "accessoryPaste", modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.ContentPaste, contentDescription = "Paste")
-        }
-        AccessoryButton(onClick = { onInteraction(); onClearInput() }, tag = "accessoryClear", modifier = Modifier.weight(1f)) {
-            Text("清空", style = MaterialTheme.typography.labelLarge)
         }
     }
 }
 
 @Composable
-private fun AccessoryButton(
-    onClick: () -> Unit,
-    tag: String,
-    modifier: Modifier,
-    content: @Composable () -> Unit,
+private fun SlashCommandDropdown(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onSendSlashCommand: (String) -> Unit,
 ) {
-    TextButton(
-        onClick = onClick,
-        shape = MaterialTheme.shapes.small,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-        modifier = modifier.fillMaxHeight().testTag(tag),
-    ) { content() }
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        AGENT_SLASH_COMMANDS.forEach { command ->
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text(command.text, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium)
+                        Text(
+                            command.summary + (command.only?.let { " · $it" } ?: ""),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                onClick = {
+                    onDismiss()
+                    onSendSlashCommand(command.text)
+                },
+                modifier = Modifier.testTag("slash-${command.text.removePrefix("/")}"),
+            )
+        }
+    }
 }
 
-private val ROW_HEIGHT = 40.dp
+@Composable
+private fun TerminalDeckKey(
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    textColor: Color = Color(0xFFC9D1D9),
+    borderColor: Color = Color(0xFF2B323C),
+    bgColor: Color = Color(0xFF121720),
+) {
+    val shape = RoundedCornerShape(4.dp)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(shape)
+            .background(bgColor)
+            .border(1.dp, borderColor, shape)
+            .clickable(onClick = onClick)
+            .testTag(tag),
+    ) {
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.5.sp,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
+    }
+}
+
+@Composable
+private fun CopilotDockChip(
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isAiAccent: Boolean = false,
+    isDanger: Boolean = false,
+    isDark: Boolean = true,
+) {
+    val shape = RoundedCornerShape(50)
+    val borderColor = when {
+        isAiAccent -> if (isDark) Color(0x73818CF8) else Color(0x664F46E5)
+        isDark -> Color(0x16FFFFFF)
+        else -> Color(0x140F172A)
+    }
+    val textColor = when {
+        isAiAccent -> if (isDark) Color(0xFFA5B4FC) else Color(0xFF4338CA)
+        isDanger -> if (isDark) Color(0xFFF87171) else Color(0xFFDC2626)
+        isDark -> Color(0xFFE6EDF3)
+        else -> Color(0xFF1E293B)
+    }
+    val bgModifier = if (isAiAccent) {
+        Modifier.background(
+            brush = Brush.linearGradient(
+                colors = if (isDark) {
+                    listOf(Color(0x476366F1), Color(0x473B82F6))
+                } else {
+                    listOf(Color(0x286366F1), Color(0x283B82F6))
+                },
+            ),
+            shape = shape,
+        )
+    } else {
+        Modifier.background(
+            color = if (isDark) Color(0x0FFFFFFF) else Color(0x0D0F172A),
+            shape = shape,
+        )
+    }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(shape)
+            .then(bgModifier)
+            .border(1.dp, borderColor, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp)
+            .testTag(tag),
+    ) {
+        Text(
+            text = label,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.sp,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}

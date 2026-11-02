@@ -116,6 +116,9 @@ import org.attache.tmux.AttacheFileStorage
 import org.attache.tmux.AttacheHostEntry
 import org.attache.tmux.AttacheSelectionBar
 import org.attache.tmux.AttacheSidebar
+import org.attache.tmux.AttacheToolbarContainer
+import org.attache.tmux.AttacheToolbarPrefs
+import org.attache.tmux.AttacheToolbarStyleDialog
 import org.attache.tmux.FileDownloadProgress
 import org.attache.tmux.TmuxCopyTextDialog
 import org.attache.tmux.sendAgentCommand
@@ -450,6 +453,7 @@ private fun ConsoleTerminalPage(
     onShortcutModifierChange: () -> Unit,
     modifier: Modifier = Modifier,
     terminalModifier: Modifier = Modifier,
+    isDarkTheme: Boolean = true,
     accessoryRow: (@Composable () -> Unit)? = null,
 ) {
     val keyboardDensity = LocalDensity.current
@@ -539,28 +543,31 @@ private fun ConsoleTerminalPage(
                 // Attaché: a tmux host's own row sits above the configured
                 // keys and is measured with them, so the terminal is padded
                 // for both.
-                Column(modifier = Modifier.onSizeChanged { keyboardHeight = with(keyboardDensity) { it.height.toDp() } }) {
-                accessoryRow?.invoke()
-                TerminalKeyboard(
-                    modifier = Modifier.heightIn(max = consoleHeight / 2),
-                    bridge = bridge,
-                    onInteraction = { handleTerminalInteraction() },
-                    onHideIme = {
-                        onShowSoftwareKeyboardChange(false)
-                    },
-                    onShowIme = {
-                        onShowSoftwareKeyboardChange(true)
-                    },
-                    onOpenTextInput = onTextInputRequest,
-                    onPasteRequest = onPasteRequest,
-                    onScrollInProgressChange = onKeyboardScrollInProgressChange,
-                    imeVisible = imeVisible,
-                    playAnimation = !hasPlayedKeyboardAnimation,
-                    showImeToggleKey = showImeToggleKey,
-                    isComposeModeActive = isComposeModeActive,
-                    onToggleComposeMode = onToggleComposeMode,
-                    onShortcutModifierChange = onShortcutModifierChange,
-                )
+                AttacheToolbarContainer(
+                    isDark = isDarkTheme,
+                    modifier = Modifier.onSizeChanged { keyboardHeight = with(keyboardDensity) { it.height.toDp() } },
+                ) {
+                    accessoryRow?.invoke()
+                    TerminalKeyboard(
+                        modifier = Modifier.heightIn(max = consoleHeight / 2),
+                        bridge = bridge,
+                        onInteraction = { handleTerminalInteraction() },
+                        onHideIme = {
+                            onShowSoftwareKeyboardChange(false)
+                        },
+                        onShowIme = {
+                            onShowSoftwareKeyboardChange(true)
+                        },
+                        onOpenTextInput = onTextInputRequest,
+                        onPasteRequest = onPasteRequest,
+                        onScrollInProgressChange = onKeyboardScrollInProgressChange,
+                        imeVisible = imeVisible,
+                        playAnimation = !hasPlayedKeyboardAnimation,
+                        showImeToggleKey = showImeToggleKey,
+                        isComposeModeActive = isComposeModeActive,
+                        onToggleComposeMode = onToggleComposeMode,
+                        onShortcutModifierChange = onShortcutModifierChange,
+                    )
                 }
             }
 
@@ -731,6 +738,9 @@ fun ConsoleScreen(
     var showSlashMenu by remember { mutableStateOf(false) }
     var showCopyTextDialog by remember { mutableStateOf(false) }
     var showFileInboxDialog by remember { mutableStateOf(false) }
+    var showToolbarStyleDialog by remember { mutableStateOf(false) }
+    val currentToolbarStyle by AttacheToolbarPrefs.styleFlow.collectAsState()
+    LaunchedEffect(context) { AttacheToolbarPrefs.ensureLoaded(context) }
     var fileDownloadState by remember { mutableStateOf<FileDownloadProgress?>(null) }
     var fileDownloadJob by remember { mutableStateOf<Job?>(null) }
     var showImagePicker by remember { mutableStateOf(false) }
@@ -814,7 +824,7 @@ fun ConsoleScreen(
     val isBiometricPromptActive = promptState is PromptRequest.BiometricPrompt
 
     // Check if any modal (menu or dialog) is currently active
-    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showCopyTextDialog || showFileInboxDialog || showImagePicker || showUrlScanDialog || showResizeDialog ||
+    val anyModalActive = showKeyboardSettings || showToolbarStyleDialog || showMenu || showTmuxMenu || showSlashMenu || showCopyTextDialog || showFileInboxDialog || showImagePicker || showUrlScanDialog || showResizeDialog ||
         showDisconnectDialog || showSessionPickerDialog || showTextInputDialog || showConnectionInfoDialog ||
         portraitDrawerOpen || isBiometricPromptActive || currentAuthBanner != null
 
@@ -1434,6 +1444,7 @@ fun ConsoleScreen(
                                         },
                                         modifier = Modifier.fillMaxSize(),
                                         terminalModifier = terminalModifier,
+                                        isDarkTheme = isDarkTheme,
                                         accessoryRow = pageTmuxControl?.let { control ->
                                             {
                                                 // Menus open and close the way the overflow menu
@@ -1491,6 +1502,11 @@ fun ConsoleScreen(
                                                         bridge.injectString(CLEAR_INPUT_SEQUENCE)
                                                         termFocusRequester.requestFocus()
                                                     },
+                                                    onInterrupt = {
+                                                        bridge.injectString("\u0003")
+                                                        termFocusRequester.requestFocus()
+                                                    },
+                                                    isDark = isDarkTheme,
                                                 )
                                             }
                                         },
@@ -1749,6 +1765,19 @@ fun ConsoleScreen(
                             duration = SnackbarDuration.Short,
                         )
                     }
+                },
+            )
+        }
+
+        if (showToolbarStyleDialog) {
+            AttacheToolbarStyleDialog(
+                currentStyle = currentToolbarStyle,
+                onSelectStyle = { style ->
+                    AttacheToolbarPrefs.setStyle(context, style)
+                },
+                onDismiss = {
+                    showToolbarStyleDialog = false
+                    termFocusRequester.requestFocus()
                 },
             )
         }
@@ -2080,6 +2109,23 @@ fun ConsoleScreen(
                                     showResizeDialog = true
                                 },
                                 enabled = sessionOpen,
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("底部快捷栏风格")
+                                        Text(
+                                            text = currentToolbarStyle.title,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    showToolbarStyleDialog = true
+                                },
                             )
 
                             DropdownMenuItem(

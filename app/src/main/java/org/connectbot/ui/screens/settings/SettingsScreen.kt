@@ -95,6 +95,8 @@ import org.connectbot.util.PreferenceConstants
 import org.connectbot.util.TerminalFont
 import org.connectbot.util.ThemeMode
 import org.connectbot.util.isNotificationPermissionGranted
+import org.attache.tmux.AttacheToolbarPrefs
+import org.attache.tmux.AttacheToolbarStyle
 import org.xmlpull.v1.XmlPullParser
 import java.util.Locale
 import java.util.UUID
@@ -546,6 +548,21 @@ fun SettingsScreenContent(
                         stringResource(R.string.pref_theme_dark) to ThemeMode.DARK.name,
                     ),
                     onValueChange = { onThemeModeChange(ThemeMode.fromString(it)) },
+                )
+            }
+
+            item {
+                val context = LocalContext.current
+                LaunchedEffect(context) { AttacheToolbarPrefs.ensureLoaded(context) }
+                val currentToolbarStyle by AttacheToolbarPrefs.styleFlow.collectAsState()
+                ListPreference(
+                    title = "底部双排快捷栏风格",
+                    summary = currentToolbarStyle.title,
+                    value = currentToolbarStyle.id,
+                    entries = AttacheToolbarStyle.entries.map { it.title to it.id },
+                    onValueChange = { selectedId ->
+                        AttacheToolbarPrefs.setStyle(context, AttacheToolbarStyle.fromId(selectedId))
+                    },
                 )
             }
 
