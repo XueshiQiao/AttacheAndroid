@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
@@ -78,6 +79,7 @@ fun AttacheAccessoryRow(
     onInteraction: () -> Unit,
     modifier: Modifier = Modifier,
     onPickImage: () -> Unit = {},
+    onCopyText: () -> Unit = {},
     onClearInput: () -> Unit = {},
 ) {
     Row(
@@ -130,6 +132,9 @@ fun AttacheAccessoryRow(
         }
         AccessoryButton(onClick = { onInteraction(); onPickImage() }, tag = "accessoryImage", modifier = Modifier.weight(1f)) {
             Icon(Icons.Default.Image, contentDescription = "Send image")
+        }
+        AccessoryButton(onClick = { onInteraction(); onCopyText() }, tag = "accessoryCopy", modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.ContentCopy, contentDescription = "Copy pane text")
         }
         AccessoryButton(onClick = { onInteraction(); onPaste() }, tag = "accessoryPaste", modifier = Modifier.weight(1f)) {
             Icon(Icons.Default.ContentPaste, contentDescription = "Paste")

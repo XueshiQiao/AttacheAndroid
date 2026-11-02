@@ -148,7 +148,11 @@ fun TmuxActionsButton(
  * (ConnectBot switches sessions with those), and anything that started as a
  * long press (text selection).
  */
-fun Modifier.tmuxTouch(control: TmuxControl, dimensions: () -> TerminalDimensions?): Modifier =
+fun Modifier.tmuxTouch(
+    control: TmuxControl,
+    selectionActive: () -> Boolean = { false },
+    dimensions: () -> TerminalDimensions?,
+): Modifier =
     pointerInput(control) {
         val slop = viewConfiguration.touchSlop
         val longPress = viewConfiguration.longPressTimeoutMillis
@@ -159,6 +163,9 @@ fun Modifier.tmuxTouch(control: TmuxControl, dimensions: () -> TerminalDimension
             // A new touch stops a fling still running, as in any list.
             fling?.cancel()
             fling = null
+            // While text selection is active, let all handle drags and taps
+            // reach the terminal without recreating the pointerInput modifier.
+            if (selectionActive()) return@awaitEachGesture
             val velocity = androidx.compose.ui.input.pointer.util.VelocityTracker()
             val dims = dimensions()
             val rows = dims?.rows?.takeIf { it > 0 } ?: return@awaitEachGesture
@@ -171,6 +178,7 @@ fun Modifier.tmuxTouch(control: TmuxControl, dimensions: () -> TerminalDimension
             var pending = 0f
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (selectionActive()) return@awaitEachGesture
                 if (event.changes.size > 1) return@awaitEachGesture
                 val change = event.changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
                 val total = change.position - down.position

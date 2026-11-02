@@ -111,7 +111,9 @@ import androidx.compose.ui.Alignment
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.attache.tmux.AttacheAccessoryRow
 import org.attache.tmux.AttacheHostEntry
+import org.attache.tmux.AttacheSelectionBar
 import org.attache.tmux.AttacheSidebar
+import org.attache.tmux.TmuxCopyTextDialog
 import org.attache.tmux.sendAgentCommand
 import org.attache.tmux.tmuxTouch
 import androidx.compose.ui.Modifier
@@ -723,6 +725,7 @@ fun ConsoleScreen(
     var menuImeWasVisible by remember { mutableStateOf(false) }
     var showTmuxMenu by remember { mutableStateOf(false) }
     var showSlashMenu by remember { mutableStateOf(false) }
+    var showCopyTextDialog by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
     var imageUploadState by remember { mutableStateOf<ImageUploadState?>(null) }
     var imageUploadJob by remember { mutableStateOf<Job?>(null) }
@@ -804,7 +807,7 @@ fun ConsoleScreen(
     val isBiometricPromptActive = promptState is PromptRequest.BiometricPrompt
 
     // Check if any modal (menu or dialog) is currently active
-    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showImagePicker || showUrlScanDialog || showResizeDialog ||
+    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showCopyTextDialog || showImagePicker || showUrlScanDialog || showResizeDialog ||
         showDisconnectDialog || showSessionPickerDialog || showTextInputDialog || showConnectionInfoDialog ||
         portraitDrawerOpen || isBiometricPromptActive || currentAuthBanner != null
 
@@ -1036,6 +1039,14 @@ fun ConsoleScreen(
     val hasMultipleSessions = uiState.bridges.size > 1 && !uiState.isLoading
     val swipeBetweenSessions = swipeSessionsEnabled && hasMultipleSessions
     val terminalSelectionActive = selectionController?.isSelectionActive == true
+
+    // Upgrade default single-character long-press selection to WORD mode so
+    // tapping/long-pressing on a word selects the full token immediately.
+    LaunchedEffect(terminalSelectionActive) {
+        if (terminalSelectionActive) {
+            selectionController?.setSelectionMode(org.connectbot.terminal.SelectionMode.WORD)
+        }
+    }
     // These values are computed from bridge state and will recompute when uiState.revision changes
     val sessionOpen = currentBridge?.isSessionOpen == true
     val disconnected = currentBridge?.isDisconnected == true
@@ -1287,9 +1298,15 @@ fun ConsoleScreen(
                         }.then(
                             // Attaché: swipes scroll tmux and taps pick a pane —
                             // except while text is being selected, whose handle
-                            // drags must reach the terminal.
-                            pageTmuxControl?.takeIf { !terminalSelectionActive }?.let { control ->
-                                Modifier.tmuxTouch(control) { bridge.terminalEmulator.dimensions }
+                            // drags must reach the terminal. Keep the modifier
+                            // attached so activating selection mid-gesture does
+                            // not recreate the pointerInput chain.
+                            pageTmuxControl?.let { control ->
+                                Modifier.tmuxTouch(
+                                    control = control,
+                                    selectionActive = { selectionController?.isSelectionActive == true },
+                                    dimensions = { bridge.terminalEmulator.dimensions },
+                                )
                             } ?: Modifier,
                         )
 
@@ -1411,6 +1428,9 @@ fun ConsoleScreen(
                                                             }
                                                         }
                                                     },
+                                                    onCopyText = {
+                                                        openMenu { showCopyTextDialog = true }
+                                                    },
                                                     onClearInput = {
                                                         composeController?.clearComposeBuffer()
                                                         bridge.injectString(CLEAR_INPUT_SEQUENCE)
@@ -1420,6 +1440,34 @@ fun ConsoleScreen(
                                             }
                                         },
                                     )
+                                }
+
+                                if (terminalSelectionActive) {
+                                    selectionController?.let { controller ->
+                                        AttacheSelectionBar(
+                                            selectionController = controller,
+                                            onCopied = { copied ->
+                                                if (copied.isNotEmpty()) {
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar(
+                                                            message = "已复制 ${copied.length} 个字符",
+                                                            duration = SnackbarDuration.Short,
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onOpenCopySheet = if (pageTmuxControl != null) {
+                                                {
+                                                    menuImeWasVisible = imeVisible
+                                                    resizeSuspended = true
+                                                    showCopyTextDialog = true
+                                                }
+                                            } else {
+                                                null
+                                            },
+                                            modifier = Modifier.align(Alignment.TopCenter),
+                                        )
+                                    }
                                 }
 
                                 imageUploadState?.let { upload ->
@@ -1534,6 +1582,24 @@ fun ConsoleScreen(
                     }
                 }
             }
+        }
+
+        if (showCopyTextDialog && currentTmuxControl != null) {
+            TmuxCopyTextDialog(
+                control = currentTmuxControl!!,
+                onDismiss = {
+                    showCopyTextDialog = false
+                    termFocusRequester.requestFocus()
+                },
+                onCopied = { copied ->
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar(
+                            message = "已复制 ${copied.length} 个字符到剪贴板",
+                            duration = SnackbarDuration.Short,
+                        )
+                    }
+                },
+            )
         }
 
         if (showKeyboardSettings && currentBridge != null) {

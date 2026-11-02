@@ -255,6 +255,20 @@ class TmuxControl(
         if (pane.inMode) send("send-keys -X -t ${pane.id} cancel")
     }
 
+    /**
+     * Captures the active pane's visible screen plus up to [historyLines] of
+     * scrollback as plain text, joining wrapped lines (`-J`) and stripping
+     * trailing blank lines so the user can freely select and copy across pages.
+     */
+    suspend fun capturePaneText(historyLines: Int = 500): String {
+        val pane = _state.value.activePane?.id ?: return ""
+        require(PANE_ID.matches(pane)) { "not a pane id: $pane" }
+        val count = historyLines.coerceIn(50, 5000)
+        return send("capture-pane -p -J -S -$count -t $pane")
+            .dropLastWhile { it.isBlank() }
+            .joinToString("\n")
+    }
+
     /** Scrolls the given pane, positive back in history, as a mouse
      * wheel over it would — the pane is not selected. [column] and [row]
      * are where the finger is, 1-based within the pane. Non-suspending, for
