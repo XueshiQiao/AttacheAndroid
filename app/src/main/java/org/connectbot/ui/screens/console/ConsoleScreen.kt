@@ -500,10 +500,18 @@ private fun ConsoleTerminalPage(
             }
         }
 
+        val termBgColor = androidx.compose.ui.graphics.Color(
+            if (isDarkTheme) TerminalBridge.ATTACHE_DARK_BG else TerminalBridge.ATTACHE_LIGHT_BG,
+        )
+        val termFgColor = androidx.compose.ui.graphics.Color(
+            if (isDarkTheme) TerminalBridge.ATTACHE_DARK_FG else TerminalBridge.ATTACHE_LIGHT_FG,
+        )
+
         Terminal(
             terminalEmulator = bridge.terminalEmulator,
             modifier = Modifier
                 .fillMaxSize()
+                .background(termBgColor)
                 .padding(
                     bottom = if (keyboardAlwaysVisible) keyboardHeight else 0.dp,
                 )
@@ -512,6 +520,8 @@ private fun ConsoleTerminalPage(
                 .testTag("terminal"),
             typeface = fontResult.typeface,
             initialFontSize = fontSize.sp,
+            backgroundColor = termBgColor,
+            foregroundColor = termFgColor,
             keyboardEnabled = true,
             showSoftKeyboard = showSoftwareKeyboard && isActive && !inlineInputActive,
             resizeSuspended = resizeSuspended,
