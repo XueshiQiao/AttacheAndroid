@@ -5,12 +5,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRIDGE_DIR="${ROOT_DIR}/tsnet-bridge"
 OUT_DIR="${ROOT_DIR}/app/src/main/jniLibs/arm64-v8a"
 
-ANDROID_SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+ANDROID_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
-    ANDROID_NDK_HOME="$(ls -d "${ANDROID_SDK}/ndk/"* 2>/dev/null | sort -V | tail -n 1)"
+    if [[ -d "${ANDROID_SDK}/ndk" ]]; then
+        ANDROID_NDK_HOME="$(ls -d "${ANDROID_SDK}/ndk/"* 2>/dev/null | sort -V | tail -n 1)"
+    elif [[ -d "${ANDROID_SDK}/ndk-bundle" ]]; then
+        ANDROID_NDK_HOME="${ANDROID_SDK}/ndk-bundle"
+    fi
 fi
 
-if [[ ! -d "${ANDROID_NDK_HOME}" ]]; then
+if [[ ! -d "${ANDROID_NDK_HOME:-}" ]]; then
     echo "Error: Android NDK not found under ${ANDROID_SDK}/ndk" >&2
     exit 1
 fi
@@ -24,7 +28,7 @@ TOOLCHAIN_BIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/${HOST_TAG}/bin"
 CC="${TOOLCHAIN_BIN}/aarch64-linux-android23-clang"
 
 if [[ ! -x "${CC}" ]]; then
-    CC="${TOOLCHAIN_BIN}/aarch64-linux-android26-clang"
+    CC="$(ls "${TOOLCHAIN_BIN}"/aarch64-linux-android*-clang 2>/dev/null | sort -V | head -n 1)"
 fi
 
 mkdir -p "${OUT_DIR}"

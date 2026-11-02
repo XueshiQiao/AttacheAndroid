@@ -1,0 +1,112 @@
+name: Build Attaché APK
+
+on:
+  push:
+    branches:
+      - main
+      - attache-trial
+    tags:
+      - 'v*'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish APK to GitHub Releases'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build Attaché Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read version.properties
+        id: version
+        run: |
+          VERSION_NAME=$(grep '^VERSION_NAME=' version.properties | cut -d'=' -f2 | tr -d '[:space:]')
+          BUILD_NUMBER=$(grep '^BUILD_NUMBER=' version.properties | cut -d'=' -f2 | tr -d '[:space:]')
+          APK_NAME="Attache-v${VERSION_NAME}-b${BUILD_NUMBER}.apk"
+          RELEASE_TAG="v${VERSION_NAME}-b${BUILD_NUMBER}"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building ${APK_NAME} (tag: ${RELEASE_TAG})"
+
+      - name: Set up Go for tsnet-bridge
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'tsnet-bridge/go.mod'
+          cache-dependency-path: 'tsnet-bridge/go.sum'
+
+      - name: Build Embedded Tailscale (libattache_tsnet.so)
+        run: |
+          chmod +x ./scripts/build-tsnet.sh
+          ./scripts/build-tsnet.sh
+          test -s app/src/main/jniLibs/arm64-v8a/libattache_tsnet.so
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble Attaché APK (assembleOssDebug)
+        run: |
+          ./gradlew assembleOssDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/oss/debug/app-oss-debug.apk "${{ steps.version.outputs.apk_name }}"
+          ls -lh "${{ steps.version.outputs.apk_name }}"
+          echo "Verifying native libraries inside APK:"
+          unzip -l "${{ steps.version.outputs.apk_name }}" | grep -E "lib/.*\.so"
+
+      - name: Upload APK to Actions Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Attache-v${{ steps.version.outputs.version_name }}-b${{ steps.version.outputs.build_number }}
+          path: ${{ steps.version.outputs.apk_name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish APK to GitHub Releases
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.publish_release == true ||
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'push' && github.ref_name == 'main')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.release_tag }}"
+          APK="${{ steps.version.outputs.apk_name }}"
+          TITLE="Attaché v${{ steps.version.outputs.version_name }} (Build ${{ steps.version.outputs.build_number }})"
+          NOTES="Automated CI build of **${TITLE}** from commit \`${GITHUB_SHA::8}\`."
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Updating existing release ${TAG}..."
+            gh release upload "${TAG}" "${APK}" --clobber
+          else
+            echo "Creating new release ${TAG}..."
+            gh release create "${TAG}" "${APK}" \
+              --title "${TITLE}" \
+              --notes "${NOTES}"
+          fi
