@@ -37,6 +37,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -53,14 +54,19 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentPaste
@@ -1954,10 +1960,14 @@ fun ConsoleScreen(
                         titleBarHeight = with(density) { it.height.toDp() }
                     },
                 navigationIcon = {
-                    IconButton(onClick = navigateBack) {
+                    IconButton(
+                        onClick = navigateBack,
+                        modifier = if (tmuxControl != null) Modifier.size(34.dp) else Modifier,
+                    ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             stringResource(R.string.button_back),
+                            modifier = if (tmuxControl != null) Modifier.size(19.dp) else Modifier,
                         )
                     }
                 },
@@ -1972,26 +1982,71 @@ fun ConsoleScreen(
                 },
                 actions = {
                     if (tmuxControl != null) {
-                        TextButton(
-                            onClick = { changeFontSize(-2f) },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                            modifier = Modifier.testTag("title_bar_font_decrease"),
+                        val chipBorder = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                        val chipBg = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f)
+                        val chipText = MaterialTheme.colorScheme.onSurface
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            modifier = Modifier.padding(end = 2.dp),
                         ) {
-                            Text("A-", fontSize = 12.sp)
-                        }
-                        TextButton(
-                            onClick = { changeFontSize(2f) },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                            modifier = Modifier.testTag("title_bar_font_increase"),
-                        ) {
-                            Text("A+", fontSize = 12.sp)
-                        }
-                        TextButton(
-                            onClick = { toggleTheme() },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                            modifier = Modifier.testTag("title_bar_theme_toggle"),
-                        ) {
-                            Text(if (isDarkTheme) "☀️" else "🌙", fontSize = 13.sp)
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(chipBg)
+                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
+                                    .clickable { changeFontSize(-2f) }
+                                    .padding(horizontal = 6.dp)
+                                    .testTag("title_bar_font_decrease"),
+                            ) {
+                                Text("A-", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = chipText)
+                            }
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(chipBg)
+                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
+                                    .clickable { changeFontSize(2f) }
+                                    .padding(horizontal = 6.dp)
+                                    .testTag("title_bar_font_increase"),
+                            ) {
+                                Text("A+", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = chipText)
+                            }
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(chipBg)
+                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
+                                    .clickable { toggleTheme() }
+                                    .padding(horizontal = 6.dp)
+                                    .testTag("title_bar_theme_toggle"),
+                            ) {
+                                Text(if (isDarkTheme) "☀️" else "🌙", fontSize = 11.5.sp)
+                            }
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(chipBg)
+                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        menuImeWasVisible = imeVisible
+                                        resizeSuspended = true
+                                        autoHideJobRef.titleBarJob?.cancel()
+                                        showToolbarStyleDialog = true
+                                    }
+                                    .padding(horizontal = 6.dp)
+                                    .testTag("title_bar_toolbar_style"),
+                            ) {
+                                Text("🎛️", fontSize = 11.5.sp)
+                            }
                         }
                     }
 
@@ -2043,10 +2098,12 @@ fun ConsoleScreen(
                                 autoHideJobRef.titleBarJob?.cancel()
                                 showMenu = true
                             },
+                            modifier = if (tmuxControl != null) Modifier.size(34.dp) else Modifier,
                         ) {
                             Icon(
                                 Icons.Default.MoreVert,
                                 contentDescription = stringResource(R.string.button_more_options),
+                                modifier = if (tmuxControl != null) Modifier.size(19.dp) else Modifier,
                             )
                         }
                         DropdownMenu(

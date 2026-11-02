@@ -88,8 +88,12 @@ enum class AttacheToolbarStyle(
 
 object AttacheToolbarPrefs {
     const val PREF_KEY = "attache_toolbar_style"
+    const val PREF_ICON_ONLY_KEY = "attache_toolbar_icon_only"
     private val _styleFlow = MutableStateFlow(AttacheToolbarStyle.COPILOT_DOCK)
     val styleFlow: StateFlow<AttacheToolbarStyle> = _styleFlow.asStateFlow()
+
+    private val _iconOnlyFlow = MutableStateFlow(false)
+    val iconOnlyFlow: StateFlow<Boolean> = _iconOnlyFlow.asStateFlow()
 
     private val _isDarkFlow = MutableStateFlow(true)
     val isDarkFlow: StateFlow<Boolean> = _isDarkFlow.asStateFlow()
@@ -100,6 +104,7 @@ object AttacheToolbarPrefs {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val style = AttacheToolbarStyle.fromId(prefs.getString(PREF_KEY, AttacheToolbarStyle.COPILOT_DOCK.id))
         _styleFlow.value = style
+        _iconOnlyFlow.value = prefs.getBoolean(PREF_ICON_ONLY_KEY, false)
         initialized = true
         return style
     }
@@ -118,6 +123,14 @@ object AttacheToolbarPrefs {
         initialized = true
     }
 
+    fun setIconOnly(context: Context, iconOnly: Boolean) {
+        PreferenceManager.getDefaultSharedPreferences(context).edit {
+            putBoolean(PREF_ICON_ONLY_KEY, iconOnly)
+        }
+        _iconOnlyFlow.value = iconOnly
+        initialized = true
+    }
+
     fun updateDarkTheme(isDark: Boolean) {
         _isDarkFlow.value = isDark
     }
@@ -125,7 +138,8 @@ object AttacheToolbarPrefs {
 
 /**
  * Dialog allowing the user to pick between Scheme B (`TERMINAL_DECK`) and
- * Scheme D (`COPILOT_DOCK`) with immediate live preview.
+ * Scheme D (`COPILOT_DOCK`) and toggle whether the top accessory row shows
+ * icon-only (`🎤`, `/`, `🖼`, `📂`, `📋`, `📥`, `⊞`, `⌫`) or icon + label.
  */
 @Composable
 fun AttacheToolbarStyleDialog(
@@ -133,13 +147,67 @@ fun AttacheToolbarStyleDialog(
     onSelectStyle: (AttacheToolbarStyle) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("底部双排快捷栏风格", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("底部双排快捷栏设置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "第一排按钮显示",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    listOf(
+                        false to "图标 + 文字",
+                        true to "仅图标 (🎤  /  📂)",
+                    ).forEach { (onlyIcons, label) ->
+                        val selected = iconOnly == onlyIcons
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            border = BorderStroke(
+                                width = if (selected) 1.5.dp else 1.dp,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { AttacheToolbarPrefs.setIconOnly(context, onlyIcons) },
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    text = "整体视觉风格 (B / D)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
                 AttacheToolbarStyle.entries.forEach { option ->
                     val selected = option == currentStyle
                     Surface(
@@ -473,6 +541,7 @@ fun AttacheAccessoryRow(
         AttacheToolbarPrefs.updateDarkTheme(isDark)
     }
     val style by AttacheToolbarPrefs.styleFlow.collectAsState()
+    val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
 
     when (style) {
         AttacheToolbarStyle.TERMINAL_DECK -> {
@@ -506,19 +575,19 @@ fun AttacheAccessoryRow(
             ) {
                 // 1. Top-left Voice/Text Input toggle
                 TerminalDeckKey(
-                    label = "🎤说",
+                    label = if (iconOnly) "🎤" else "🎤说",
                     textColor = amberText,
                     borderColor = amberBorder,
                     bgColor = amberBg,
                     tag = "accessoryTextInput",
                     onClick = { onInteraction(); onTextInput() },
-                    modifier = Modifier.weight(0.95f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
                 // 2. /cmd (Slash menu)
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     TerminalDeckKey(
-                        label = "/cmd",
+                        label = if (iconOnly) "/" else "/cmd",
                         textColor = cyanText,
                         borderColor = cyanBorder,
                         bgColor = cyanBg,
@@ -542,7 +611,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 ) { onClick ->
                     TerminalDeckKey(
-                        label = "tmux",
+                        label = if (iconOnly) "⊞" else "tmux",
                         textColor = cyanText,
                         borderColor = cyanBorder,
                         bgColor = cyanBg,
@@ -554,7 +623,7 @@ fun AttacheAccessoryRow(
 
                 // 4. +img (Send image)
                 TerminalDeckKey(
-                    label = "+img",
+                    label = if (iconOnly) "🖼" else "+img",
                     textColor = defaultKeyText,
                     borderColor = defaultKeyBorder,
                     bgColor = defaultKeyBg,
@@ -565,18 +634,18 @@ fun AttacheAccessoryRow(
 
                 // 5. inbox (File Inbox)
                 TerminalDeckKey(
-                    label = "inbox",
+                    label = if (iconOnly) "📂" else "inbox",
                     textColor = defaultKeyText,
                     borderColor = defaultKeyBorder,
                     bgColor = defaultKeyBg,
                     tag = "accessoryFileInbox",
                     onClick = { onInteraction(); onOpenFileInbox() },
-                    modifier = Modifier.weight(1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
                 )
 
                 // 6. copy (Extract pane text)
                 TerminalDeckKey(
-                    label = "copy",
+                    label = if (iconOnly) "📋" else "copy",
                     textColor = defaultKeyText,
                     borderColor = defaultKeyBorder,
                     bgColor = defaultKeyBg,
@@ -587,24 +656,24 @@ fun AttacheAccessoryRow(
 
                 // 7. paste (Clipboard paste)
                 TerminalDeckKey(
-                    label = "paste",
+                    label = if (iconOnly) "📥" else "paste",
                     textColor = greenText,
                     borderColor = greenBorder,
                     bgColor = greenBg,
                     tag = "accessoryPaste",
                     onClick = { onInteraction(); onPaste() },
-                    modifier = Modifier.weight(1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
                 )
 
                 // 8. ^U (Clear input line)
                 TerminalDeckKey(
-                    label = "^U",
+                    label = if (iconOnly) "⌫" else "^U",
                     textColor = redText,
                     borderColor = redBorder,
                     bgColor = redBg,
                     tag = "accessoryClear",
                     onClick = { onInteraction(); onClearInput() },
-                    modifier = Modifier.weight(0.8f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.8f),
                 )
             }
         }
@@ -620,18 +689,18 @@ fun AttacheAccessoryRow(
             ) {
                 // 1. Top-left Voice/Text Input toggle
                 CopilotDockChip(
-                    label = "🎤说",
+                    label = if (iconOnly) "🎤" else "🎤说",
                     isAiAccent = true,
                     isDark = isDark,
                     tag = "accessoryTextInput",
                     onClick = { onInteraction(); onTextInput() },
-                    modifier = Modifier.weight(0.95f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
                 // 2. ✦ /指令
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     CopilotDockChip(
-                        label = "/指令",
+                        label = if (iconOnly) "/" else "/指令",
                         isAiAccent = true,
                         isDark = isDark,
                         tag = "accessorySlash",
@@ -647,38 +716,38 @@ fun AttacheAccessoryRow(
 
                 // 3. 🖼 传图
                 CopilotDockChip(
-                    label = "🖼图",
+                    label = if (iconOnly) "🖼" else "🖼图",
                     isDark = isDark,
                     tag = "accessoryImage",
                     onClick = { onInteraction(); onPickImage() },
-                    modifier = Modifier.weight(0.95f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
                 // 4. 📂 文件
                 CopilotDockChip(
-                    label = "📂文件",
+                    label = if (iconOnly) "📂" else "📂文件",
                     isDark = isDark,
                     tag = "accessoryFileInbox",
                     onClick = { onInteraction(); onOpenFileInbox() },
-                    modifier = Modifier.weight(1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
                 )
 
                 // 5. 📋 提取
                 CopilotDockChip(
-                    label = "📋复制",
+                    label = if (iconOnly) "📋" else "📋复制",
                     isDark = isDark,
                     tag = "accessoryCopy",
                     onClick = { onInteraction(); onCopyText() },
-                    modifier = Modifier.weight(1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
                 )
 
                 // 6. 📥 粘贴
                 CopilotDockChip(
-                    label = "📥粘贴",
+                    label = if (iconOnly) "📥" else "📥粘贴",
                     isDark = isDark,
                     tag = "accessoryPaste",
                     onClick = { onInteraction(); onPaste() },
-                    modifier = Modifier.weight(1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
                 )
 
                 // 7. ⊞ 窗格
@@ -690,7 +759,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 ) { onClick ->
                     CopilotDockChip(
-                        label = "⊞窗格",
+                        label = if (iconOnly) "⊞" else "⊞窗格",
                         isDark = isDark,
                         tag = "tmuxActions",
                         onClick = onClick,
@@ -700,12 +769,12 @@ fun AttacheAccessoryRow(
 
                 // 8. ⌫ 清空
                 CopilotDockChip(
-                    label = "⌫清",
+                    label = if (iconOnly) "⌫" else "⌫清",
                     isDanger = true,
                     isDark = isDark,
                     tag = "accessoryClear",
                     onClick = { onInteraction(); onClearInput() },
-                    modifier = Modifier.weight(0.9f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.9f),
                 )
             }
         }
