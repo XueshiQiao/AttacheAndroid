@@ -26,7 +26,7 @@ abstract class PrepareOssMoshArtifacts : DefaultTask() {
         val assetsRoot = assetsDirectory.get().asFile
         jniLibsRoot.deleteRecursively()
         assetsRoot.deleteRecursively()
-        val abis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+        val abis = listOf("arm64-v8a")
         abis.forEach { abi ->
             val url = URI("https://github.com/connectbot/mosh4android/releases/download/$tag/mosh-android-$abi.zip").toURL()
             val connection = url.openConnection().apply {
@@ -228,7 +228,7 @@ android {
         vectorDrawables.useSupportLibrary = true
 
         ndk {
-            abiFilters.addAll(listOf("x86", "x86_64", "armeabi-v7a", "arm64-v8a"))
+            abiFilters.addAll(listOf("arm64-v8a"))
             debugSymbolLevel = "full"
         }
 

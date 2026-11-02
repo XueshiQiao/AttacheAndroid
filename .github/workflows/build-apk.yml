@@ -44,7 +44,7 @@ jobs:
         run: |
           VERSION_NAME=$(grep '^VERSION_NAME=' version.properties | cut -d'=' -f2 | tr -d '[:space:]')
           BUILD_NUMBER=$(grep '^BUILD_NUMBER=' version.properties | cut -d'=' -f2 | tr -d '[:space:]')
-          APK_NAME="Attache-v${VERSION_NAME}-b${BUILD_NUMBER}.apk"
+          APK_NAME="Attache-v${VERSION_NAME}-b${BUILD_NUMBER}-arm64-v8a.apk"
           RELEASE_TAG="v${VERSION_NAME}-b${BUILD_NUMBER}"
           echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
           echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -84,7 +84,7 @@ jobs:
       - name: Upload APK to Actions Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Attache-v${{ steps.version.outputs.version_name }}-b${{ steps.version.outputs.build_number }}
+          name: Attache-v${{ steps.version.outputs.version_name }}-b${{ steps.version.outputs.build_number }}-arm64-v8a
           path: ${{ steps.version.outputs.apk_name }}
           if-no-files-found: error
           retention-days: 30

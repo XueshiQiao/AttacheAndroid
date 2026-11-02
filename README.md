@@ -65,8 +65,8 @@
 版本号定义在根目录 [`version.properties`](version.properties)（`VERSION_NAME=1.0.0`, `BUILD_NUMBER=<N>`）：
 ```bash
 ./gradlew assembleOssDebug
-cp app/build/outputs/apk/oss/debug/app-oss-debug.apk /tmp/Attache-v1.0.0-b<N>.apk
-~/.local/bin/attache-send /tmp/Attache-v1.0.0-b<N>.apk
+cp app/build/outputs/apk/oss/debug/app-oss-debug.apk /tmp/Attache-v1.0.0-b<N>-arm64-v8a.apk
+~/.local/bin/attache-send /tmp/Attache-v1.0.0-b<N>-arm64-v8a.apk
 ```
 
 ---
