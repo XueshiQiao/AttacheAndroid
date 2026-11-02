@@ -717,14 +717,15 @@ fun TmuxSessionsButton(
         } else {
             (current?.name ?: "tmux") + " ▾"
         }
-        Text(sessionText, fontSize = 13.sp, maxLines = 1, softWrap = false)
+        val fg = androidx.compose.material3.LocalContentColor.current
+        Text(sessionText, fontSize = 13.sp, maxLines = 1, softWrap = false, color = fg, fontWeight = FontWeight.SemiBold)
         if (window != null) {
             Text(
                 "  ${window.index}: ${window.name}",
                 fontSize = 13.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                color = fg.copy(alpha = 0.72f),
                 modifier = Modifier.testTag("tmuxCurrentWindow"),
             )
         }

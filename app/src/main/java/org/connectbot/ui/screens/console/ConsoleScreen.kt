@@ -750,6 +750,28 @@ fun ConsoleScreen(
         org.connectbot.util.ThemeMode.DARK -> true
         org.connectbot.util.ThemeMode.SYSTEM -> systemDark
     }
+    val unifiedConsoleBg = if (isDarkTheme) {
+        androidx.compose.ui.graphics.Color(TerminalBridge.ATTACHE_DARK_BG)
+    } else {
+        androidx.compose.ui.graphics.Color(TerminalBridge.ATTACHE_LIGHT_BG)
+    }
+    val unifiedConsoleFg = if (isDarkTheme) {
+        androidx.compose.ui.graphics.Color(TerminalBridge.ATTACHE_DARK_FG)
+    } else {
+        androidx.compose.ui.graphics.Color(TerminalBridge.ATTACHE_LIGHT_FG)
+    }
+    LaunchedEffect(isDarkTheme, unifiedConsoleBg) {
+        val activity = context as? Activity ?: return@LaunchedEffect
+        val window = activity.window
+        @Suppress("DEPRECATION")
+        window.statusBarColor = if (isDarkTheme) TerminalBridge.ATTACHE_DARK_BG else TerminalBridge.ATTACHE_LIGHT_BG
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = if (isDarkTheme) TerminalBridge.ATTACHE_DARK_BG else TerminalBridge.ATTACHE_LIGHT_BG
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !isDarkTheme
+            isAppearanceLightNavigationBars = !isDarkTheme
+        }
+    }
     fun toggleTheme() {
         val next = if (isDarkTheme) org.connectbot.util.ThemeMode.LIGHT else org.connectbot.util.ThemeMode.DARK
         themeMode = next
@@ -1307,6 +1329,8 @@ fun ConsoleScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = unifiedConsoleBg,
+        contentColor = unifiedConsoleFg,
         modifier = modifier
             .fillMaxSize()
             .then(if (keepScreenOn) Modifier.keepScreenOn() else Modifier),
@@ -1971,20 +1995,29 @@ fun ConsoleScreen(
                         )
                     }
                 },
-                colors = if (titleBarHide) {
-                    // Translucent overlay when auto-hide is enabled
-                    TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                    )
-                } else {
-                    // Solid color when permanently visible
-                    TopAppBarDefaults.topAppBarColors()
-                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = if (titleBarHide) {
+                        unifiedConsoleBg.copy(alpha = 0.85f)
+                    } else {
+                        unifiedConsoleBg
+                    },
+                    titleContentColor = unifiedConsoleFg,
+                    navigationIconContentColor = unifiedConsoleFg,
+                    actionIconContentColor = unifiedConsoleFg,
+                ),
                 actions = {
                     if (tmuxControl != null) {
-                        val chipBorder = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
-                        val chipBg = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f)
-                        val chipText = MaterialTheme.colorScheme.onSurface
+                        val chipBorder = if (isDarkTheme) {
+                            androidx.compose.ui.graphics.Color(0xFF2B323C)
+                        } else {
+                            androidx.compose.ui.graphics.Color(0xFFD8D0C1)
+                        }
+                        val chipBg = if (isDarkTheme) {
+                            androidx.compose.ui.graphics.Color(0xFF1C212B)
+                        } else {
+                            androidx.compose.ui.graphics.Color(0xFFEDE7DA)
+                        }
+                        val chipText = unifiedConsoleFg
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(3.dp),

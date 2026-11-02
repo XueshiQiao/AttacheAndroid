@@ -1592,14 +1592,11 @@ class TerminalBridge {
 
     fun applyThemeAppearance(isDark: Boolean) {
         if (isDark) {
-            val fgColor = fullColorPalette.getOrElse(defaultFg) { 0xFFCCCCCC.toInt() }
-            val bgColor = fullColorPalette.getOrElse(defaultBg) { 0xFF000000.toInt() }
-            val ansi = if (fullColorPalette.size >= 16) {
-                fullColorPalette.sliceArray(0 until 16)
-            } else {
-                ATTACHE_DARK_ANSI_COLORS
-            }
-            terminalEmulator.applyColorScheme(ansi, fgColor, bgColor)
+            terminalEmulator.applyColorScheme(
+                ATTACHE_DARK_ANSI_COLORS,
+                ATTACHE_DARK_FG,
+                ATTACHE_DARK_BG,
+            )
         } else {
             terminalEmulator.applyColorScheme(
                 ATTACHE_LIGHT_ANSI_COLORS,
@@ -1615,8 +1612,13 @@ class TerminalBridge {
         private const val DEFAULT_FONT_SIZE_SP = 10
         private const val FONT_SIZE_STEP = 2
 
-        private const val ATTACHE_LIGHT_BG = 0xFFFAF9F5.toInt()
-        private const val ATTACHE_LIGHT_FG = 0xFF1F2328.toInt()
+        // Warm Claude-inspired parchment cream for Light Mode
+        const val ATTACHE_LIGHT_BG = 0xFFF7F3EA.toInt()
+        const val ATTACHE_LIGHT_FG = 0xFF1F2328.toInt()
+
+        // Ghostty / GitHub Dark / Tokyo Night deep slate navy for Dark Mode (non-pure-black)
+        const val ATTACHE_DARK_BG = 0xFF13171F.toInt()
+        const val ATTACHE_DARK_FG = 0xFFE6EDF3.toInt()
 
         private val ATTACHE_LIGHT_ANSI_COLORS = intArrayOf(
             0xFF1F2328.toInt(), // 0: black
@@ -1638,22 +1640,22 @@ class TerminalBridge {
         )
 
         private val ATTACHE_DARK_ANSI_COLORS = intArrayOf(
-            0xFF000000.toInt(),
-            0xFFCC0000.toInt(),
-            0xFF00CC00.toInt(),
-            0xFFCCCC00.toInt(),
-            0xFF0000CC.toInt(),
-            0xFFCC00CC.toInt(),
-            0xFF00CCCC.toInt(),
-            0xFFCCCCCC.toInt(),
-            0xFF444444.toInt(),
-            0xFFFF4444.toInt(),
-            0xFF44FF44.toInt(),
-            0xFFFFFF44.toInt(),
-            0xFF4444FF.toInt(),
-            0xFFFF44FF.toInt(),
-            0xFF44FFFF.toInt(),
-            0xFFFFFFFF.toInt(),
+            0xFF1F242C.toInt(), // 0: black (elevated charcoal)
+            0xFFFF7B72.toInt(), // 1: red (soft coral red)
+            0xFF3FB950.toInt(), // 2: green (emerald terminal green)
+            0xFFD29922.toInt(), // 3: yellow (warm amber gold)
+            0xFF58A6FF.toInt(), // 4: blue (crisp sky blue)
+            0xFFBC8CFF.toInt(), // 5: magenta (soft lavender purple)
+            0xFF39C5CF.toInt(), // 6: cyan (bright teal cyan)
+            0xFFD0D7DE.toInt(), // 7: white (soft silver)
+            0xFF6E7681.toInt(), // 8: bright black (muted slate grey)
+            0xFFFFA198.toInt(), // 9: bright red
+            0xFF56D364.toInt(), // 10: bright green
+            0xFFE3B341.toInt(), // 11: bright yellow
+            0xFF79C0FF.toInt(), // 12: bright blue
+            0xFFD2A8FF.toInt(), // 13: bright magenta
+            0xFF56D4DD.toInt(), // 14: bright cyan
+            0xFFFFFFFF.toInt(), // 15: bright white
         )
     }
 }
