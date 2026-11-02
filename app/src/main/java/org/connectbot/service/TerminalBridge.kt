@@ -496,8 +496,12 @@ class TerminalBridge {
         defaultBg = defaults[1]
 
         // Get actual RGB colors for the default foreground/background indices
-        val defaultFgColor = fullColorPalette[defaultFg]
-        val defaultBgColor = fullColorPalette[defaultBg]
+        val initialThemeMode = org.connectbot.util.ThemeMode.fromString(
+            manager.prefs.getString(PreferenceConstants.THEME_MODE, null),
+        )
+        val isDarkInit = initialThemeMode != org.connectbot.util.ThemeMode.LIGHT
+        val defaultFgColor = if (isDarkInit) ATTACHE_DARK_FG else ATTACHE_LIGHT_FG
+        val defaultBgColor = if (isDarkInit) ATTACHE_DARK_BG else ATTACHE_LIGHT_BG
 
         // Initialize TerminalEmulator with colors from scheme
         // Note: We pass the actual RGB colors (not indices) wrapped in Color objects
@@ -555,9 +559,8 @@ class TerminalBridge {
             },
         )
 
-        // Apply color scheme to terminal emulator
-        val ansiColors = fullColorPalette.sliceArray(0 until 16)
-        terminalEmulator.applyColorScheme(ansiColors, defaultFgColor, defaultBgColor)
+        // Apply One Dark Pro (dark) or Claude Warm Paper (light) scheme immediately
+        applyThemeAppearance(isDarkInit)
 
         val stickyModifierSetting = when (
             manager.prefs.getString(PreferenceConstants.STICKY_MODIFIERS, PreferenceConstants.NO)
@@ -739,11 +742,11 @@ class TerminalBridge {
             defaultFg = defaults[0]
             defaultBg = defaults[1]
 
-            // Apply to terminal emulator
-            val defaultFgColor = fullColorPalette[defaultFg]
-            val defaultBgColor = fullColorPalette[defaultBg]
-            val ansiColors = fullColorPalette.sliceArray(0 until 16)
-            terminalEmulator.applyColorScheme(ansiColors, defaultFgColor, defaultBgColor)
+            // Re-apply Attaché theme appearance (One Dark Pro or Claude Warm Paper)
+            val currentThemeMode = org.connectbot.util.ThemeMode.fromString(
+                manager.prefs.getString(PreferenceConstants.THEME_MODE, null),
+            )
+            applyThemeAppearance(currentThemeMode != org.connectbot.util.ThemeMode.LIGHT)
         }
 
         // Update force size from profile
@@ -1616,9 +1619,9 @@ class TerminalBridge {
         const val ATTACHE_LIGHT_BG = 0xFFF7F3EA.toInt()
         const val ATTACHE_LIGHT_FG = 0xFF1F2328.toInt()
 
-        // Ghostty / GitHub Dark / Tokyo Night deep slate navy for Dark Mode (non-pure-black)
-        const val ATTACHE_DARK_BG = 0xFF13171F.toInt()
-        const val ATTACHE_DARK_FG = 0xFFE6EDF3.toInt()
+        // One Dark Pro signature slate-charcoal for Dark Mode (clearly non-black on OLED)
+        const val ATTACHE_DARK_BG = 0xFF21252B.toInt()
+        const val ATTACHE_DARK_FG = 0xFFD7DAE0.toInt()
 
         private val ATTACHE_LIGHT_ANSI_COLORS = intArrayOf(
             0xFF1F2328.toInt(), // 0: black
@@ -1640,21 +1643,21 @@ class TerminalBridge {
         )
 
         private val ATTACHE_DARK_ANSI_COLORS = intArrayOf(
-            0xFF1F242C.toInt(), // 0: black (elevated charcoal)
-            0xFFFF7B72.toInt(), // 1: red (soft coral red)
-            0xFF3FB950.toInt(), // 2: green (emerald terminal green)
-            0xFFD29922.toInt(), // 3: yellow (warm amber gold)
-            0xFF58A6FF.toInt(), // 4: blue (crisp sky blue)
-            0xFFBC8CFF.toInt(), // 5: magenta (soft lavender purple)
-            0xFF39C5CF.toInt(), // 6: cyan (bright teal cyan)
-            0xFFD0D7DE.toInt(), // 7: white (soft silver)
-            0xFF6E7681.toInt(), // 8: bright black (muted slate grey)
-            0xFFFFA198.toInt(), // 9: bright red
-            0xFF56D364.toInt(), // 10: bright green
-            0xFFE3B341.toInt(), // 11: bright yellow
-            0xFF79C0FF.toInt(), // 12: bright blue
-            0xFFD2A8FF.toInt(), // 13: bright magenta
-            0xFF56D4DD.toInt(), // 14: bright cyan
+            0xFF282C34.toInt(), // 0: black (One Dark elevated surface)
+            0xFFE06C75.toInt(), // 1: red (One Dark coral red)
+            0xFF98C379.toInt(), // 2: green (One Dark sage green)
+            0xFFE5C07B.toInt(), // 3: yellow (One Dark warm gold)
+            0xFF61AFEF.toInt(), // 4: blue (One Dark sky blue)
+            0xFFC678DD.toInt(), // 5: magenta (One Dark orchid purple)
+            0xFF56B6C2.toInt(), // 6: cyan (One Dark fountain cyan)
+            0xFFABB2BF.toInt(), // 7: white (One Dark primary grey-white)
+            0xFF5C6370.toInt(), // 8: bright black (One Dark comment slate)
+            0xFFBE5046.toInt(), // 9: bright red
+            0xFF98C379.toInt(), // 10: bright green
+            0xFFD19A66.toInt(), // 11: bright yellow/orange
+            0xFF61AFEF.toInt(), // 12: bright blue
+            0xFFC678DD.toInt(), // 13: bright magenta
+            0xFF56B6C2.toInt(), // 14: bright cyan
             0xFFFFFFFF.toInt(), // 15: bright white
         )
     }

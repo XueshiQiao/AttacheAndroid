@@ -284,8 +284,8 @@ fun AttacheToolbarContainer(
 
     when (style) {
         AttacheToolbarStyle.TERMINAL_DECK -> {
-            val containerBg = if (isDark) Color(0xFF10141B) else Color(0xFFEDE7DA)
-            val containerBorder = if (isDark) Color(0xFF21262D) else Color(0xFFD8D0C1)
+            val containerBg = if (isDark) Color(0xFF181A1F) else Color(0xFFEDE7DA)
+            val containerBorder = if (isDark) Color(0xFF2C313A) else Color(0xFFD8D0C1)
             Column(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = modifier
@@ -307,9 +307,9 @@ fun AttacheToolbarContainer(
             }
         }
         AttacheToolbarStyle.COPILOT_DOCK -> {
-            val outerBackdrop = if (isDark) Color(0xFF13171F) else Color(0xFFF7F3EA)
-            val dockBg = if (isDark) Color(0xFF1A202C) else Color(0xFFFDFBF7)
-            val dockBorder = if (isDark) Color(0x26FFFFFF) else Color(0xFFD8D0C1)
+            val outerBackdrop = if (isDark) Color(0xFF21252B) else Color(0xFFF7F3EA)
+            val dockBg = if (isDark) Color(0xFF282C34) else Color(0xFFFDFBF7)
+            val dockBorder = if (isDark) Color(0xFF3E4451) else Color(0xFFD8D0C1)
             Box(
                 modifier = modifier
                     .fillMaxWidth()
