@@ -25,6 +25,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -249,7 +250,13 @@ open class SSH : AbsTransport {
     @Volatile
     private var agentLockPassphrase: String? = null
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() +
+            Dispatchers.IO +
+            CoroutineExceptionHandler { _, throwable ->
+                Timber.w(throwable, "Unhandled coroutine exception in SSH transport scope")
+            },
+    )
 
     constructor() : super()
 

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
@@ -66,7 +67,9 @@ private fun CoroutineScope.tmuxAction(name: String, action: suspend () -> Unit) 
     launch {
         try {
             action()
-        } catch (e: TmuxCommandError) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Timber.w("%s failed: %s", name, e.message)
         }
     }

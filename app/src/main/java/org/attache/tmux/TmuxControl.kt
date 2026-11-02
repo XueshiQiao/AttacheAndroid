@@ -149,7 +149,9 @@ class TmuxControl(
                 // command replies and layout/window notifications intact.
                 try {
                     send("refresh-client -f no-output")
-                } catch (e: TmuxCommandError) {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     Timber.w("no-output failed: %s", e.message)
                 }
                 for (request in refreshRequests) refresh()
@@ -295,7 +297,9 @@ class TmuxControl(
             "{ if-shell -F -t $pane '#{alternate_on}' { $keys } $otherwise } }"
         try {
             send(command)
-        } catch (e: TmuxCommandError) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Timber.w("scroll failed: %s", e.message)
         }
     }
@@ -353,7 +357,9 @@ class TmuxControl(
                 }
             }
             _state.value = TmuxState(current, sessions, windows, panes, zoomed)
-        } catch (e: TmuxCommandError) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Timber.w("refresh failed: %s", e.message)
         }
     }
@@ -422,7 +428,9 @@ class TmuxControl(
                 // Nothing reached tmux, so nothing will answer this entry;
                 // left queued it would take the next command's reply.
                 synchronized(pending) { pending.remove(reply) }
-                throw e
+                if (e is CancellationException) throw e
+                close()
+                throw CancellationException("tmux control channel write failed").apply { initCause(e) }
             }
         }
         // Cancelled here, the entry stays queued on purpose: the command was
@@ -487,6 +495,10 @@ class TmuxControl(
         val text = ByteArrayOutputStream()
         try {
             for (chunk in session.stderr) text.write(chunk)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.d(e, "tmux -C stderr closed")
         } finally {
             if (text.size() > 0) Timber.w("tmux -C stderr: %s", text.toString(Charsets.UTF_8.name()))
         }

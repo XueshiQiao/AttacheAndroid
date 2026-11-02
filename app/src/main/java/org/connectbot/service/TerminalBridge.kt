@@ -439,7 +439,13 @@ class TerminalBridge {
         this.manager = manager
         this.host = host
         this.dispatchers = dispatchers
-        scope = CoroutineScope(SupervisorJob() + dispatchers.default)
+        scope = CoroutineScope(
+            SupervisorJob() +
+                dispatchers.default +
+                kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+                    Timber.w(throwable, "Unhandled coroutine exception in TerminalBridge scope")
+                },
+        )
 
         // Load profile for this host (always returns a profile, defaulting to Default profile)
         val profile = manager.profileRepository.getByIdOrDefaultBlocking(host.profileId)
