@@ -8,9 +8,15 @@
 
 ## 📱 界面预览 (Screenshots)
 
-| 亮色模式 (Claude Warm Paper) | 暗色模式 (One Dark Pro) | 内嵌 Tailscale (`tsnet`) | `tmux -CC` 侧边栏与收件箱 |
-| :---: | :---: | :---: | :---: |
-| <img src="docs/screenshots/01-light-theme.jpg" width="210" alt="Light Theme" /> | <img src="docs/screenshots/02-dark-theme.jpg" width="210" alt="Dark Theme" /> | <img src="docs/screenshots/03-tailscale-tsnet.jpg" width="210" alt="Embedded Tailscale tsnet" /> | <img src="docs/screenshots/04-tmux-sidebar.jpg" width="210" alt="tmux Sidebar Drawer" /> |
+<p align="center">
+  <img src="docs/screenshots/01-light-theme.jpg" width="24%" alt="亮色模式 (Claude Warm Paper)" />
+  <img src="docs/screenshots/02-dark-theme.jpg" width="24%" alt="暗色模式 (One Dark Pro)" />
+  <img src="docs/screenshots/03-tailscale-tsnet.jpg" width="24%" alt="内嵌 Tailscale (tsnet)" />
+  <img src="docs/screenshots/04-tmux-sidebar.jpg" width="24%" alt="tmux -CC 侧边栏与收件箱" />
+</p>
+<p align="center">
+  <sub><b>从左至右</b>：亮色模式 (Claude Warm Paper) · 暗色模式 (One Dark Pro) · 内嵌 Tailscale (<code>tsnet</code>) · <code>tmux -CC</code> 侧边栏与收件箱</sub>
+</p>
 
 ---
 
