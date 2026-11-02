@@ -69,12 +69,12 @@ enum class AttacheToolbarStyle(
 ) {
     TERMINAL_DECK(
         id = "terminal_deck",
-        title = "方案 B · 极客纯血 Terminal 机械盘",
+        title = "Terminal Deck · 极客机械盘",
         subtitle = "全等宽字体机械键帽 + 琥珀橙/极客蓝/翠绿语义分色 + 独立 ^C/^U 键",
     ),
     COPILOT_DOCK(
         id = "copilot_dock",
-        title = "方案 D · 现代 AI Copilot 悬浮胶囊坞",
+        title = "Copilot Dock · 悬浮胶囊坞",
         subtitle = "16dp 圆角悬浮玻璃坞 + 彩色胶囊按钮 + 无边框轻量化辅助键",
     ),
     ;
@@ -202,7 +202,7 @@ fun AttacheToolbarStyleDialog(
                 }
 
                 Text(
-                    text = "整体视觉风格 (B / D)",
+                    text = "整体视觉风格",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold,
