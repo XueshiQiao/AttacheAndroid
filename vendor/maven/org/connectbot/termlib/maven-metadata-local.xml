@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>org.connectbot</groupId>
+  <artifactId>termlib</artifactId>
+  <versioning>
+    <latest>0.3.14-attache.4</latest>
+    <release>0.3.14-attache.4</release>
+    <versions>
+      <version>0.3.14-attache.2</version>
+      <version>0.3.14-attache.3</version>
+      <version>0.3.14-attache.4</version>
+    </versions>
+    <lastUpdated>20261031125950</lastUpdated>
+  </versioning>
+</metadata>

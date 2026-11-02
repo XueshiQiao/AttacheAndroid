@@ -1,35 +1,59 @@
 package org.attache.tmux
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import org.connectbot.terminal.TerminalDimensions
 import timber.log.Timber
+import java.util.UUID
 import kotlin.math.abs
 
 /** Runs a tmux command from a tap. A refusal is not an error worth a
@@ -222,76 +246,332 @@ private const val FLING_MIN_VELOCITY = 400f
 private const val FLING_STOP_VELOCITY = 60f
 
 /**
- * The current session's name and, beside it, the current window's — the
- * title bar is too narrow on a phone for a chip per window. A tap opens every
- * session on the server, each with its windows — the phone's version of the
- * desktop app's rail — and switching windows happens there. A tap on a
- * session or a window moves this connection there; nothing changes locally
- * until tmux reports it.
+ * Host entry shown in the first tier of [AttacheSidebar].
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+data class AttacheHostEntry(
+    val id: UUID,
+    val name: String,
+    val subtitle: String,
+    val connected: Boolean,
+    val current: Boolean,
+)
+
+private val RailBg = Color(0xFF1E1F22)
+private val RailHeaderBg = Color(0xFF18191B)
+private val RailEdge = Color(0xFF2C2E33)
+private val RailDivider = Color(0xFF27292E)
+private val RailActiveHostBg = Color(0xFF282B31)
+private val RailAccentBlue = Color(0xFF4E7FB8)
+private val RailText = Color(0xFFE3E3E6)
+private val RailMuted = Color(0xFF9A9CA3)
+private val RailFaint = Color(0xFF686A70)
+private val RailGoodGreen = Color(0xFF5FBF7F)
+
+/**
+ * Unified Attaché sidebar component used in both orientations:
+ * - In landscape mode, docked on the left side of the terminal (`216.dp` wide).
+ * - In portrait mode, slides out from the left edge as a drawer when the top bar
+ *   session/window button is tapped.
+ *
+ * Displays a three-tier hierarchy: Hosts -> Sessions -> Windows.
+ */
 @Composable
-fun TmuxSessionsButton(control: TmuxControl, modifier: Modifier = Modifier) {
+fun AttacheSidebar(
+    control: TmuxControl,
+    hosts: List<AttacheHostEntry>,
+    onSelectHost: (UUID) -> Unit,
+    modifier: Modifier = Modifier,
+    onDismiss: (() -> Unit)? = null,
+) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
-    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
+
+    Row(modifier = modifier.fillMaxHeight().testTag("attacheSidebar")) {
+        Column(
+            modifier = Modifier
+                .width(if (onDismiss != null) 248.dp else 216.dp)
+                .fillMaxHeight()
+                .background(RailBg),
+        ) {
+            // Top bar of the sidebar
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .background(RailHeaderBg)
+                    .padding(horizontal = 10.dp),
+            ) {
+                Text(
+                    text = "ATTACHÉ",
+                    color = RailMuted,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.6.sp,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .border(1.dp, Color(0xFF32353C), RoundedCornerShape(5.dp))
+                            .clickable {
+                                onDismiss?.invoke()
+                                scope.tmuxAction("new-window") { control.newWindow() }
+                            }
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                            .testTag("tmuxSidebarNewWindow"),
+                    ) {
+                        Text(
+                            text = "+ Window",
+                            color = RailText,
+                            fontSize = 11.sp,
+                        )
+                    }
+                    if (onDismiss != null) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(5.dp))
+                                .border(1.dp, Color(0xFF32353C), RoundedCornerShape(5.dp))
+                                .clickable { onDismiss() }
+                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                                .testTag("tmuxSidebarClose"),
+                        ) {
+                            Text(
+                                text = "✕",
+                                color = RailMuted,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = RailDivider)
+
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .testTag("tmuxSessionList"),
+            ) {
+                if (hosts.isNotEmpty()) {
+                    item(key = "header-hosts") {
+                        Text(
+                            text = "HOSTS (主机)",
+                            color = RailFaint,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.6.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                    items(hosts, key = { "host-${it.id}" }) { host ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 1.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (host.current) RailActiveHostBg else Color.Transparent)
+                                .clickable {
+                                    onDismiss?.invoke()
+                                    onSelectHost(host.id)
+                                }
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .testTag("attacheHost-${host.id}"),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (host.connected) RailGoodGreen else RailFaint),
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = host.name,
+                                    color = if (host.current) RailText else RailMuted,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (host.current) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (host.subtitle.isNotBlank()) {
+                                    Text(
+                                        text = host.subtitle,
+                                        color = RailFaint,
+                                        fontSize = 10.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    item(key = "divider-hosts") {
+                        HorizontalDivider(
+                            thickness = 1.dp,
+                            color = RailDivider,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+
+                item(key = "header-sessions") {
+                    Text(
+                        text = "SESSIONS & WINDOWS",
+                        color = RailFaint,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.6.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+
+                state.sessions.forEach { session ->
+                    val isCurrentSession = session.id == state.sessionId
+                    val isCollapsed = collapsedSessions[session.id] == true
+                    item(key = "session-${session.id}") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp, bottom = 1.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable {
+                                    collapsedSessions[session.id] = false
+                                    onDismiss?.invoke()
+                                    scope.tmuxAction("switch-client") { control.switchTo(session.id) }
+                                }
+                                .padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
+                                .testTag("tmuxSession-${session.id}"),
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable {
+                                        collapsedSessions[session.id] = !isCollapsed
+                                    }
+                                    .testTag("tmuxSessionToggle-${session.id}"),
+                            ) {
+                                Text(
+                                    text = if (isCollapsed) "▸" else "▾",
+                                    color = RailFaint,
+                                    fontSize = 10.sp,
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = session.name.uppercase(),
+                                color = if (isCurrentSession) RailText else RailMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = "${session.windows.size}",
+                                color = RailFaint,
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+                    }
+
+                    if (!isCollapsed) {
+                        items(session.windows, key = { "win-${session.id}-${it.id}" }) { window ->
+                            val here = isCurrentSession && window.active
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 4.dp, top = 1.dp, bottom = 1.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (here) RailAccentBlue else Color.Transparent)
+                                    .clickable {
+                                        onDismiss?.invoke()
+                                        scope.tmuxAction("switch-client") { control.switchTo(window.id) }
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    .testTag("tmuxSessionWindow-${window.id}"),
+                            ) {
+                                Text(
+                                    text = "${window.index}",
+                                    color = if (here) Color.White.copy(alpha = 0.8f) else RailFaint,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.width(18.dp),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = window.name,
+                                    color = if (here) Color.White else RailMuted,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Right border line
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .fillMaxHeight()
+                .background(RailEdge),
+        )
+    }
+}
+
+/**
+ * The current session's name and, beside it, the current window's.
+ * - In landscape mode, tapping toggles the left docked [AttacheSidebar].
+ * - In portrait mode, tapping slides [AttacheSidebar] out from the left edge.
+ */
+@Composable
+fun TmuxSessionsButton(
+    control: TmuxControl,
+    modifier: Modifier = Modifier,
+    isLandscape: Boolean = false,
+    onClick: (() -> Unit)? = null,
+) {
+    val state by control.state.collectAsState()
     val current = state.sessions.firstOrNull { it.id == state.sessionId }
     val window = state.windows.firstOrNull { it.active }
-    TextButton(onClick = { open = true }, modifier = modifier.testTag("tmuxSessions")) {
-        Text((current?.name ?: "tmux") + " ▾", maxLines = 1, softWrap = false)
+    TextButton(
+        onClick = { onClick?.invoke() },
+        modifier = modifier.testTag("tmuxSessions"),
+    ) {
+        val sessionText = if (isLandscape) {
+            "◧ " + (current?.name ?: "tmux")
+        } else {
+            (current?.name ?: "tmux") + " ▾"
+        }
+        Text(sessionText, maxLines = 1, softWrap = false)
         if (window != null) {
             Text(
                 "  ${window.index}: ${window.name}",
                 maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                overflow = TextOverflow.Ellipsis,
                 color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("tmuxCurrentWindow"),
             )
-        }
-    }
-    if (!open) return
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = { open = false }) {
-        androidx.compose.foundation.lazy.LazyColumn(
-            contentPadding = PaddingValues(bottom = 24.dp),
-            modifier = Modifier.testTag("tmuxSessionList"),
-        ) {
-            state.sessions.forEach { session ->
-                item(key = session.id) {
-                    val isCurrent = session.id == state.sessionId
-                    androidx.compose.material3.ListItem(
-                        headlineContent = {
-                            Text(
-                                session.name,
-                                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
-                                fontWeight = if (isCurrent) androidx.compose.ui.text.font.FontWeight.Bold else null,
-                            )
-                        },
-                        supportingContent = {
-                            Text("${session.windows.size} windows" + if (isCurrent) " · here" else if (session.attached) " · attached elsewhere" else "")
-                        },
-                        modifier = Modifier
-                            .clickable {
-                                open = false
-                                scope.tmuxAction("switch-client") { control.switchTo(session.id) }
-                            }
-                            .testTag("tmuxSession-${session.id}"),
-                    )
-                }
-                items(session.windows, key = { session.id + it.id }) { window ->
-                    val here = session.id == state.sessionId && window.active
-                    androidx.compose.material3.ListItem(
-                        headlineContent = { Text("${window.index}: ${window.name}", maxLines = 1) },
-                        leadingContent = { Text(if (here) "●" else " ") },
-                        modifier = Modifier
-                            .padding(start = 24.dp)
-                            .clickable {
-                                open = false
-                                scope.tmuxAction("switch-client") { control.switchTo(window.id) }
-                            }
-                            .testTag("tmuxSessionWindow-${window.id}"),
-                    )
-                }
-            }
         }
     }
 }

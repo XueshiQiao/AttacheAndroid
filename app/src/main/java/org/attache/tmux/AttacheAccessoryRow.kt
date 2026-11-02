@@ -8,10 +8,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -19,15 +18,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
-import timber.log.Timber
 
 /**
  * A slash command an agent CLI takes at its prompt. [only] names the one
@@ -81,18 +77,9 @@ fun AttacheAccessoryRow(
     onDismissTmuxMenu: () -> Unit,
     onInteraction: () -> Unit,
     modifier: Modifier = Modifier,
+    onPickImage: () -> Unit = {},
+    onClearInput: () -> Unit = {},
 ) {
-    val scope = rememberCoroutineScope()
-    fun step(forward: Boolean) {
-        onInteraction()
-        scope.launch {
-            try {
-                control.stepWindow(forward)
-            } catch (e: TmuxCommandError) {
-                Timber.w("step window failed: %s", e.message)
-            }
-        }
-    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
@@ -141,14 +128,14 @@ fun AttacheAccessoryRow(
                 Text("tmux", style = MaterialTheme.typography.labelLarge)
             }
         }
-        AccessoryButton(onClick = { step(forward = false) }, tag = "accessoryPreviousWindow", modifier = Modifier.weight(1f)) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous window")
-        }
-        AccessoryButton(onClick = { step(forward = true) }, tag = "accessoryNextWindow", modifier = Modifier.weight(1f)) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next window")
+        AccessoryButton(onClick = { onInteraction(); onPickImage() }, tag = "accessoryImage", modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.Image, contentDescription = "Send image")
         }
         AccessoryButton(onClick = { onInteraction(); onPaste() }, tag = "accessoryPaste", modifier = Modifier.weight(1f)) {
             Icon(Icons.Default.ContentPaste, contentDescription = "Paste")
+        }
+        AccessoryButton(onClick = { onInteraction(); onClearInput() }, tag = "accessoryClear", modifier = Modifier.weight(1f)) {
+            Text("清空", style = MaterialTheme.typography.labelLarge)
         }
     }
 }

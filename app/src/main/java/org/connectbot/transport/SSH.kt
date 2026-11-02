@@ -775,6 +775,7 @@ open class SSH : AbsTransport {
                         currentBridge?.tmuxControl?.compareAndSet(ended, null)
                     },
                     exec = { command -> runOnce(command) },
+                    upload = { bytes, ext, onProgress -> uploadImage(bytes, ext, onProgress) },
                 )
                 synchronized(tmuxLock) {
                     if (locallyClosed) return@launch
@@ -809,6 +810,109 @@ open class SSH : AbsTransport {
             null
         } finally {
             channel.close()
+        }
+    }
+
+    /** Attaché trial: upload image bytes to `/tmp/attache-img-<timestamp>-<4hex>.<ext>` on the remote host. */
+    private suspend fun uploadImage(
+        bytes: ByteArray,
+        ext: String,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): String? {
+        if (bytes.isEmpty()) return null
+        val total = bytes.size.toLong()
+        val safeExt = ext.lowercase().takeIf { it.matches(Regex("^[a-z0-9]{1,8}$")) } ?: "png"
+        val ts = System.currentTimeMillis()
+        val rand = "%04x".format(kotlin.random.Random.nextInt(0x10000))
+        val remotePath = "/tmp/attache-img-$ts-$rand.$safeExt"
+        val command = "if command -v perl >/dev/null 2>&1; then " +
+            "perl -e '\$|=1; open(F,\">\",\$ARGV[0]) or exit 1; \$t=0; " +
+            "while((\$n=sysread(STDIN,\$b,8192))>0){ syswrite(F,\$b)==\$n or exit 1; \$t+=\$n; print \"\$t\\n\"; } " +
+            "close(F) or exit 1; print \"DONE:\$t\\n\"' '$remotePath'; " +
+            "else cat > '$remotePath' && echo \"DONE:\$(wc -c < '$remotePath')\"; fi"
+        val channel = client?.openSession() ?: return null
+        var completed = false
+        return try {
+            if (!channel.requestExec(command)) return null
+            onProgress(0L, total)
+            val confirmedBytes = java.util.concurrent.atomic.AtomicLong(0L)
+            val doneBytes = CompletableDeferred<Long?>()
+            val readerJob = scope.launch {
+                val lineBuf = StringBuilder()
+                try {
+                    for (chunk in channel.stdout) {
+                        lineBuf.append(chunk.toString(Charsets.UTF_8))
+                        var nl = lineBuf.indexOf('\n')
+                        while (nl >= 0) {
+                            val line = lineBuf.substring(0, nl).trim()
+                            lineBuf.delete(0, nl + 1)
+                            if (line.startsWith("DONE:")) {
+                                doneBytes.complete(line.removePrefix("DONE:").trim().toLongOrNull())
+                            } else {
+                                line.toLongOrNull()?.let { acked ->
+                                    confirmedBytes.set(acked)
+                                    onProgress(acked.coerceIn(0L, total), total)
+                                }
+                            }
+                            nl = lineBuf.indexOf('\n')
+                        }
+                    }
+                    if (!doneBytes.isCompleted) {
+                        val tail = lineBuf.toString().trim()
+                        if (tail.startsWith("DONE:")) {
+                            doneBytes.complete(tail.removePrefix("DONE:").trim().toLongOrNull())
+                        } else {
+                            doneBytes.complete(confirmedBytes.get().takeIf { it > 0L })
+                        }
+                    }
+                } catch (_: Exception) {
+                    if (!doneBytes.isCompleted) doneBytes.complete(null)
+                }
+            }
+            try {
+                var offset = 0
+                val chunkSize = 8192
+                val maxInFlight = 65536L
+                while (offset < bytes.size) {
+                    currentCoroutineContext().ensureActive()
+                    val end = (offset + chunkSize).coerceAtMost(bytes.size)
+                    channel.write(bytes.copyOfRange(offset, end))
+                    offset = end
+                    val sent = offset.toLong()
+                    if (confirmedBytes.get() == 0L) {
+                        onProgress((sent * 9 / 10).coerceAtMost(total), total)
+                    }
+                    var waitedMs = 0
+                    while (sent - confirmedBytes.get() > maxInFlight && waitedMs < 400) {
+                        delay(10)
+                        waitedMs += 10
+                    }
+                    kotlinx.coroutines.yield()
+                }
+                channel.sendEof()
+                val written = withTimeoutOrNull(15_000L) { doneBytes.await() }
+                if (written == total) {
+                    onProgress(total, total)
+                    completed = true
+                    remotePath
+                } else {
+                    null
+                }
+            } finally {
+                readerJob.cancel()
+            }
+        } catch (e: CancellationException) {
+            Timber.i("uploadImage cancelled: %s", remotePath)
+            throw e
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            Timber.w(e, "uploadImage failed: %s", remotePath)
+            null
+        } finally {
+            channel.close()
+            if (!completed) {
+                scope.launch { runOnce("rm -f '$remotePath'") }
+            }
         }
     }
 

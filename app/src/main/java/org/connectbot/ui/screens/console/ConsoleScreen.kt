@@ -22,14 +22,23 @@ import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +50,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -78,6 +88,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -99,10 +110,13 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.attache.tmux.AttacheAccessoryRow
+import org.attache.tmux.AttacheHostEntry
+import org.attache.tmux.AttacheSidebar
 import org.attache.tmux.sendAgentCommand
 import org.attache.tmux.tmuxTouch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -139,9 +153,11 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.preference.PreferenceManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.connectbot.R
 import org.connectbot.data.entity.Host
 import org.connectbot.service.AuthBanner
@@ -373,6 +389,25 @@ private fun Modifier.sessionSwipeNavigation(
 }
 
 private val noTmuxControl = MutableStateFlow<org.attache.tmux.TmuxControl?>(null)
+
+/**
+ * Terminal sequence sent by the "清空" (Clear) accessory button:
+ * - `\u0005` (Ctrl+E): move cursor to end of current logical line
+ * - `\u0015` x 64 (Ctrl+U): delete all soft-wrapped visual rows and lines back to buffer start
+ * - `\u000b` x 64 (Ctrl+K): delete any remaining lines forward from buffer start to buffer end
+ */
+internal val CLEAR_INPUT_SEQUENCE: String = "\u0005" + "\u0015".repeat(64) + "\u000b".repeat(64)
+
+private data class ImageUploadState(
+    val uploadedBytes: Long,
+    val totalBytes: Long,
+)
+
+private fun formatByteCount(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "${bytes / 1024L} KB"
+    else -> "$bytes B"
+}
 
 @Composable
 private fun ConsoleTerminalPage(
@@ -658,11 +693,24 @@ fun ConsoleScreen(
 
     var forceSize: Pair<Int, Int>? by remember { mutableStateOf(null) }
 
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    var landscapeSidebarOpen by rememberSaveable { mutableStateOf(true) }
+    var portraitDrawerOpen by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(isLandscape) {
+        if (isLandscape && portraitDrawerOpen) {
+            portraitDrawerOpen = false
+        }
+    }
+
     var showMenu by remember { mutableStateOf(false) }
     var resizeSuspended by remember { mutableStateOf(false) }
     var menuImeWasVisible by remember { mutableStateOf(false) }
     var showTmuxMenu by remember { mutableStateOf(false) }
     var showSlashMenu by remember { mutableStateOf(false) }
+    var showImagePicker by remember { mutableStateOf(false) }
+    var imageUploadState by remember { mutableStateOf<ImageUploadState?>(null) }
+    var imageUploadJob by remember { mutableStateOf<Job?>(null) }
     var showUrlScanDialog by remember { mutableStateOf(false) }
     var showResizeDialog by remember { mutableStateOf(false) }
     var showDisconnectDialog by remember { mutableStateOf(false) }
@@ -720,9 +768,9 @@ fun ConsoleScreen(
     val isBiometricPromptActive = promptState is PromptRequest.BiometricPrompt
 
     // Check if any modal (menu or dialog) is currently active
-    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showUrlScanDialog || showResizeDialog ||
+    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showImagePicker || showUrlScanDialog || showResizeDialog ||
         showDisconnectDialog || showSessionPickerDialog || showTextInputDialog || showConnectionInfoDialog ||
-        isBiometricPromptActive || currentAuthBanner != null
+        portraitDrawerOpen || isBiometricPromptActive || currentAuthBanner != null
 
     fun restartTitleBarTimer() {
         autoHideJobRef.titleBarJob?.cancel()
@@ -788,6 +836,50 @@ fun ConsoleScreen(
             ignoreImeHiddenForBridgeId = targetBridgeId
         }
         viewModel.selectBridge(index)
+    }
+
+    fun selectHostFromSidebar(targetHostId: UUID) {
+        val existingIndex = uiState.bridges.indexOfFirst { it.host.id == targetHostId }
+        if (existingIndex != -1) {
+            selectBridgePreservingKeyboard(existingIndex)
+        } else {
+            viewModel.openHostConnection(targetHostId)
+        }
+        termFocusRequester.requestFocus()
+    }
+
+    val hostEntries = remember(uiState.bridges, uiState.savedHosts, uiState.currentBridgeIndex, uiState.revision) {
+        val connectedById = uiState.bridges.associateBy { it.host.id }
+        val orderedHosts = buildList {
+            uiState.bridges.forEach { add(it.host) }
+            uiState.savedHosts.forEach { saved ->
+                if (saved.id !in connectedById) add(saved)
+            }
+        }
+        orderedHosts.map { host ->
+            val b = connectedById[host.id]
+            val isCurrent = b != null && uiState.bridges.getOrNull(uiState.currentBridgeIndex)?.host?.id == host.id
+            val isConnected = b != null && !b.isDisconnected && !b.isConnecting
+            val hostLabel = host.hostname.ifBlank { host.protocol }
+            val subtitle = when {
+                b == null -> "$hostLabel · 点击连接"
+                b.isDisconnected -> "$hostLabel · 已断开"
+                b.isConnecting -> "$hostLabel · 连接中…"
+                else -> "$hostLabel · 已连接"
+            }
+            AttacheHostEntry(
+                id = host.id,
+                name = host.nickname.ifBlank { host.hostname },
+                subtitle = subtitle,
+                connected = isConnected,
+                current = isCurrent,
+            )
+        }
+    }
+
+    BackHandler(enabled = !isLandscape && portraitDrawerOpen) {
+        portraitDrawerOpen = false
+        termFocusRequester.requestFocus()
     }
 
     // Resume title bar auto-hide when the overflow menu closes.
@@ -1024,6 +1116,60 @@ fun ConsoleScreen(
         }
     }
 
+    val latestBridge by rememberUpdatedState(currentBridge)
+    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        showImagePicker = false
+        resizeSuspended = false
+        termFocusRequester.requestFocus()
+        val bridge = latestBridge ?: return@rememberLauncherForActivityResult
+        @Suppress("USELESS_ELVIS")
+        val control = (bridge.tmuxControl ?: noTmuxControl).value ?: return@rememberLauncherForActivityResult
+        if (uri == null) {
+            return@rememberLauncherForActivityResult
+        }
+        imageUploadJob?.cancel()
+        val job = coroutineScope.launch(Dispatchers.IO) {
+            try {
+                val bytes = try {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to read picked image")
+                    null
+                }
+                if (bytes == null || bytes.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        imageUploadState = null
+                        snackbarHostState.showSnackbar("Failed to read image")
+                    }
+                    return@launch
+                }
+                val total = bytes.size.toLong()
+                imageUploadState = ImageUploadState(0L, total)
+                val ext = when (context.contentResolver.getType(uri)) {
+                    "image/png" -> "png"
+                    "image/jpeg" -> "jpg"
+                    "image/webp" -> "webp"
+                    else -> "png"
+                }
+                val remotePath = control.uploadImage(bytes, ext) { uploaded, totalBytes ->
+                    imageUploadState = ImageUploadState(uploaded, totalBytes)
+                }
+                withContext(Dispatchers.Main) {
+                    imageUploadState = null
+                    if (remotePath != null) {
+                        bridge.injectString("$remotePath ")
+                    } else {
+                        snackbarHostState.showSnackbar("Failed to upload image")
+                    }
+                    termFocusRequester.requestFocus()
+                }
+            } finally {
+                imageUploadState = null
+            }
+        }
+        imageUploadJob = job
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = modifier
@@ -1090,7 +1236,8 @@ fun ConsoleScreen(
                             .weight(1f),
                     ) {
                         val bridge = uiState.bridges[uiState.currentBridgeIndex]
-                        val pageTmuxControl by bridge.tmuxControl.collectAsState()
+                        @Suppress("USELESS_ELVIS")
+                        val pageTmuxControl by (bridge.tmuxControl ?: noTmuxControl).collectAsState()
                         val terminalModifier = if (swipeBetweenSessions) {
                             Modifier.sessionSwipeNavigation(
                                 currentIndex = uiState.currentBridgeIndex,
@@ -1110,91 +1257,239 @@ fun ConsoleScreen(
                             } ?: Modifier,
                         )
 
-                        key(bridge.host.id) {
-                            ConsoleTerminalPage(
-                                bridge = bridge,
-                                disconnected = disconnected,
-                                connecting = connecting,
-                                isActive = true,
-                                keyboardAlwaysVisible = keyboardAlwaysVisible,
-                                pgUpDnGestureEnabled = pgUpDnGestureEnabled,
-                                showSoftwareKeyboard = showSoftwareKeyboard,
-                                resizeSuspended = resizeSuspended,
-                                forceSize = forceSize,
-                                termFocusRequester = termFocusRequester,
-                                showExtraKeyboard = showExtraKeyboard,
-                                hasPlayedKeyboardAnimation = hasPlayedKeyboardAnimation,
-                                imeVisible = imeVisible,
-                                handleTerminalInteraction = {
-                                    handleTerminalInteraction(resetTitleBarTimer = false)
-                                },
-                                onTerminalTap = {
-                                    showSoftwareKeyboard = true
-                                    handleTerminalInteraction(isTerminalTap = true)
-                                },
-                                onShowSoftwareKeyboardChange = { showSoftwareKeyboard = it },
-                                onImeVisibilityChange = { imeVisible = it },
-                                onTextInputRequest = { showTextInputDialog = true },
-                                onDisconnectRequest = {
-                                    bridge.dispatchDisconnect(DisconnectReason.USER_REQUESTED)
-                                },
-                                onKeyboardScrollInProgressChange = { inProgress ->
-                                    keyboardScrollInProgress = inProgress
-                                    handleTerminalInteraction(isInteraction = inProgress, resetTitleBarTimer = false)
-                                },
-                                onSelectionControllerChange = { selectionController = it },
-                                onComposeControllerChange = { composeController = it },
-                                onOpenUrl = ::openUrl,
-                                onPasteRequest = ::pasteClipboardContents,
-                                onInterceptKey = handleShortcut,
-                                onReconnect = { viewModel.reconnect(bridge) },
-                                snackbarHostState = snackbarHostState,
-                                showImeToggleKey = showImeToggleKey,
-                                isComposeModeActive = composeController?.isComposeModeActive == true,
-                                onToggleComposeMode = {
-                                    composeController?.toggleComposeMode()
-                                },
-                                onShortcutModifierChange = {
-                                    composeController?.syncImeShortcutInputMode(imeShortcutInputMode)
-                                },
-                                modifier = Modifier.fillMaxSize(),
-                                terminalModifier = terminalModifier,
-                                accessoryRow = pageTmuxControl?.let { control ->
-                                    {
-                                        // Menus open and close the way the overflow menu
-                                        // does, so the keyboard, the PTY size and the
-                                        // title bar's auto-hide treat them the same.
-                                        fun openMenu(open: () -> Unit) {
-                                            menuImeWasVisible = imeVisible
-                                            resizeSuspended = true
-                                            autoHideJobRef.titleBarJob?.cancel()
-                                            open()
-                                        }
-                                        AttacheAccessoryRow(
-                                            control = control,
-                                            onTextInput = { showTextInputDialog = true },
-                                            onPaste = ::pasteClipboardContents,
-                                            onSendSlashCommand = { command ->
-                                                termFocusRequester.requestFocus()
-                                                sendAgentCommand(bridge, command)
-                                            },
-                                            slashMenuOpen = showSlashMenu,
-                                            onOpenSlashMenu = { openMenu { showSlashMenu = true } },
-                                            onDismissSlashMenu = {
-                                                showSlashMenu = false
-                                                termFocusRequester.requestFocus()
-                                            },
-                                            tmuxMenuOpen = showTmuxMenu,
-                                            onOpenTmuxMenu = { openMenu { showTmuxMenu = true } },
-                                            onDismissTmuxMenu = {
-                                                showTmuxMenu = false
-                                                termFocusRequester.requestFocus()
-                                            },
-                                            onInteraction = { handleTerminalInteraction(resetTitleBarTimer = false) },
-                                        )
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = isLandscape && landscapeSidebarOpen && pageTmuxControl != null,
+                                enter = expandHorizontally(expandFrom = Alignment.Start, animationSpec = tween(durationMillis = 180)),
+                                exit = shrinkHorizontally(shrinkTowards = Alignment.Start, animationSpec = tween(durationMillis = 180)),
+                            ) {
+                                pageTmuxControl?.let { control ->
+                                    AttacheSidebar(
+                                        control = control,
+                                        hosts = hostEntries,
+                                        onSelectHost = ::selectHostFromSidebar,
+                                        modifier = Modifier.fillMaxHeight(),
+                                    )
+                                }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                            ) {
+                                key(bridge.host.id) {
+                                    ConsoleTerminalPage(
+                                        bridge = bridge,
+                                        disconnected = disconnected,
+                                        connecting = connecting,
+                                        isActive = true,
+                                        keyboardAlwaysVisible = keyboardAlwaysVisible,
+                                        pgUpDnGestureEnabled = pgUpDnGestureEnabled,
+                                        showSoftwareKeyboard = showSoftwareKeyboard,
+                                        resizeSuspended = resizeSuspended,
+                                        forceSize = forceSize,
+                                        termFocusRequester = termFocusRequester,
+                                        showExtraKeyboard = showExtraKeyboard,
+                                        hasPlayedKeyboardAnimation = hasPlayedKeyboardAnimation,
+                                        imeVisible = imeVisible,
+                                        handleTerminalInteraction = {
+                                            handleTerminalInteraction(resetTitleBarTimer = false)
+                                        },
+                                        onTerminalTap = {
+                                            showSoftwareKeyboard = true
+                                            handleTerminalInteraction(isTerminalTap = true)
+                                        },
+                                        onShowSoftwareKeyboardChange = { showSoftwareKeyboard = it },
+                                        onImeVisibilityChange = { imeVisible = it },
+                                        onTextInputRequest = { showTextInputDialog = true },
+                                        onDisconnectRequest = {
+                                            bridge.dispatchDisconnect(DisconnectReason.USER_REQUESTED)
+                                        },
+                                        onKeyboardScrollInProgressChange = { inProgress ->
+                                            keyboardScrollInProgress = inProgress
+                                            handleTerminalInteraction(isInteraction = inProgress, resetTitleBarTimer = false)
+                                        },
+                                        onSelectionControllerChange = { selectionController = it },
+                                        onComposeControllerChange = { composeController = it },
+                                        onOpenUrl = ::openUrl,
+                                        onPasteRequest = ::pasteClipboardContents,
+                                        onInterceptKey = handleShortcut,
+                                        onReconnect = { viewModel.reconnect(bridge) },
+                                        snackbarHostState = snackbarHostState,
+                                        showImeToggleKey = showImeToggleKey,
+                                        isComposeModeActive = composeController?.isComposeModeActive == true,
+                                        onToggleComposeMode = {
+                                            composeController?.toggleComposeMode()
+                                        },
+                                        onShortcutModifierChange = {
+                                            composeController?.syncImeShortcutInputMode(imeShortcutInputMode)
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                        terminalModifier = terminalModifier,
+                                        accessoryRow = pageTmuxControl?.let { control ->
+                                            {
+                                                // Menus open and close the way the overflow menu
+                                                // does, so the keyboard, the PTY size and the
+                                                // title bar's auto-hide treat them the same.
+                                                fun openMenu(open: () -> Unit) {
+                                                    menuImeWasVisible = imeVisible
+                                                    resizeSuspended = true
+                                                    autoHideJobRef.titleBarJob?.cancel()
+                                                    open()
+                                                }
+                                                AttacheAccessoryRow(
+                                                    control = control,
+                                                    onTextInput = { showTextInputDialog = true },
+                                                    onPaste = ::pasteClipboardContents,
+                                                    onSendSlashCommand = { command ->
+                                                        termFocusRequester.requestFocus()
+                                                        sendAgentCommand(bridge, command)
+                                                    },
+                                                    slashMenuOpen = showSlashMenu,
+                                                    onOpenSlashMenu = { openMenu { showSlashMenu = true } },
+                                                    onDismissSlashMenu = {
+                                                        showSlashMenu = false
+                                                        termFocusRequester.requestFocus()
+                                                    },
+                                                    tmuxMenuOpen = showTmuxMenu,
+                                                    onOpenTmuxMenu = { openMenu { showTmuxMenu = true } },
+                                                    onDismissTmuxMenu = {
+                                                        showTmuxMenu = false
+                                                        termFocusRequester.requestFocus()
+                                                    },
+                                                    onInteraction = { handleTerminalInteraction(resetTitleBarTimer = false) },
+                                                    onPickImage = {
+                                                        openMenu {
+                                                            showImagePicker = true
+                                                            try {
+                                                                imagePickerLauncher.launch("image/*")
+                                                            } catch (e: ActivityNotFoundException) {
+                                                                showImagePicker = false
+                                                                resizeSuspended = false
+                                                                coroutineScope.launch {
+                                                                    snackbarHostState.showSnackbar("No image picker found")
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    onClearInput = {
+                                                        composeController?.clearComposeBuffer()
+                                                        bridge.injectString(CLEAR_INPUT_SEQUENCE)
+                                                        termFocusRequester.requestFocus()
+                                                    },
+                                                )
+                                            }
+                                        },
+                                    )
+                                }
+
+                                imageUploadState?.let { upload ->
+                                    val percent = if (upload.totalBytes > 0L) {
+                                        ((upload.uploadedBytes * 100L) / upload.totalBytes).coerceIn(0L, 100L)
+                                    } else {
+                                        0L
                                     }
-                                },
+                                    val fraction = if (upload.totalBytes > 0L) {
+                                        (upload.uploadedBytes.toFloat() / upload.totalBytes.toFloat()).coerceIn(0f, 1f)
+                                    } else {
+                                        0f
+                                    }
+                                    Surface(
+                                        shape = MaterialTheme.shapes.medium,
+                                        tonalElevation = 6.dp,
+                                        shadowElevation = 6.dp,
+                                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                                            .fillMaxWidth()
+                                            .testTag("imageUploadProgressCard"),
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Text(
+                                                        text = "正在上传图片…",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                    )
+                                                    Text(
+                                                        text = "${formatByteCount(upload.uploadedBytes)} / ${formatByteCount(upload.totalBytes)} ($percent%)",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                                LinearProgressIndicator(
+                                                    progress = { fraction },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(top = 6.dp),
+                                                )
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    imageUploadJob?.cancel()
+                                                    imageUploadJob = null
+                                                    imageUploadState = null
+                                                    termFocusRequester.requestFocus()
+                                                },
+                                                modifier = Modifier
+                                                    .padding(start = 8.dp)
+                                                    .testTag("cancelImageUpload"),
+                                            ) {
+                                                Text("取消")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Portrait / Phone slide-out sidebar drawer from the left edge
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = !isLandscape && portraitDrawerOpen && pageTmuxControl != null,
+                            enter = fadeIn(animationSpec = tween(durationMillis = 180)),
+                            exit = fadeOut(animationSpec = tween(durationMillis = 180)),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.52f))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                    ) {
+                                        portraitDrawerOpen = false
+                                        termFocusRequester.requestFocus()
+                                    }
+                                    .testTag("attacheDrawerScrim"),
                             )
+                        }
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = !isLandscape && portraitDrawerOpen && pageTmuxControl != null,
+                            enter = slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(durationMillis = 200)),
+                            exit = slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(durationMillis = 200)),
+                            modifier = Modifier.align(Alignment.CenterStart),
+                        ) {
+                            pageTmuxControl?.let { control ->
+                                AttacheSidebar(
+                                    control = control,
+                                    hosts = hostEntries,
+                                    onSelectHost = ::selectHostFromSidebar,
+                                    onDismiss = {
+                                        portraitDrawerOpen = false
+                                        termFocusRequester.requestFocus()
+                                    },
+                                    modifier = Modifier.fillMaxHeight(),
+                                )
+                            }
                         }
                     }
                 }
@@ -1300,10 +1595,29 @@ fun ConsoleScreen(
             TopAppBar(
                 title = {
                     // Attaché: a tmux host's session and current window are
-                    // the title; switching windows happens in the sheet the
-                    // title opens, and the tools live in the row above the keys.
+                    // the title; in landscape tapping toggles the docked left
+                    // sidebar, and in portrait it slides the same sidebar out
+                    // from the left edge.
                     tmuxControl?.let {
-                        org.attache.tmux.TmuxSessionsButton(it)
+                        org.attache.tmux.TmuxSessionsButton(
+                            control = it,
+                            isLandscape = isLandscape,
+                            onClick = {
+                                if (isLandscape) {
+                                    landscapeSidebarOpen = !landscapeSidebarOpen
+                                } else {
+                                    if (!portraitDrawerOpen) {
+                                        menuImeWasVisible = imeVisible
+                                        resizeSuspended = true
+                                        autoHideJobRef.titleBarJob?.cancel()
+                                        portraitDrawerOpen = true
+                                    } else {
+                                        portraitDrawerOpen = false
+                                        termFocusRequester.requestFocus()
+                                    }
+                                }
+                            },
+                        )
                     } ?: Text(
                         currentBridge?.host?.nickname
                             ?: stringResource(R.string.console_default_title),

@@ -106,6 +106,9 @@ class TmuxControl(
     /** Runs one shell command on the same SSH connection and returns its
      * output, or null on failure. */
     private val exec: suspend (String) -> String?,
+    /** Uploads image bytes with the given extension to `/tmp` on the remote
+     * host and returns its remote path, or null on failure. */
+    private val upload: suspend (ByteArray, String, (Long, Long) -> Unit) -> String? = { _, _, _ -> null },
 ) {
     private val _state = MutableStateFlow(TmuxState())
     val state: StateFlow<TmuxState> = _state.asStateFlow()
@@ -139,6 +142,16 @@ class TmuxControl(
             }
             jobs += scope.launch { drainStderr() }
             jobs += scope.launch {
+                // Attaché: tmux sends a control client every byte every pane in
+                // the session produces, while the terminal is drawn from its own
+                // PTY channel. `no-output` is per-client and stops tmux sending
+                // `%output` lines on this control channel at all, while keeping
+                // command replies and layout/window notifications intact.
+                try {
+                    send("refresh-client -f no-output")
+                } catch (e: TmuxCommandError) {
+                    Timber.w("no-output failed: %s", e.message)
+                }
                 for (request in refreshRequests) refresh()
             }
             jobs += scope.launch {
@@ -194,6 +207,12 @@ class TmuxControl(
         val session = _state.value.sessionId ?: return
         send("${if (forward) "next-window" else "previous-window"} -t '$session'")
     }
+
+    suspend fun uploadImage(
+        bytes: ByteArray,
+        ext: String,
+        onProgress: (uploadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> },
+    ): String? = upload(bytes, ext, onProgress)
 
     suspend fun split(sideBySide: Boolean) {
         val pane = _state.value.activePane ?: return

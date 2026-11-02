@@ -101,6 +101,6 @@ data class KeyboardConfiguration(
 
 /** Only terminal actions repeat; toggles and navigation controls always fire once. */
 fun KeyboardItem.repeatsOnHold(): Boolean = (kind == "key" || kind == "macro") &&
-    (repeatOnHold ?: (kind == "key" && target.startsWith("arrow_")))
+    (repeatOnHold ?: (kind == "key" && (target.startsWith("arrow_") || target == "delete" || target == "backspace" || target == "forward_delete")))
 
 fun KeyboardItem.usesHapticFeedback(appSetting: Boolean): Boolean = hapticFeedback ?: appSetting

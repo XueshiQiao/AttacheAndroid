@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attaché Android · 横竖屏统一侧边栏（Host / Session / Window）交互原型</title>
+<style>
+  :root {
+    --page: #131416;
+    --card: #1b1c1f;
+    --edge: #2c2e33;
+    --rail: #1e1f22;
+    --rail-header: #18191b;
+    --term-bg: #0c0c0d;
+    --bar-bg: #232529;
+    --key-bg: #2c2f35;
+    --text: #e3e3e6;
+    --muted: #9a9ca3;
+    --faint: #686a70;
+    --hover: #2a2c31;
+    --accent: #4e7fb8;
+    --accent-soft: rgba(78, 127, 184, 0.18);
+    --good: #5fbf7f;
+    --warn: #e8a33d;
+    --working: #5aa9e6;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--page); color: var(--text); font-family: var(--sans); }
+  body { padding: 28px 32px 80px; }
+
+  header {
+    max-width: 1440px;
+    margin: 0 auto 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  h1 { font-size: 21px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13.5px; margin: 0; line-height: 1.55; }
+
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--edge);
+    padding: 8px 12px;
+    border-radius: 10px;
+  }
+  .toolbar span { font-size: 12px; color: var(--muted); margin-right: 4px; }
+  .seg-btn {
+    background: #25272c;
+    color: var(--muted);
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    padding: 5px 11px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .seg-btn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+
+  .showcase {
+    max-width: 1440px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1.45fr 1fr;
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 1180px) {
+    .showcase { grid-template-columns: 1fr; }
+  }
+
+  .panel-card {
+    background: var(--card);
+    border: 1px solid var(--edge);
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+  }
+  .panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .panel-title {
+    font-size: 14.5px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: var(--accent-soft);
+    color: #8ab8ed;
+    font-weight: 500;
+  }
+  .panel-hint {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* ---- Tablet Device Frame ---- */
+  .device {
+    border: 8px solid #2b2d31;
+    border-radius: 18px;
+    overflow: hidden;
+    background: var(--term-bg);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    user-select: none;
+  }
+  .device.landscape {
+    height: 540px;
+  }
+  .device.portrait {
+    height: 680px;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+
+  /* Status bar */
+  .sys-statusbar {
+    height: 24px;
+    background: #18191c;
+    color: var(--muted);
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 14px;
+    border-bottom: 1px solid #222428;
+    flex-shrink: 0;
+  }
+
+  /* Main body (Rail + Content) */
+  .app-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* ---- Unified Attaché Sidebar Component ---- */
+  .attache-rail {
+    width: 216px;
+    background: var(--rail);
+    border-right: 1px solid var(--edge);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: margin-left .22s cubic-bezier(0.2, 0.8, 0.2, 1), transform .22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    z-index: 15;
+  }
+  .device.landscape .attache-rail.collapsed {
+    margin-left: -216px;
+  }
+
+  /* Portrait Drawer variant uses the exact same .attache-rail */
+  .device.portrait .attache-rail {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 248px;
+    box-shadow: 12px 0 36px rgba(0,0,0,0.65);
+    transform: translateX(-102%);
+  }
+  .device.portrait .attache-rail.open {
+    transform: translateX(0);
+  }
+  .drawer-scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.52);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .22s ease;
+    z-index: 10;
+  }
+  .drawer-scrim.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Sidebar Header */
+  .rail-top {
+    height: 42px;
+    padding: 0 10px 0 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #27292e;
+    background: var(--rail-header);
+  }
+  .rail-brand {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .rail-action-btn {
+    background: transparent;
+    border: 1px solid #32353c;
+    color: var(--text);
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .rail-action-btn:hover { background: var(--hover); }
+
+  .rail-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 6px 14px;
+  }
+
+  /* Tier 1: Host */
+  .tier-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+    padding: 6px 8px 4px;
+  }
+  .host-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 2px;
+  }
+  .host-item:hover { background: var(--hover); }
+  .host-item.active {
+    background: #282b31;
+  }
+  .host-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--good);
+    flex-shrink: 0;
+  }
+  .host-dot.idle { background: var(--faint); }
+  .host-info { min-width: 0; flex: 1; }
+  .host-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .host-sub {
+    font-size: 10.5px;
+    font-family: var(--mono);
+    color: var(--faint);
+  }
+
+  .divider {
+    height: 1px;
+    background: #27292e;
+    margin: 8px 4px;
+  }
+
+  /* Tier 2: Session */
+  .session-group { margin-bottom: 6px; }
+  .session-head {
+    height: 26px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding: 0 8px 0 6px;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .session-head:hover { background: var(--hover); }
+  .session-head .chev {
+    color: var(--faint);
+    font-size: 9px;
+    width: 12px;
+    text-align: center;
+  }
+  .session-head .sname {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    flex: 1;
+  }
+  .session-head.current .sname { color: var(--text); }
+  .session-head .scount {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--faint);
+  }
+
+  /* Tier 3: Window Row */
+  .win-list {
+    padding-left: 4px;
+    margin-top: 2px;
+  }
+  .win-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 1px;
+    transition: background .1s ease;
+  }
+  .win-row:hover { background: var(--hover); }
+  .win-row.active {
+    background: var(--accent);
+  }
+  .win-idx {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    width: 16px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .win-row.active .win-idx { color: rgba(255,255,255,0.78); }
+  .win-main {
+    min-width: 0;
+    flex: 1;
+  }
+  .win-title-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .win-name {
+    font-size: 12.5px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+  .win-row.active .win-name {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* Step 2 Agent & Git decorations (hidden in Step 1) */
+  .step2-only { display: none; }
+  body.show-step2 .step2-only { display: flex; }
+  .agent-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .agent-dot.working { background: var(--working); }
+  .agent-dot.needsyou { background: var(--warn); }
+  .agent-dot.done { background: var(--good); }
+  .win-git {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--faint);
+    margin-top: 1px;
+    gap: 5px;
+  }
+  .win-row.active .win-git { color: rgba(255,255,255,0.75); }
+
+  /* ---- Right Side: TopBar + Terminal + Bottom Keys ---- */
+  .console-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--term-bg);
+  }
+
+  .top-app-bar {
+    height: 42px;
+    background: var(--bar-bg);
+    border-bottom: 1px solid var(--edge);
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .icon-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 15px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn:hover { background: var(--hover); }
+
+  .session-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid #33363e;
+    border-radius: 7px;
+    padding: 4px 10px;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .session-trigger:hover {
+    background: rgba(78, 127, 184, 0.15);
+    border-color: var(--accent);
+  }
+  .session-trigger .s-pill {
+    font-weight: 600;
+    color: #9ec3f0;
+  }
+  .session-trigger .w-pill {
+    color: var(--text);
+  }
+  .spacer { flex: 1; }
+
+  /* Terminal Canvas */
+  .terminal-canvas {
+    flex: 1;
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: #d4d4d8;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .term-line { margin-bottom: 4px; }
+  .c-green { color: #67c984; }
+  .c-blue { color: #6cb0f6; }
+  .c-amber { color: #e8a33d; }
+  .c-dim { color: #6e7078; }
+  .tmux-statusline {
+    background: #1c2430;
+    color: #8ab4f8;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    display: flex;
+    justify-content: space-between;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  /* Bottom Accessory + Keys */
+  .accessory-row {
+    height: 34px;
+    background: #1e2024;
+    border-top: 1px solid var(--edge);
+    display: flex;
+    align-items: center;
+  }
+  .acc-btn {
+    flex: 1;
+    height: 100%;
+    background: transparent;
+    border: none;
+    color: #9ec3f0;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .acc-btn:hover { background: var(--hover); }
+
+  .key-row {
+    height: 36px;
+    background: #18191d;
+    border-top: 1px solid #26282e;
+    display: flex;
+    align-items: center;
+    padding: 3px 4px;
+    gap: 4px;
+    overflow-x: auto;
+  }
+  .k-btn {
+    background: var(--key-bg);
+    color: var(--text);
+    border: 1px solid #393c44;
+    border-radius: 5px;
+    height: 28px;
+    padding: 0 9px;
+    font-size: 11.5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .notes {
+    max-width: 1440px;
+    margin: 24px auto 0;
+    background: var(--card);
+    border: 1px solid var(--edge);
+    border-radius: 12px;
+    padding: 18px 22px;
+    font-size: 13.5px;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+  .notes strong { color: var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Attaché Android · 统一侧边栏（Host / Session / Window）交互原型</h1>
+    <p class="sub">同一个 <code>AttacheSidebar</code> 组件：<strong>横屏</strong>默认常驻在左侧（可折叠）；<strong>竖屏/手机</strong>默认隐藏，点击顶栏 <code>Dev ▾ 1: Attache</code> 从左侧滑出。</p>
+  </div>
+  <div class="toolbar">
+    <span>侧边栏内容阶段：</span>
+    <button class="seg-btn active" id="btnStep1" onclick="setStep(1)">第一步：精简版（Host + Session + Window）</button>
+    <button class="seg-btn" id="btnStep2" onclick="setStep(2)">后续演进预览（+ Agent 状态圆点 & Git）</button>
+  </div>
+</header>
+
+<div class="showcase">
+
+  <!-- 1. LANDSCAPE MOCKUP -->
+  <div class="panel-card">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span>平板横屏（Landscape）</span>
+        <span class="badge">左侧常驻 · 点顶栏可收起/展开</span>
+      </div>
+      <div class="panel-hint">试着点击左侧任意 Window 切换，或点顶栏按钮折叠侧边栏</div>
+    </div>
+
+    <div class="device landscape" id="landscapeDevice">
+      <div class="sys-statusbar">
+        <span>10:02</span>
+        <span>Wi-Fi · Tailscale · 79% 🔋</span>
+      </div>
+
+      <div class="app-body">
+        <!-- Unified Sidebar (Docked in Landscape) -->
+        <aside class="attache-rail" id="landscapeRail">
+          <div class="rail-top">
+            <span class="rail-brand">Attaché</span>
+            <button class="rail-action-btn" title="在当前 Session 新建窗口">+ Window</button>
+          </div>
+          <div class="rail-scroll">
+            <div class="tier-label">Hosts (主机)</div>
+            <div class="host-item active">
+              <span class="host-dot"></span>
+              <div class="host-info">
+                <div class="host-name">MacBook Pro (tmux Dev)</div>
+                <div class="host-sub">100.88.1.2 · 已连接</div>
+              </div>
+            </div>
+            <div class="host-item">
+              <span class="host-dot idle"></span>
+              <div class="host-info">
+                <div class="host-name">Mac mini (tmux main)</div>
+                <div class="host-sub">192.168.8.68 · 点击切换</div>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+            <div class="tier-label">Sessions & Windows</div>
+
+            <!-- Session: Dev -->
+            <div class="session-group">
+              <div class="session-head current">
+                <span class="chev">▾</span>
+                <span class="sname">Dev</span>
+                <span class="scount">8</span>
+              </div>
+              <div class="win-list" id="landscapeWinList">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+
+            <!-- Session: Scratch -->
+            <div class="session-group">
+              <div class="session-head">
+                <span class="chev">▸</span>
+                <span class="sname">Scratch</span>
+                <span class="scount">2</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Console Area -->
+        <div class="console-area">
+          <div class="top-app-bar">
+            <button class="icon-btn" title="返回主机列表">←</button>
+            <button class="session-trigger" onclick="toggleLandscapeRail()" title="点击收起/展开左侧边栏">
+              <span>◧</span>
+              <span class="s-pill">Dev</span>
+              <span class="w-pill" id="landscapeActiveTitle">1: Attache</span>
+            </button>
+            <div class="spacer"></div>
+            <button class="icon-btn">⋮</button>
+          </div>
+
+          <div class="terminal-canvas">
+            <div>
+              <div class="term-line c-dim">[G-4 Argon Medium] | Ctx: 4.5% | Gemini: 5h 98.1% | Claude: 5h 100%</div>
+              <div class="term-line c-blue">&gt; 对横屏来讲，我觉得我们可以在左侧加一个类似桌面端的效果...</div>
+              <div class="term-line">● 已切换到窗口：<span class="c-green" id="landscapeTermWin">1: Attache</span>（Session: <span class="c-amber">Dev</span>）</div>
+              <div class="term-line c-dim">  左侧边栏包含：主机（Hosts）→ 会话（Sessions）→ 窗口（Windows）三级结构。</div>
+            </div>
+            <div class="tmux-statusline">
+              <span>❐ Dev  1:Attache*  2:PastePawX  3:Flowy  4:QDuo  5:CCSwitcher  6:AnyDrag</span>
+              <span>CPU 8.0%  10:02</span>
+            </div>
+          </div>
+
+          <div class="accessory-row">
+            <button class="acc-btn">✏️</button>
+            <button class="acc-btn">/</button>
+            <button class="acc-btn">tmux</button>
+            <button class="acc-btn">🖼️</button>
+            <button class="acc-btn">📋</button>
+            <button class="acc-btn">清空</button>
+          </div>
+          <div class="key-row">
+            <div class="k-btn">Ctrl</div><div class="k-btn">Alt</div><div class="k-btn">Esc</div>
+            <div class="k-btn">Tab</div><div class="k-btn">↑</div><div class="k-btn">↓</div>
+            <div class="k-btn">←</div><div class="k-btn">→</div><div class="k-btn">Home</div>
+            <div class="k-btn">End</div><div class="k-btn">PgUp</div><div class="k-btn">PgDn</div>
+            <div class="k-btn">输入法</div><div class="k-btn">⌨️</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. PORTRAIT MOCKUP -->
+  <div class="panel-card">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span>竖屏 / 手机（Portrait）</span>
+        <span class="badge">默认隐藏 · 点顶栏从左侧滑出</span>
+      </div>
+      <div class="panel-hint">点击顶栏 <b>Dev ▾ 1: Attache</b> 弹出左侧抽屉</div>
+    </div>
+
+    <div class="device portrait" id="portraitDevice">
+      <div class="sys-statusbar">
+        <span>10:02</span>
+        <span>79% 🔋</span>
+      </div>
+
+      <div class="app-body">
+        <!-- Scrim -->
+        <div class="drawer-scrim open" id="portraitScrim" onclick="togglePortraitDrawer(false)"></div>
+
+        <!-- Unified Sidebar (Slide-over Drawer in Portrait) -->
+        <aside class="attache-rail open" id="portraitRail">
+          <div class="rail-top">
+            <span class="rail-brand">Attaché</span>
+            <button class="rail-action-btn" onclick="togglePortraitDrawer(false)">✕ 收起</button>
+          </div>
+          <div class="rail-scroll">
+            <div class="tier-label">Hosts (主机)</div>
+            <div class="host-item active">
+              <span class="host-dot"></span>
+              <div class="host-info">
+                <div class="host-name">MacBook Pro (tmux Dev)</div>
+                <div class="host-sub">100.88.1.2 · 已连接</div>
+              </div>
+            </div>
+            <div class="host-item">
+              <span class="host-dot idle"></span>
+              <div class="host-info">
+                <div class="host-name">Mac mini (tmux main)</div>
+                <div class="host-sub">192.168.8.68 · 点击切换</div>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+            <div class="tier-label">Sessions & Windows</div>
+
+            <div class="session-group">
+              <div class="session-head current">
+                <span class="chev">▾</span>
+                <span class="sname">Dev</span>
+                <span class="scount">8</span>
+              </div>
+              <div class="win-list" id="portraitWinList">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+
+            <div class="session-group">
+              <div class="session-head">
+                <span class="chev">▸</span>
+                <span class="sname">Scratch</span>
+                <span class="scount">2</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Console Area -->
+        <div class="console-area">
+          <div class="top-app-bar">
+            <button class="icon-btn">←</button>
+            <button class="session-trigger" onclick="togglePortraitDrawer()">
+              <span class="s-pill">Dev ▾</span>
+              <span class="w-pill" id="portraitActiveTitle">1: Attache</span>
+            </button>
+            <div class="spacer"></div>
+            <button class="icon-btn">⋮</button>
+          </div>
+
+          <div class="terminal-canvas">
+            <div>
+              <div class="term-line c-dim">[G-4 Argon Medium] | Ctx: 4.5%</div>
+              <div class="term-line c-blue">&gt; 竖屏默认不占用终端宽度，点上方 Session / Window 名字从左侧滑出同一个侧边栏。</div>
+              <div class="term-line">● 当前窗口：<span class="c-green" id="portraitTermWin">1: Attache</span></div>
+              <div class="term-line c-dim" style="margin-top:10px;">（点击遮罩或选择任意窗口后，抽屉自动收回；点击顶栏按钮再次滑出）</div>
+            </div>
+            <div class="tmux-statusline">
+              <span>❐ Dev  1:Attache*  2:PastePawX  3:Flowy</span>
+              <span>10:02</span>
+            </div>
+          </div>
+
+          <div class="accessory-row">
+            <button class="acc-btn">✏️</button>
+            <button class="acc-btn">/</button>
+            <button class="acc-btn">tmux</button>
+            <button class="acc-btn">🖼️</button>
+            <button class="acc-btn">📋</button>
+            <button class="acc-btn">清空</button>
+          </div>
+          <div class="key-row">
+            <div class="k-btn">Ctrl</div><div class="k-btn">Alt</div><div class="k-btn">Esc</div>
+            <div class="k-btn">Tab</div><div class="k-btn">↑</div><div class="k-btn">↓</div>
+            <div class="k-btn">←</div><div class="k-btn">→</div><div class="k-btn">输入法</div><div class="k-btn">⌨️</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const WINDOWS = [
+    { idx: 1, name: "Attache", status: "working", branch: "main* ↑1" },
+    { idx: 2, name: "PastePawX", status: "needsyou", branch: "feat/clip" },
+    { idx: 3, name: "Flowy", status: "done", branch: "main" },
+    { idx: 4, name: "QDuo", status: null, branch: "main" },
+    { idx: 5, name: "CCSwitcher", status: "working", branch: "dev*" },
+    { idx: 6, name: "AnyDrag", status: null, branch: "main" },
+    { idx: 7, name: "微信输入法", status: null, branch: "main" },
+    { idx: 8, name: "8Ball", status: "done", branch: "main" },
+  ];
+
+  let activeIdx = 1;
+
+  function renderLists() {
+    ["landscape", "portrait"].forEach(mode => {
+      const container = document.getElementById(mode + "WinList");
+      container.innerHTML = WINDOWS.map(w => {
+        const isAct = w.idx === activeIdx;
+        const dotHtml = w.status
+          ? `<span class="agent-dot ${w.status} step2-only"></span>`
+          : "";
+        return `
+          <div class="win-row ${isAct ? "active" : ""}" onclick="selectWin(${w.idx}, '${mode}')">
+            <span class="win-idx">${w.idx}</span>
+            <div class="win-main">
+              <div class="win-title-line">
+                <span class="win-name">${w.name}</span>
+                ${dotHtml}
+              </div>
+              <div class="win-git step2-only">
+                <span>⎇ ${w.branch}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    });
+  }
+
+  function selectWin(idx, mode) {
+    activeIdx = idx;
+    const win = WINDOWS.find(w => w.idx === idx);
+    document.getElementById("landscapeActiveTitle").textContent = `${win.idx}: ${win.name}`;
+    document.getElementById("portraitActiveTitle").textContent = `${win.idx}: ${win.name}`;
+    document.getElementById("landscapeTermWin").textContent = `${win.idx}: ${win.name}`;
+    document.getElementById("portraitTermWin").textContent = `${win.idx}: ${win.name}`;
+    renderLists();
+    if (mode === "portrait") {
+      togglePortraitDrawer(false);
+    }
+  }
+
+  function toggleLandscapeRail() {
+    document.getElementById("landscapeRail").classList.toggle("collapsed");
+  }
+
+  function togglePortraitDrawer(force) {
+    const rail = document.getElementById("portraitRail");
+    const scrim = document.getElementById("portraitScrim");
+    const isOpen = force !== undefined ? force : !rail.classList.contains("open");
+    rail.classList.toggle("open", isOpen);
+    scrim.classList.toggle("open", isOpen);
+  }
+
+  function setStep(step) {
+    document.body.classList.toggle("show-step2", step === 2);
+    document.getElementById("btnStep1").classList.toggle("active", step === 1);
+    document.getElementById("btnStep2").classList.toggle("active", step === 2);
+  }
+
+  renderLists();
+</script>
+</body>
+</html>

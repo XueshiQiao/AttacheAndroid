@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.connectbot.data.EntityIds
+import org.connectbot.data.entity.Host
 import org.connectbot.di.CoroutineDispatchers
 import org.connectbot.service.TerminalBridge
 import org.connectbot.service.TerminalManager
@@ -42,6 +43,7 @@ import javax.inject.Inject
 
 data class ConsoleUiState(
     val bridges: List<TerminalBridge> = emptyList(),
+    val savedHosts: List<Host> = emptyList(),
     val currentBridgeIndex: Int = 0,
     val isLoading: Boolean = true,
     val error: String? = null,
@@ -116,6 +118,14 @@ class ConsoleViewModel @Inject constructor(
             viewModelScope.launch {
                 manager.hostStatusChangedFlow.collect {
                     _uiState.update { it.copy(revision = it.revision + 1) }
+                }
+            }
+
+            runCatching { manager.hostRepository.observeHosts() }.getOrNull()?.let { hostsFlow ->
+                viewModelScope.launch {
+                    hostsFlow.collect { hosts ->
+                        _uiState.update { it.copy(savedHosts = hosts) }
+                    }
                 }
             }
 
@@ -296,6 +306,23 @@ class ConsoleViewModel @Inject constructor(
             selectedHostId = _uiState.value.bridges[index].host.id
             _uiState.update { it.copy(currentBridgeIndex = index) }
             updateCurrentBridgeProgress()
+        }
+    }
+
+    fun openHostConnection(targetHostId: UUID) {
+        val existingIndex = findBridgeIndex(_uiState.value.bridges, targetHostId)
+        if (existingIndex != -1) {
+            selectBridge(existingIndex)
+            return
+        }
+        selectedHostId = targetHostId
+        pendingInitialHostId = targetHostId
+        viewModelScope.launch(dispatchers.io) {
+            try {
+                terminalManager?.openConnectionForHostId(targetHostId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message ?: "Failed to open connection") }
+            }
         }
     }
 
