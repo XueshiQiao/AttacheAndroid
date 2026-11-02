@@ -129,18 +129,35 @@ object AndroidVersions {
     }
 }
 
+val attacheVersionPropsFile = rootProject.file("version.properties")
+val attacheVersionName = providers.fileContents(rootProject.layout.projectDirectory.file("version.properties"))
+    .asText
+    .map { text ->
+        text.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("VERSION_NAME=") }
+            ?.substringAfter("VERSION_NAME=")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: "1.0.0"
+    }
+    .orElse("1.0.0")
+
+val attacheBuildNumber = providers.fileContents(rootProject.layout.projectDirectory.file("version.properties"))
+    .asText
+    .map { text ->
+        text.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("BUILD_NUMBER=") }
+            ?.substringAfter("BUILD_NUMBER=")
+            ?.trim()
+            ?.toIntOrNull()
+            ?: 1
+    }
+    .orElse(1)
+
 appVersioning {
-    tagFilter.set("v1.12.*")
-    overrideVersionCode { gitTag, _, _ ->
-        AndroidVersions.code(gitTag.rawTagName, gitTag.commitsSinceLatestTag)
-    }
-    overrideVersionName { gitTag, _, _ ->
-        if (gitTag.commitsSinceLatestTag != 0) {
-            "git-${gitTag.rawTagName}-${gitTag.commitsSinceLatestTag}"
-        } else {
-            gitTag.rawTagName
-        }
-    }
+    enabled.set(false)
 }
 
 val checkAppVersioning = tasks.register("checkAppVersioning") {
@@ -193,6 +210,11 @@ android {
 
     defaultConfig {
         applicationId = "org.connectbot"
+        val currentBuildNum = attacheBuildNumber.get()
+        val currentVerName = attacheVersionName.get()
+        // Base 12_000_000 ensures seamless upgrade over legacy 11_153_275 builds without uninstalling
+        versionCode = 12_000_000 + currentBuildNum
+        versionName = "$currentVerName (Build $currentBuildNum)"
 
         minSdk =
             libs.versions.minSdk
@@ -279,7 +301,7 @@ android {
         // source and licensed under Apache 2.
         create("oss") {
             dimension = "license"
-            versionNameSuffix = "-oss"
+            versionNameSuffix = ""
             // No Google Play Services available for downloadable fonts
             buildConfigField("Boolean", "HAS_DOWNLOADABLE_FONTS", "false")
             buildConfigField("String", "MOSH_RELEASE_TAG", "\"$moshReleaseTag\"")

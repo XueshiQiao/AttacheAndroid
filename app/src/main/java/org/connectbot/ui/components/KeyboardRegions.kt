@@ -19,10 +19,8 @@ package org.connectbot.ui.components
 
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
@@ -47,23 +45,16 @@ internal fun KeyboardRegions(
     val direction = LocalLayoutDirection.current
     BoxWithConstraints(modifier) {
         val viewportWidth = maxWidth
-        val viewportHeight = maxHeight
         val columns = (pinned.maxOfOrNull { it.column + it.columnSpan } ?: 0).coerceIn(0, 1000)
         val width = layout.buttonWidth.takeIf { it.isFinite() && it > 0 } ?: 45f
-        val height = layout.buttonHeight.takeIf { it.isFinite() && it > 0 } ?: 30f
         val requestedWidth = (columns * width).coerceIn(0f, 16000f).dp
-        val dockWidth = minOf(requestedWidth, if (scrolling.isEmpty()) maxWidth else (maxWidth - 3.dp).coerceAtLeast(0.dp) / 2)
+        val dockWidth = minOf(requestedWidth, if (scrolling.isEmpty()) maxWidth else (maxWidth - 6.dp).coerceAtLeast(0.dp) / 2)
         CompositionLocalProvider(LocalLayoutDirection provides direction) {
             Row {
                 listOf(false to scrolling, true to pinned).filter { it.second.isNotEmpty() }.forEach { (isPinned, regionItems) ->
                     key(isPinned) {
                         if (isPinned && scrolling.isNotEmpty()) {
-                            val rows = items.maxOf { it.row + it.rowSpan }.coerceIn(1, 1000)
-                            VerticalDivider(
-                                thickness = 3.dp,
-                                modifier = Modifier.width(3.dp).height(minOf(viewportHeight, (rows * height).coerceIn(1f, 16000f).dp)),
-                                color = MaterialTheme.colorScheme.outline,
-                            )
+                            Spacer(modifier = Modifier.width(6.dp))
                         }
                         val regionModifier = if (isPinned) Modifier.width(if (scrolling.isEmpty()) viewportWidth else dockWidth) else Modifier.weight(1f)
                         CompositionLocalProvider(LocalLayoutDirection provides direction) {

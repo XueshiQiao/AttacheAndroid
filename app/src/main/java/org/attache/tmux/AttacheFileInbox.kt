@@ -96,6 +96,7 @@ data class LocalInboxFile(
     val sizeBytes: Long,
     val lastModifiedMs: Long,
     val kind: AttacheFileKind,
+    val apkVersionLabel: String? = null,
 )
 
 data class FileDownloadProgress(
@@ -190,6 +191,17 @@ object AttacheFileStorage {
         return File(context.filesDir, subdir).apply { mkdirs() }
     }
 
+    private fun extractApkVersionLabel(context: Context, file: File): String? {
+        if (classifyFileName(file.name) != AttacheFileKind.APK) return null
+        return try {
+            val info = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0) ?: return null
+            val vName = info.versionName?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            if (vName.startsWith("v", ignoreCase = true) || vName.startsWith("git-")) vName else "v$vName"
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun listInboxFiles(context: Context): List<LocalInboxFile> {
         val dir = getInboxDirectory(context)
         val files = dir.listFiles().orEmpty()
@@ -202,6 +214,7 @@ object AttacheFileStorage {
                 sizeBytes = f.length(),
                 lastModifiedMs = f.lastModified(),
                 kind = classifyFileName(f.name),
+                apkVersionLabel = extractApkVersionLabel(context, f),
             )
         }
     }
@@ -272,6 +285,7 @@ object AttacheFileStorage {
                 sizeBytes = finalFile.length(),
                 lastModifiedMs = finalFile.lastModified(),
                 kind = classifyFileName(finalFile.name),
+                apkVersionLabel = extractApkVersionLabel(context, finalFile),
             )
         } catch (e: Exception) {
             Timber.w(e, "Failed to receive remote file: %s", remotePath)
@@ -995,10 +1009,16 @@ private fun LocalInboxFileCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(modifier = Modifier.height(2.dp))
+                    val metaPrefix = item.apkVersionLabel?.let { "$it · " } ?: ""
                     Text(
-                        text = "${formatInboxSize(item.sizeBytes)} · ${formatTimestamp(item.lastModifiedMs)}",
+                        text = "$metaPrefix${formatInboxSize(item.sizeBytes)} · ${formatTimestamp(item.lastModifiedMs)}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (item.apkVersionLabel != null) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        fontWeight = if (item.apkVersionLabel != null) FontWeight.Medium else FontWeight.Normal,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

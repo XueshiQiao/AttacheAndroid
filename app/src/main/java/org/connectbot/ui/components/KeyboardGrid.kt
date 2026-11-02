@@ -61,7 +61,14 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
@@ -317,7 +324,45 @@ private fun KeyboardGridRegion(
     val width = layout.buttonWidth.takeIf { it.isFinite() && it > 0 }?.coerceAtMost(1000f) ?: 45f
     val rawHeight = layout.buttonHeight.takeIf { it.isFinite() && it > 0 }?.coerceAtMost(1000f) ?: 34f
     val height = if (!editing && rawHeight < 34f) 34f else rawHeight
-    Box(modifier = modifier.then(if (layout.fitToWidth) Modifier else Modifier.horizontalScroll(horizontal, enabled = interactive).verticalScroll(vertical, enabled = interactive))) {
+    val edgeFadeModifier = if (!layout.fitToWidth && !editing) {
+        Modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val fadePx = 22.dp.toPx().coerceAtMost(size.width / 3f)
+                if (horizontal.canScrollBackward && fadePx > 0f) {
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(Color.Transparent, Color.Black),
+                            startX = 0f,
+                            endX = fadePx,
+                        ),
+                        topLeft = Offset.Zero,
+                        size = Size(fadePx, size.height),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                if (horizontal.canScrollForward && fadePx > 0f) {
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(Color.Black, Color.Transparent),
+                            startX = size.width - fadePx,
+                            endX = size.width,
+                        ),
+                        topLeft = Offset(size.width - fadePx, 0f),
+                        size = Size(fadePx, size.height),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+            }
+    } else {
+        Modifier
+    }
+    Box(
+        modifier = modifier
+            .then(edgeFadeModifier)
+            .then(if (layout.fitToWidth) Modifier else Modifier.horizontalScroll(horizontal, enabled = interactive).verticalScroll(vertical, enabled = interactive)),
+    ) {
         Layout(content = {
             visible.forEach { item ->
                 key(item.id) {
@@ -508,6 +553,7 @@ private fun GridButton(
         }
     }
     val toolbarStyle by AttacheToolbarPrefs.styleFlow.collectAsState()
+    val isDark by AttacheToolbarPrefs.isDarkFlow.collectAsState()
     val isComposeToggle = item.kind == "app" && item.target == "toggle_compose"
     val isEscape = item.target == "escape"
 
@@ -519,12 +565,12 @@ private fun GridButton(
         }
         val keyBg = when (toolbarStyle) {
             AttacheToolbarStyle.TERMINAL_DECK -> when (active) {
-                ModifierLevel.OFF -> Color(0xFF121720)
-                ModifierLevel.TRANSIENT -> Color(0xFFF59E0B)
-                ModifierLevel.LOCKED -> Color(0xFFD97706)
+                ModifierLevel.OFF -> if (isDark) Color(0xFF121720) else Color(0xFFFFFFFF)
+                ModifierLevel.TRANSIENT -> if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)
+                ModifierLevel.LOCKED -> if (isDark) Color(0xFFD97706) else Color(0xFFB45309)
             }
             AttacheToolbarStyle.COPILOT_DOCK -> when (active) {
-                ModifierLevel.OFF -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+                ModifierLevel.OFF -> if (isDark) Color(0x12FFFFFF) else Color(0x0D0F172A)
                 ModifierLevel.TRANSIENT -> Color(0xFF3B82F6)
                 ModifierLevel.LOCKED -> Color(0xFF2563EB)
             }
@@ -532,9 +578,9 @@ private fun GridButton(
 
         val keyBorder = when (toolbarStyle) {
             AttacheToolbarStyle.TERMINAL_DECK -> when {
-                isActive -> BorderStroke(1.dp, Color(0xFFFBBF24))
-                isEscape -> BorderStroke(1.dp, Color(0x66D29922))
-                else -> BorderStroke(1.dp, Color(0xFF2B323C))
+                isActive -> BorderStroke(1.dp, if (isDark) Color(0xFFFBBF24) else Color(0xFFB45309))
+                isEscape -> BorderStroke(1.dp, if (isDark) Color(0x66D29922) else Color(0xFFFCD34D))
+                else -> BorderStroke(1.dp, if (isDark) Color(0xFF2B323C) else Color(0xFFCBD5E1))
             }
             AttacheToolbarStyle.COPILOT_DOCK -> if (isActive) {
                 BorderStroke(1.dp, Color(0xFF60A5FA))
@@ -545,14 +591,14 @@ private fun GridButton(
 
         val keyContentColor = when (toolbarStyle) {
             AttacheToolbarStyle.TERMINAL_DECK -> when {
-                isActive -> Color(0xFF090C10)
-                isEscape -> Color(0xFFD29922)
-                else -> Color(0xFFC9D1D9)
+                isActive -> if (isDark) Color(0xFF090C10) else Color.White
+                isEscape -> if (isDark) Color(0xFFD29922) else Color(0xFFB45309)
+                else -> if (isDark) Color(0xFFC9D1D9) else Color(0xFF1E293B)
             }
             AttacheToolbarStyle.COPILOT_DOCK -> if (isActive) {
                 Color.White
             } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+                if (isDark) Color(0xFFCBD5E1) else Color(0xFF334155)
             }
         }
 

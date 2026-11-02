@@ -78,6 +78,10 @@ object AttacheToolbarPrefs {
     const val PREF_KEY = "attache_toolbar_style"
     private val _styleFlow = MutableStateFlow(AttacheToolbarStyle.COPILOT_DOCK)
     val styleFlow: StateFlow<AttacheToolbarStyle> = _styleFlow.asStateFlow()
+
+    private val _isDarkFlow = MutableStateFlow(true)
+    val isDarkFlow: StateFlow<Boolean> = _isDarkFlow.asStateFlow()
+
     @Volatile private var initialized = false
 
     fun syncFromContext(context: Context): AttacheToolbarStyle {
@@ -100,6 +104,10 @@ object AttacheToolbarPrefs {
         }
         _styleFlow.value = style
         initialized = true
+    }
+
+    fun updateDarkTheme(isDark: Boolean) {
+        _isDarkFlow.value = isDark
     }
 }
 
@@ -184,27 +192,33 @@ fun AttacheToolbarContainer(
     LaunchedEffect(context) {
         AttacheToolbarPrefs.ensureLoaded(context)
     }
+    LaunchedEffect(isDark) {
+        AttacheToolbarPrefs.updateDarkTheme(isDark)
+    }
     val style by AttacheToolbarPrefs.styleFlow.collectAsState()
 
     when (style) {
         AttacheToolbarStyle.TERMINAL_DECK -> {
+            val containerBg = if (isDark) Color(0xFF090C10) else Color(0xFFEAECEF)
+            val containerBorder = if (isDark) Color(0xFF21262D) else Color(0xFFD0D7DE)
             Column(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF090C10))
-                    .border(width = 0.5.dp, color = Color(0xFF21262D))
+                    .background(containerBg)
+                    .border(width = 0.5.dp, color = containerBorder)
                     .padding(horizontal = 5.dp, vertical = 4.dp),
                 content = content,
             )
         }
         AttacheToolbarStyle.COPILOT_DOCK -> {
-            val dockBg = if (isDark) Color(0xFF171D29) else Color(0xFFF8FAFC)
-            val dockBorder = if (isDark) Color(0x24FFFFFF) else Color(0x1F0F172A)
+            val outerBackdrop = if (isDark) Color(0xFF090C10) else Color(0xFFF3F2EE)
+            val dockBg = if (isDark) Color(0xFF171D29) else Color(0xFFFFFFFF)
+            val dockBorder = if (isDark) Color(0x26FFFFFF) else Color(0x1F0F172A)
             Box(
                 modifier = modifier
                     .fillMaxWidth()
-                    .background(Color.Transparent)
+                    .background(outerBackdrop)
                     .padding(horizontal = 6.dp, vertical = 4.dp),
             ) {
                 Surface(
@@ -291,10 +305,33 @@ fun AttacheAccessoryRow(
     LaunchedEffect(context) {
         AttacheToolbarPrefs.ensureLoaded(context)
     }
+    LaunchedEffect(isDark) {
+        AttacheToolbarPrefs.updateDarkTheme(isDark)
+    }
     val style by AttacheToolbarPrefs.styleFlow.collectAsState()
 
     when (style) {
         AttacheToolbarStyle.TERMINAL_DECK -> {
+            val defaultKeyBg = if (isDark) Color(0xFF121720) else Color(0xFFFFFFFF)
+            val defaultKeyBorder = if (isDark) Color(0xFF2B323C) else Color(0xFFCBD5E1)
+            val defaultKeyText = if (isDark) Color(0xFFC9D1D9) else Color(0xFF1E293B)
+
+            val cyanText = if (isDark) Color(0xFF58A6FF) else Color(0xFF1D4ED8)
+            val cyanBorder = if (isDark) Color(0x6658A6FF) else Color(0xFF93C5FD)
+            val cyanBg = if (isDark) Color(0x1858A6FF) else Color(0xFFDBEAFE)
+
+            val greenText = if (isDark) Color(0xFF3FB950) else Color(0xFF15803D)
+            val greenBorder = if (isDark) Color(0x663FB950) else Color(0xFF86EFAC)
+            val greenBg = if (isDark) Color(0x173FB950) else Color(0xFFDCFCE7)
+
+            val amberText = if (isDark) Color(0xFFD29922) else Color(0xFFB45309)
+            val amberBorder = if (isDark) Color(0x66D29922) else Color(0xFFFCD34D)
+            val amberBg = if (isDark) Color(0x14D29922) else Color(0xFFFEF3C7)
+
+            val redText = if (isDark) Color(0xFFF85149) else Color(0xFFDC2626)
+            val redBorder = if (isDark) Color(0x66F85149) else Color(0xFFFCA5A5)
+            val redBg = if (isDark) Color(0x14F85149) else Color(0xFFFEE2E2)
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -307,9 +344,9 @@ fun AttacheAccessoryRow(
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     TerminalDeckKey(
                         label = "/cmd",
-                        textColor = Color(0xFF58A6FF),
-                        borderColor = Color(0x6658A6FF),
-                        bgColor = Color(0x1858A6FF),
+                        textColor = cyanText,
+                        borderColor = cyanBorder,
+                        bgColor = cyanBg,
                         tag = "accessorySlash",
                         onClick = onOpenSlashMenu,
                         modifier = Modifier.fillMaxWidth(),
@@ -331,9 +368,9 @@ fun AttacheAccessoryRow(
                 ) { onClick ->
                     TerminalDeckKey(
                         label = "tmux",
-                        textColor = Color(0xFF58A6FF),
-                        borderColor = Color(0x5958A6FF),
-                        bgColor = Color(0x1458A6FF),
+                        textColor = cyanText,
+                        borderColor = cyanBorder,
+                        bgColor = cyanBg,
                         tag = "tmuxActions",
                         onClick = onClick,
                         modifier = Modifier.fillMaxWidth(),
@@ -343,6 +380,9 @@ fun AttacheAccessoryRow(
                 // 3. +img (Send image)
                 TerminalDeckKey(
                     label = "+img",
+                    textColor = defaultKeyText,
+                    borderColor = defaultKeyBorder,
+                    bgColor = defaultKeyBg,
                     tag = "accessoryImage",
                     onClick = { onInteraction(); onPickImage() },
                     modifier = Modifier.weight(1f),
@@ -351,6 +391,9 @@ fun AttacheAccessoryRow(
                 // 4. inbox (File Inbox)
                 TerminalDeckKey(
                     label = "inbox",
+                    textColor = defaultKeyText,
+                    borderColor = defaultKeyBorder,
+                    bgColor = defaultKeyBg,
                     tag = "accessoryFileInbox",
                     onClick = { onInteraction(); onOpenFileInbox() },
                     modifier = Modifier.weight(1f),
@@ -359,6 +402,9 @@ fun AttacheAccessoryRow(
                 // 5. copy (Extract pane text)
                 TerminalDeckKey(
                     label = "copy",
+                    textColor = defaultKeyText,
+                    borderColor = defaultKeyBorder,
+                    bgColor = defaultKeyBg,
                     tag = "accessoryCopy",
                     onClick = { onInteraction(); onCopyText() },
                     modifier = Modifier.weight(1f),
@@ -367,9 +413,9 @@ fun AttacheAccessoryRow(
                 // 6. paste (Clipboard paste)
                 TerminalDeckKey(
                     label = "paste",
-                    textColor = Color(0xFF3FB950),
-                    borderColor = Color(0x663FB950),
-                    bgColor = Color(0x173FB950),
+                    textColor = greenText,
+                    borderColor = greenBorder,
+                    bgColor = greenBg,
                     tag = "accessoryPaste",
                     onClick = { onInteraction(); onPaste() },
                     modifier = Modifier.weight(1f),
@@ -378,9 +424,9 @@ fun AttacheAccessoryRow(
                 // 7. ^C (Interrupt)
                 TerminalDeckKey(
                     label = "^C",
-                    textColor = Color(0xFFD29922),
-                    borderColor = Color(0x66D29922),
-                    bgColor = Color(0x14D29922),
+                    textColor = amberText,
+                    borderColor = amberBorder,
+                    bgColor = amberBg,
                     tag = "accessoryTextInput",
                     onClick = { onInteraction(); onInterrupt() },
                     modifier = Modifier.weight(0.85f),
@@ -389,9 +435,9 @@ fun AttacheAccessoryRow(
                 // 8. ^U (Clear input line)
                 TerminalDeckKey(
                     label = "^U",
-                    textColor = Color(0xFFF85149),
-                    borderColor = Color(0x66F85149),
-                    bgColor = Color(0x14F85149),
+                    textColor = redText,
+                    borderColor = redBorder,
+                    bgColor = redBg,
                     tag = "accessoryClear",
                     onClick = { onInteraction(); onClearInput() },
                     modifier = Modifier.weight(0.85f),

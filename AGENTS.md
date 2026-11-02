@@ -32,3 +32,23 @@ Commit history uses short imperative subjects, for example `Fix pubkey list item
 ## Agent-Specific Instructions
 
 Do not overwrite unrelated local changes. Keep edits scoped to the requested behavior, preserve generated schema and translation files unless intentionally updating them, and prefer Gradle tasks over ad hoc build commands. Never block the main UI thread; dispatch IPC, network, disk I/O, and other long-running work off the main thread. In injected classes and ViewModels, use the injected `CoroutineDispatchers` instead of hardcoded `Dispatchers.IO` or similar dispatchers so tests can control execution.
+
+## APK Versioning, Naming, and Delivery Rules (Mandatory)
+
+1. **App Name**: The Android application display name (`app_name` in `app/src/main/res/values/notrans.xml`) MUST always be `Attache`.
+2. **Version & Build Number (`version.properties`)**:
+   - Versioning is controlled by `version.properties` in the repository root (`VERSION_NAME=1.0.0`, `BUILD_NUMBER=<N>`).
+   - **Before every APK build sent to the user**, you MUST increment `BUILD_NUMBER` by 1 in `version.properties` (or bump `VERSION_NAME` when requested).
+   - `app/build.gradle.kts` maps this to `versionCode = 12_000_000 + BUILD_NUMBER` and `versionName = "<VERSION_NAME> (Build <BUILD_NUMBER>)"` so Android's system package installer always detects the package as a newer version upgrade without requiring uninstall.
+3. **Strict APK Filename Convention**:
+   - Every APK copied or sent to the user MUST use the exact filename format:
+     `Attache-v<VERSION_NAME>-b<BUILD_NUMBER>.apk`
+     (for example: `Attache-v1.0.0-b1.apk`, `Attache-v1.0.0-b2.apk`, `Attache-v1.0.0-b3.apk`).
+   - NEVER invent arbitrary APK names (`app-oss-debug.apk`, `attache-latest.apk`, `attache-ui-v2.apk`, etc.) and NEVER omit the version/build number from the APK filename.
+4. **Sending APK to User's Phone/Pad**:
+   - Build and send with:
+     ```bash
+     ./gradlew assembleOssDebug
+     cp -f app/build/outputs/apk/oss/debug/app-oss-debug.apk "/tmp/Attache-v${VERSION_NAME}-b${BUILD_NUMBER}.apk"
+     ~/.local/bin/attache-send "/tmp/Attache-v${VERSION_NAME}-b${BUILD_NUMBER}.apk"
+     ```
