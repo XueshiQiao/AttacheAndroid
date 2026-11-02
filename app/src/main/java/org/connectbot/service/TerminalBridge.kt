@@ -501,7 +501,13 @@ class TerminalBridge {
                 enqueueTransportOperation(TransportOperation.WriteData(data, keyboard = true), semanticInputConnection)
             },
             onBell = {
-                manager.onBell(this)
+                // Attaché: tmux with `monitor-activity on` + `visual-activity off`
+                // emits BEL (\x07) whenever a previously focused window redraws on
+                // focus-out (\e[O) or resize after a window switch. Suppress bell
+                // beeps/vibrations/notifications on tmux hosts.
+                if (org.attache.tmux.TmuxTrial.targetFor(host.nickname) == null && tmuxControl.value == null) {
+                    manager.onBell(this)
+                }
             },
             onResize = {
                 enqueueTransportOperation(
