@@ -6,6 +6,14 @@
 
 ---
 
+## 📱 界面预览 (Screenshots)
+
+| 亮色模式 (Claude Warm Paper) | 暗色模式 (One Dark Pro) | 内嵌 Tailscale (`tsnet`) | `tmux -CC` 侧边栏与收件箱 |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/screenshots/01-light-theme.jpg" width="210" alt="Light Theme" /> | <img src="docs/screenshots/02-dark-theme.jpg" width="210" alt="Dark Theme" /> | <img src="docs/screenshots/03-tailscale-tsnet.jpg" width="210" alt="Embedded Tailscale tsnet" /> | <img src="docs/screenshots/04-tmux-sidebar.jpg" width="210" alt="tmux Sidebar Drawer" /> |
+
+---
+
 ## ✨ 核心特性 (Key Features)
 
 ### 1. 原生 `tmux -CC` 控制模式集成 (`org.attache.tmux`)
