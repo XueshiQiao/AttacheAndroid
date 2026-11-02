@@ -25,6 +25,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiManager.WifiLock
+import android.os.PowerManager
+import android.os.PowerManager.WakeLock
 import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
 
@@ -45,7 +47,24 @@ class ConnectivityMonitor(
         Context.WIFI_SERVICE,
     ) as WifiManager
 
-    private val wifiLock: WifiLock = wifiManager.createWifiLock(TAG)
+    @Suppress("DEPRECATION")
+    private val wifiLock: WifiLock = (
+        wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, TAG)
+            ?: wifiManager.createWifiLock(TAG)
+        ).apply {
+        setReferenceCounted(false)
+    }
+
+    private val powerManager: PowerManager? = terminalManager.applicationContext.getSystemService(
+        Context.POWER_SERVICE,
+    ) as? PowerManager
+
+    private val wakeLock: WakeLock? = powerManager?.newWakeLock(
+        PowerManager.PARTIAL_WAKE_LOCK,
+        "$TAG:WakeLock",
+    )?.apply {
+        setReferenceCounted(false)
+    }
 
     private var networkRef = 0
     private val lock = Any()
@@ -165,6 +184,9 @@ class ConnectivityMonitor(
         if (wifiLock.isHeld) {
             wifiLock.release()
         }
+        if (wakeLock?.isHeld == true) {
+            wakeLock.release()
+        }
     }
 
     /**
@@ -283,6 +305,10 @@ class ConnectivityMonitor(
     }
 
     private fun acquireWifiLockIfNecessaryLocked() {
+        if (networkRef > 0 && wakeLock?.isHeld == false) {
+            wakeLock.acquire()
+            Timber.d("CPU partial wake lock acquired (ref count: $networkRef)")
+        }
         if (lockingWifi && networkRef > 0 && !wifiLock.isHeld) {
             wifiLock.acquire()
             Timber.d("WiFi lock acquired (ref count: $networkRef)")
@@ -290,9 +316,13 @@ class ConnectivityMonitor(
     }
 
     private fun releaseWifiLockIfNecessaryLocked() {
-        if (networkRef == 0 && wifiLock.isHeld) {
+        if ((!lockingWifi || networkRef <= 0) && wifiLock.isHeld) {
             wifiLock.release()
             Timber.d("WiFi lock released")
+        }
+        if (networkRef <= 0 && wakeLock?.isHeld == true) {
+            wakeLock.release()
+            Timber.d("CPU partial wake lock released")
         }
     }
 
