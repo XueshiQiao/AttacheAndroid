@@ -7,8 +7,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -74,6 +77,15 @@ data class TmuxPane(
     val inMode: Boolean,
 )
 
+/** Metadata of a file or directory discovered on the remote host for browsing and one-tap pull. */
+data class RemoteFileEntry(
+    val path: String,
+    val name: String,
+    val sizeBytes: Long,
+    val modifiedEpochSec: Long,
+    val isDirectory: Boolean = false,
+)
+
 /** What tmux last reported. Nothing in it is authored here. */
 data class TmuxState(
     /** The session this connection is showing. */
@@ -84,6 +96,8 @@ data class TmuxState(
     val windows: List<TmuxWindow> = emptyList(),
     val panes: List<TmuxPane> = emptyList(),
     val zoomed: Boolean = false,
+    /** Current working directory of the active pane, if known. */
+    val activePanePath: String = "",
 ) {
     val activePane: TmuxPane? get() = panes.firstOrNull { it.active }
 }
@@ -109,9 +123,28 @@ class TmuxControl(
     /** Uploads image bytes with the given extension to `/tmp` on the remote
      * host and returns its remote path, or null on failure. */
     private val upload: suspend (ByteArray, String, (Long, Long) -> Unit) -> String? = { _, _, _ -> null },
+    /** Streams a remote file into the given OutputStream with byte progress. */
+    private val download: suspend (String, java.io.OutputStream, (Long, Long) -> Unit) -> Boolean = { _, _, _ -> false },
+    /** Application context so pushed files download in the background service even when UI is backgrounded. */
+    private val appContext: android.content.Context? = null,
 ) {
     private val _state = MutableStateFlow(TmuxState())
     val state: StateFlow<TmuxState> = _state.asStateFlow()
+
+    private val _incomingPushFiles = MutableSharedFlow<String>(extraBufferCapacity = 32)
+    /** Remote file paths pushed from the computer via `attache-send <file>`. */
+    val incomingPushFiles: SharedFlow<String> = _incomingPushFiles.asSharedFlow()
+
+    private val _activeDownload = MutableStateFlow<FileDownloadProgress?>(null)
+    val activeDownload: StateFlow<FileDownloadProgress?> = _activeDownload.asStateFlow()
+
+    private val _completedDownloads = MutableSharedFlow<LocalInboxFile>(extraBufferCapacity = 16)
+    val completedDownloads: SharedFlow<LocalInboxFile> = _completedDownloads.asSharedFlow()
+
+    @Volatile private var currentDownloadJob: Job? = null
+    private val downloadQueue = Channel<String>(Channel.UNLIMITED)
+    private val activeOrQueuedPaths = java.util.Collections.synchronizedSet( linkedSetOf<String>() )
+    @Volatile private var lastHandledPushToken: String = ""
 
     /** Scroll the finger has asked for, positive back in history. One
      * loop drains it and merges what has piled up for the same pane, so a
@@ -157,6 +190,43 @@ class TmuxControl(
                 for (request in refreshRequests) refresh()
             }
             jobs += scope.launch {
+                val binDir = appContext?.let { AttacheFileStorage.getRemoteBinDir(it) } ?: "~/.local/bin"
+                val autoSyncRules = appContext?.let { AttacheFileStorage.isAutoSyncAgentRulesEnabled(it) } ?: true
+                installRemoteSendHelper(binDir, autoSyncRules)
+                drainRemotePushQueue()
+            }
+            jobs += scope.launch {
+                for (remotePath in downloadQueue) {
+                    val ctx = appContext
+                    if (ctx != null) {
+                        val job = scope.launch {
+                            try {
+                                val displayName = remotePath.trim().substringAfterLast('/').ifBlank { "file" }
+                                _activeDownload.value = FileDownloadProgress(displayName, 0L, 0L)
+                                val received = AttacheFileStorage.receiveRemoteFile(
+                                    context = ctx,
+                                    control = this@TmuxControl,
+                                    remotePath = remotePath,
+                                    onProgress = { progress -> _activeDownload.value = progress },
+                                )
+                                if (received != null) {
+                                    _completedDownloads.tryEmit(received)
+                                }
+                            } finally {
+                                activeOrQueuedPaths.remove(remotePath)
+                                _activeDownload.value = null
+                            }
+                        }
+                        currentDownloadJob = job
+                        job.join()
+                        currentDownloadJob = null
+                    } else {
+                        activeOrQueuedPaths.remove(remotePath)
+                        _incomingPushFiles.tryEmit(remotePath)
+                    }
+                }
+            }
+            jobs += scope.launch {
                 // Every 50ms what piled up is merged per pane and sent
                 // without waiting for tmux's reply: over a relayed link one
                 // round trip measured 580-780ms, and waiting for each made
@@ -186,6 +256,7 @@ class TmuxControl(
         waiting.forEach { it.cancel() }
         refreshRequests.close()
         scrollRequests.close()
+        downloadQueue.close()
         synchronized(jobs) { jobs.toList() }.forEach { it.cancel() }
         session.close()
         onEnded(this)
@@ -215,6 +286,243 @@ class TmuxControl(
         ext: String,
         onProgress: (uploadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> },
     ): String? = upload(bytes, ext, onProgress)
+
+    suspend fun downloadRemoteFile(
+        remotePath: String,
+        output: java.io.OutputStream,
+        onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> },
+    ): Boolean = download(remotePath, output, onProgress)
+
+    fun enqueueDownload(remotePath: String) {
+        val trimmed = remotePath.trim()
+        if (trimmed.isNotEmpty() && activeOrQueuedPaths.add(trimmed)) {
+            downloadQueue.trySend(trimmed)
+        }
+    }
+
+    fun cancelActiveDownload() {
+        currentDownloadJob?.cancel()
+        currentDownloadJob = null
+        activeOrQueuedPaths.clear()
+        _activeDownload.value = null
+    }
+
+    /**
+     * Queries the active pane's current working directory (`#{pane_current_path}`).
+     */
+    suspend fun queryActivePanePath(): String {
+        val pane = _state.value.activePane?.id
+        val targetArg = if (pane != null && PANE_ID.matches(pane)) "-t $pane " else ""
+        val path = try {
+            send("display-message -p ${targetArg}'#{pane_current_path}'").firstOrNull()?.trim().orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        if (path.isNotEmpty()) {
+            _state.value = _state.value.copy(activePanePath = path)
+        }
+        return path.ifEmpty { _state.value.activePanePath }
+    }
+
+    /**
+     * Lists files on the remote host for one-tap downloading to the phone/Pad.
+     * - When [recentArtifactsOnly] is false, lists regular files directly in [directory]
+     *   (or the active pane's current directory when null/blank), newest first.
+     * - When [recentArtifactsOnly] is true, recursively scans up to depth 5 under [directory]
+     *   for APKs, images, videos, archives, and PDFs (`.apk`, `.mp4`, `.mov`, `.mkv`, `.webm`,
+     *   `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.pdf`, `.zip`), newest first.
+     */
+    suspend fun listRemoteFiles(
+        directory: String? = null,
+        recentArtifactsOnly: Boolean = false,
+    ): Pair<String, List<RemoteFileEntry>> {
+        val rawDir = directory?.trim()?.takeIf { it.isNotEmpty() } ?: queryActivePanePath().ifEmpty { "~" }
+        val quotedDir = "'" + rawDir.replace("'", "'\"'\"'") + "'"
+        val perlScript = if (recentArtifactsOnly) {
+            """
+            use File::Find;
+            my ${'$'}d = ${'$'}ARGV[0];
+            ${'$'}d =~ s{^~(?=/|${'$'})}{${'$'}ENV{HOME}};
+            my @roots = (${'$'}d);
+            for my ${'$'}extra ("${'$'}ENV{HOME}/Downloads", "/tmp") {
+              push @roots, ${'$'}extra if -d ${'$'}extra && ${'$'}extra ne ${'$'}d;
+            }
+            my %seen;
+            my @out;
+            for my ${'$'}root (@roots) {
+              next unless -d ${'$'}root;
+              my ${'$'}maxDepth = (${'$'}root eq "/tmp" || ${'$'}root eq "${'$'}ENV{HOME}/Downloads") ? 2 : 5;
+              find({
+                preprocess => sub {
+                  my ${'$'}rel = ${'$'}File::Find::dir;
+                  ${'$'}rel =~ s{^\Q${'$'}root\E/?}{};
+                  my ${'$'}depth = (${'$'}rel eq '' ? 0 : scalar(split('/', ${'$'}rel)));
+                  return () if ${'$'}depth >= ${'$'}maxDepth;
+                  return grep { ${'$'}_ !~ /^\./ && ${'$'}_ ne 'node_modules' && ${'$'}_ ne 'caches' && ${'$'}_ ne 'intermediates' } @_;
+                },
+                wanted => sub {
+                  return unless -f ${'$'}_;
+                  return unless /\.(apk|mp4|mov|mkv|webm|png|jpe?g|webp|gif|pdf|zip|txt|md|log|json)$/i;
+                  my ${'$'}full = ${'$'}File::Find::name;
+                  return if ${'$'}seen{${'$'}full}++;
+                  my @s = stat(${'$'}_);
+                  push @out, [${'$'}full, ${'$'}_, ${'$'}s[7] || 0, ${'$'}s[9] || 0] if @s;
+                }
+              }, ${'$'}root);
+            }
+            @out = sort { ${'$'}b->[3] <=> ${'$'}a->[3] } @out;
+            splice(@out, 60) if @out > 60;
+            print "DIR:${'$'}d (+ ~/Downloads, /tmp)\n";
+            for my ${'$'}r (@out) { print join("\x01", @{${'$'}r}, "F") . "\n"; }
+            """.trimIndent()
+        } else {
+            """
+            my ${'$'}d = ${'$'}ARGV[0];
+            ${'$'}d =~ s{^~(?=/|${'$'})}{${'$'}ENV{HOME}};
+            ${'$'}d =~ s{/+${'$'}}{} if length(${'$'}d) > 1;
+            my (@dirs, @files);
+            if (opendir(my ${'$'}dh, ${'$'}d)) {
+              while (my ${'$'}f = readdir(${'$'}dh)) {
+                next if ${'$'}f =~ /^\./;
+                my ${'$'}p = "${'$'}d/${'$'}f";
+                my @s = stat(${'$'}p);
+                next unless @s;
+                if (-d ${'$'}p) {
+                  push @dirs, [${'$'}p, ${'$'}f, 0, ${'$'}s[9] || 0, "D"];
+                } elsif (-f ${'$'}p) {
+                  push @files, [${'$'}p, ${'$'}f, ${'$'}s[7] || 0, ${'$'}s[9] || 0, "F"];
+                }
+              }
+              closedir(${'$'}dh);
+            }
+            @dirs = sort { ${'$'}b->[3] <=> ${'$'}a->[3] } @dirs;
+            @files = sort { ${'$'}b->[3] <=> ${'$'}a->[3] } @files;
+            my @out = (@dirs, @files);
+            splice(@out, 100) if @out > 100;
+            print "DIR:${'$'}d\n";
+            for my ${'$'}r (@out) { print join("\x01", @{${'$'}r}) . "\n"; }
+            """.trimIndent()
+        }
+        val quotedPerl = "'" + perlScript.replace("'", "'\"'\"'") + "'"
+        val output = exec("perl -e $quotedPerl $quotedDir") ?: return rawDir to emptyList()
+        var resolvedDir = rawDir
+        val entries = mutableListOf<RemoteFileEntry>()
+        for (line in output.lineSequence()) {
+            val trimmed = line.trimEnd('\r')
+            if (trimmed.startsWith("DIR:")) {
+                resolvedDir = trimmed.removePrefix("DIR:").ifBlank { rawDir }
+                continue
+            }
+            val parts = trimmed.split(SEP)
+            if (parts.size >= 4) {
+                val size = parts[2].toLongOrNull() ?: continue
+                val mtime = parts[3].toLongOrNull() ?: 0L
+                val isDir = parts.getOrNull(4) == "D"
+                entries += RemoteFileEntry(
+                    path = parts[0],
+                    name = parts[1],
+                    sizeBytes = size,
+                    modifiedEpochSec = mtime,
+                    isDirectory = isDir,
+                )
+            }
+        }
+        return resolvedDir to entries
+    }
+
+    /**
+     * Installs `attache-send` into [remoteBinDir] (default `~/.local/bin`) on the remote host,
+     * adds [remoteBinDir] to the tmux server's global `PATH`, and optionally injects the
+     * `attache-send` usage rule into `~/.claude/CLAUDE.md` and `~/.gemini/GEMINI.md` on the
+     * remote host so any user who installs Attaché gets out-of-the-box Agent file transfer.
+     */
+    suspend fun installRemoteSendHelper(
+        remoteBinDir: String = "~/.local/bin",
+        syncAgentRules: Boolean = true,
+    ): Boolean {
+        val cleanBinDir = remoteBinDir.trim().ifBlank { "~/.local/bin" }
+        val quotedBinDir = "'" + cleanBinDir.replace("'", "'\"'\"'") + "'"
+        val d = "$"
+        val syncFlag = if (syncAgentRules) "1" else "0"
+        val script = """
+            RAW_BIN=$quotedBinDir
+            case "${d}RAW_BIN" in
+              "~"*) BIN_DIR="${d}HOME${d}{RAW_BIN#\~}" ;;
+              *) BIN_DIR="${d}RAW_BIN" ;;
+            esac
+            mkdir -p "${d}BIN_DIR" "${d}HOME/.local/share/attache" || exit 1
+            CMD_PATH="${d}BIN_DIR/attache-send"
+            cat > "${d}CMD_PATH" << 'EOF' && chmod +x "${d}CMD_PATH"
+            #!/bin/sh
+            if [ -z "${d}1" ]; then
+              echo "Usage: attache-send <file-path> [more-files...]" >&2
+              exit 1
+            fi
+            export PATH=/opt/homebrew/bin:/usr/local/bin:${d}PATH
+            mkdir -p "${d}HOME/.local/share/attache"
+            LAST_ABS=""
+            for ARG in "${d}@"; do
+              DIR=${d}(cd "${d}(dirname "${d}ARG")" 2>/dev/null && pwd)
+              ABS="${d}DIR/${d}(basename "${d}ARG")"
+              if [ ! -f "${d}ABS" ]; then
+                echo "attache-send: file not found: ${d}ARG" >&2
+                exit 1
+              fi
+              printf '%s\n' "${d}ABS" >> "${d}HOME/.local/share/attache/outbox.queue"
+              LAST_ABS="${d}ABS"
+              echo "Queued for Attaché mobile inbox: ${d}ABS"
+            done
+            TOKEN="${d}(date +%s)-${d}${d}:${d}LAST_ABS"
+            WNAME=${d}(tmux display-message -p '#W' 2>/dev/null)
+            tmux set -g @attache_push "${d}TOKEN" \; rename-window "${d}WNAME" 2>/dev/null || true
+            EOF
+            ln -sf "${d}CMD_PATH" /tmp/attache-send 2>/dev/null || true
+            export PATH=/opt/homebrew/bin:/usr/local/bin:${d}PATH
+            tmux set-environment -g PATH "${d}BIN_DIR:/opt/homebrew/bin:/usr/local/bin:${d}PATH" 2>/dev/null || true
+            if [ "$syncFlag" = "1" ]; then
+              for RFILE in "${d}HOME/.claude/CLAUDE.md" "${d}HOME/.gemini/GEMINI.md"; do
+                RDIR=${d}(dirname "${d}RFILE")
+                mkdir -p "${d}RDIR" 2>/dev/null || true
+                if [ ! -f "${d}RFILE" ] || ! grep -q "attache-send" "${d}RFILE" 2>/dev/null; then
+                  printf '\n## 向手机 / Pad 发送文件 (Attaché File Transfer)\n- 当用户要求「把这个文件发给我」「传到我手机上」「发到 Pad 上」「把 APK / 视频 / 图片发给我」时，直接运行：\n  `%s/attache-send "<文件绝对路径>"`\n- 该命令会通过 tmux 触发用户的 Attaché 移动端自动将文件流式下载到手机/Pad 的公共收件箱目录。\n' "${d}BIN_DIR" >> "${d}RFILE"
+                fi
+              done
+            fi
+            echo "OK:${d}CMD_PATH"
+        """.trimIndent()
+        return try {
+            exec(script)?.contains("OK:") == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Atomically drains `~/.local/share/attache/outbox.queue` on the remote host and
+     * enqueues each file path for background download into `Download/Attache/`.
+     */
+    private suspend fun drainRemotePushQueue(): List<String> {
+        val d = "$"
+        val out = try {
+            exec(
+                """
+                Q="${d}HOME/.local/share/attache/outbox.queue"
+                if [ -s "${d}Q" ]; then
+                  mv "${d}Q" "${d}Q.draining.${d}${d}" 2>/dev/null && cat "${d}Q.draining.${d}${d}" && rm -f "${d}Q.draining.${d}${d}"
+                fi
+                """.trimIndent(),
+            )
+        } catch (_: Exception) {
+            null
+        } ?: return emptyList()
+        val paths = out.lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("/") }
+            .distinct()
+            .toList()
+        paths.forEach { enqueueDownload(it) }
+        return paths
+    }
 
     suspend fun split(sideBySide: Boolean) {
         val pane = _state.value.activePane ?: return
@@ -370,7 +678,31 @@ class TmuxControl(
                     TmuxPane(f[0], n[0], n[1], n[2], n[3], active = f[5] == "1", inMode = f[6] == "1")
                 }
             }
-            _state.value = TmuxState(current, sessions, windows, panes, zoomed)
+            _state.value = TmuxState(
+                sessionId = current,
+                sessions = sessions,
+                windows = windows,
+                panes = panes,
+                zoomed = zoomed,
+                activePanePath = _state.value.activePanePath,
+            )
+            // Check if the computer queued a file via `attache-send <file>`
+            val pushValue = send("show-options -gqv @attache_push").firstOrNull()?.trim().orEmpty()
+            if (pushValue.isNotEmpty() && pushValue != lastHandledPushToken) {
+                lastHandledPushToken = pushValue
+                try {
+                    send("set-option -gu @attache_push")
+                } catch (_: Exception) {
+                }
+                val drained = drainRemotePushQueue()
+                if (drained.isEmpty()) {
+                    val colonIdx = pushValue.indexOf(':')
+                    val remotePath = if (colonIdx >= 0) pushValue.substring(colonIdx + 1).trim() else pushValue
+                    if (remotePath.startsWith("/")) {
+                        enqueueDownload(remotePath)
+                    }
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

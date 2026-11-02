@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,6 +80,7 @@ fun AttacheAccessoryRow(
     onInteraction: () -> Unit,
     modifier: Modifier = Modifier,
     onPickImage: () -> Unit = {},
+    onOpenFileInbox: () -> Unit = {},
     onCopyText: () -> Unit = {},
     onClearInput: () -> Unit = {},
 ) {
@@ -132,6 +134,9 @@ fun AttacheAccessoryRow(
         }
         AccessoryButton(onClick = { onInteraction(); onPickImage() }, tag = "accessoryImage", modifier = Modifier.weight(1f)) {
             Icon(Icons.Default.Image, contentDescription = "Send image")
+        }
+        AccessoryButton(onClick = { onInteraction(); onOpenFileInbox() }, tag = "accessoryFileInbox", modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.FolderOpen, contentDescription = "File inbox")
         }
         AccessoryButton(onClick = { onInteraction(); onCopyText() }, tag = "accessoryCopy", modifier = Modifier.weight(1f)) {
             Icon(Icons.Default.ContentCopy, contentDescription = "Copy pane text")

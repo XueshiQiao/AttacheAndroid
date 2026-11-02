@@ -328,6 +328,7 @@ fun AttacheSidebar(
     modifier: Modifier = Modifier,
     isDark: Boolean = true,
     onToggleTheme: (() -> Unit)? = null,
+    onOpenFileInbox: (() -> Unit)? = null,
     onDismiss: (() -> Unit)? = null,
 ) {
     val state by control.state.collectAsState()
@@ -596,6 +597,37 @@ fun AttacheSidebar(
                             }
                         }
                     }
+                }
+            }
+
+            if (onOpenFileInbox != null) {
+                HorizontalDivider(thickness = 1.dp, color = palette.divider)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(palette.headerBg)
+                        .clickable {
+                            onDismiss?.invoke()
+                            onOpenFileInbox()
+                        }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("tmuxSidebarFileInbox"),
+                ) {
+                    Text(
+                        text = "📥 文件收件箱 (Download/Attache)",
+                        color = palette.text,
+                        fontSize = 11.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "▸",
+                        color = palette.muted,
+                        fontSize = 12.sp,
+                    )
                 }
             }
 

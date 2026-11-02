@@ -110,9 +110,13 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.attache.tmux.AttacheAccessoryRow
+import org.attache.tmux.AttacheFileInboxDialog
+import org.attache.tmux.AttacheFileKind
+import org.attache.tmux.AttacheFileStorage
 import org.attache.tmux.AttacheHostEntry
 import org.attache.tmux.AttacheSelectionBar
 import org.attache.tmux.AttacheSidebar
+import org.attache.tmux.FileDownloadProgress
 import org.attache.tmux.TmuxCopyTextDialog
 import org.attache.tmux.sendAgentCommand
 import org.attache.tmux.tmuxTouch
@@ -726,6 +730,9 @@ fun ConsoleScreen(
     var showTmuxMenu by remember { mutableStateOf(false) }
     var showSlashMenu by remember { mutableStateOf(false) }
     var showCopyTextDialog by remember { mutableStateOf(false) }
+    var showFileInboxDialog by remember { mutableStateOf(false) }
+    var fileDownloadState by remember { mutableStateOf<FileDownloadProgress?>(null) }
+    var fileDownloadJob by remember { mutableStateOf<Job?>(null) }
     var showImagePicker by remember { mutableStateOf(false) }
     var imageUploadState by remember { mutableStateOf<ImageUploadState?>(null) }
     var imageUploadJob by remember { mutableStateOf<Job?>(null) }
@@ -807,7 +814,7 @@ fun ConsoleScreen(
     val isBiometricPromptActive = promptState is PromptRequest.BiometricPrompt
 
     // Check if any modal (menu or dialog) is currently active
-    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showCopyTextDialog || showImagePicker || showUrlScanDialog || showResizeDialog ||
+    val anyModalActive = showKeyboardSettings || showMenu || showTmuxMenu || showSlashMenu || showCopyTextDialog || showFileInboxDialog || showImagePicker || showUrlScanDialog || showResizeDialog ||
         showDisconnectDialog || showSessionPickerDialog || showTextInputDialog || showConnectionInfoDialog ||
         portraitDrawerOpen || isBiometricPromptActive || currentAuthBanner != null
 
@@ -1217,6 +1224,46 @@ fun ConsoleScreen(
         imageUploadJob = job
     }
 
+    fun startRemoteFileDownload(remotePath: String) {
+        val control = currentTmuxControl ?: return
+        control.enqueueDownload(remotePath)
+    }
+
+    LaunchedEffect(currentTmuxControl) {
+        val control = currentTmuxControl ?: return@LaunchedEffect
+        launch {
+            control.activeDownload.collect { progress ->
+                fileDownloadState = progress
+            }
+        }
+        launch {
+            control.completedDownloads.collect { received ->
+                val actionLabel = if (received.kind == AttacheFileKind.APK) "安装 APK" else "查看"
+                val result = snackbarHostState.showSnackbar(
+                    message = "已收到文件: ${received.name}",
+                    actionLabel = actionLabel,
+                    duration = SnackbarDuration.Long,
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    if (received.kind == AttacheFileKind.APK) {
+                        AttacheFileStorage.openFileExternally(context, received) { msg ->
+                            coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
+                        }
+                    } else {
+                        menuImeWasVisible = imeVisible
+                        resizeSuspended = true
+                        showFileInboxDialog = true
+                    }
+                }
+            }
+        }
+        launch {
+            control.incomingPushFiles.collect { remotePath ->
+                control.enqueueDownload(remotePath)
+            }
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = modifier
@@ -1323,6 +1370,11 @@ fun ConsoleScreen(
                                         onSelectHost = ::selectHostFromSidebar,
                                         isDark = isDarkTheme,
                                         onToggleTheme = ::toggleTheme,
+                                        onOpenFileInbox = {
+                                            menuImeWasVisible = imeVisible
+                                            resizeSuspended = true
+                                            showFileInboxDialog = true
+                                        },
                                         modifier = Modifier.fillMaxHeight(),
                                     )
                                 }
@@ -1431,6 +1483,9 @@ fun ConsoleScreen(
                                                     onCopyText = {
                                                         openMenu { showCopyTextDialog = true }
                                                     },
+                                                    onOpenFileInbox = {
+                                                        openMenu { showFileInboxDialog = true }
+                                                    },
                                                     onClearInput = {
                                                         composeController?.clearComposeBuffer()
                                                         bridge.injectString(CLEAR_INPUT_SEQUENCE)
@@ -1535,6 +1590,74 @@ fun ConsoleScreen(
                                         }
                                     }
                                 }
+
+                                fileDownloadState?.takeIf { !showFileInboxDialog }?.let { download ->
+                                    val percent = if (download.totalBytes > 0L) {
+                                        ((download.downloadedBytes * 100L) / download.totalBytes).coerceIn(0L, 100L)
+                                    } else {
+                                        0L
+                                    }
+                                    val fraction = if (download.totalBytes > 0L) {
+                                        (download.downloadedBytes.toFloat() / download.totalBytes.toFloat()).coerceIn(0f, 1f)
+                                    } else {
+                                        0f
+                                    }
+                                    Surface(
+                                        shape = MaterialTheme.shapes.medium,
+                                        tonalElevation = 6.dp,
+                                        shadowElevation = 6.dp,
+                                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                                            .fillMaxWidth()
+                                            .testTag("fileDownloadProgressCard"),
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Text(
+                                                        text = "正在接收文件: ${download.fileName}",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f),
+                                                    )
+                                                    Text(
+                                                        text = "${formatByteCount(download.downloadedBytes)} / ${formatByteCount(download.totalBytes)} ($percent%)",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                                LinearProgressIndicator(
+                                                    progress = { fraction },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(top = 6.dp),
+                                                )
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    currentTmuxControl?.cancelActiveDownload()
+                                                    fileDownloadJob?.cancel()
+                                                    fileDownloadJob = null
+                                                    fileDownloadState = null
+                                                    termFocusRequester.requestFocus()
+                                                },
+                                                modifier = Modifier.padding(start = 8.dp),
+                                            ) {
+                                                Text("取消")
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -1571,6 +1694,11 @@ fun ConsoleScreen(
                                     onSelectHost = ::selectHostFromSidebar,
                                     isDark = isDarkTheme,
                                     onToggleTheme = ::toggleTheme,
+                                    onOpenFileInbox = {
+                                        menuImeWasVisible = imeVisible
+                                        resizeSuspended = true
+                                        showFileInboxDialog = true
+                                    },
                                     onDismiss = {
                                         portraitDrawerOpen = false
                                         termFocusRequester.requestFocus()
@@ -1582,6 +1710,29 @@ fun ConsoleScreen(
                     }
                 }
             }
+        }
+
+        if (showFileInboxDialog) {
+            AttacheFileInboxDialog(
+                control = currentTmuxControl,
+                activeDownload = fileDownloadState,
+                onStartDownload = { remotePath -> startRemoteFileDownload(remotePath) },
+                onCancelDownload = {
+                    currentTmuxControl?.cancelActiveDownload()
+                    fileDownloadJob?.cancel()
+                    fileDownloadJob = null
+                    fileDownloadState = null
+                },
+                onDismiss = {
+                    showFileInboxDialog = false
+                    termFocusRequester.requestFocus()
+                },
+                onShowMessage = { msg ->
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar(msg)
+                    }
+                },
+            )
         }
 
         if (showCopyTextDialog && currentTmuxControl != null) {

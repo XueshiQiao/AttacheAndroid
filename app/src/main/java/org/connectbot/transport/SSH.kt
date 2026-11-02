@@ -806,6 +806,8 @@ open class SSH : AbsTransport {
                     },
                     exec = { command -> runOnce(command) },
                     upload = { bytes, ext, onProgress -> uploadImage(bytes, ext, onProgress) },
+                    download = { remotePath, output, onProgress -> downloadFile(remotePath, output, onProgress) },
+                    appContext = manager?.applicationContext,
                 )
                 synchronized(tmuxLock) {
                     if (locallyClosed) return@launch
@@ -838,6 +840,69 @@ open class SSH : AbsTransport {
             currentCoroutineContext().ensureActive()
             Timber.w(e, "exec failed: %s", command)
             null
+        } finally {
+            channel.close()
+        }
+    }
+
+    /**
+     * Attaché trial: stream a remote file over a dedicated SSH exec channel into [output]
+     * with real-time byte progress. First line emitted is `SIZE:<bytes>\n` or `ERR:<reason>\n`.
+     */
+    private suspend fun downloadFile(
+        remotePath: String,
+        output: java.io.OutputStream,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): Boolean {
+        val trimmed = remotePath.trim()
+        if (trimmed.isEmpty()) return false
+        val quoted = "'" + trimmed.replace("'", "'\"'\"'") + "'"
+        val command = "P=$quoted; case \"\$P\" in \"~\"/*) P=\"\$HOME/\${P#~/}\" ;; esac; " +
+            "if [ ! -f \"\$P\" ]; then echo \"ERR:NOT_FOUND\"; exit 1; fi; " +
+            "SIZE=\$(wc -c < \"\$P\" | tr -d ' \\t\\r\\n'); echo \"SIZE:\$SIZE\"; cat \"\$P\""
+        val channel = client?.openSession() ?: return false
+        return try {
+            if (!channel.requestExec(command)) return false
+            var headerParsed = false
+            var totalBytes = -1L
+            var downloaded = 0L
+            val headerBuf = java.io.ByteArrayOutputStream()
+            for (chunk in channel.stdout) {
+                currentCoroutineContext().ensureActive()
+                if (!headerParsed) {
+                    val nlIdx = chunk.indexOf('\n'.code.toByte())
+                    if (nlIdx < 0) {
+                        headerBuf.write(chunk)
+                        if (headerBuf.size() > 1024) return false
+                        continue
+                    }
+                    headerBuf.write(chunk, 0, nlIdx)
+                    val headerLine = headerBuf.toString(Charsets.UTF_8.name()).trim()
+                    if (!headerLine.startsWith("SIZE:")) {
+                        Timber.w("downloadFile remote error for %s: %s", trimmed, headerLine)
+                        return false
+                    }
+                    totalBytes = headerLine.removePrefix("SIZE:").trim().toLongOrNull() ?: return false
+                    headerParsed = true
+                    onProgress(0L, totalBytes)
+                    val remaining = chunk.size - (nlIdx + 1)
+                    if (remaining > 0) {
+                        output.write(chunk, nlIdx + 1, remaining)
+                        downloaded += remaining
+                        onProgress(downloaded, totalBytes)
+                    }
+                } else {
+                    output.write(chunk)
+                    downloaded += chunk.size
+                    onProgress(downloaded, totalBytes)
+                }
+            }
+            output.flush()
+            headerParsed && totalBytes >= 0L && downloaded == totalBytes
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            Timber.w(e, "downloadFile failed: %s", trimmed)
+            false
         } finally {
             channel.close()
         }
