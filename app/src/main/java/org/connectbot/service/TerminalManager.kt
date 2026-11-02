@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.attache.tailscale.TailscaleManager
 import org.connectbot.R
 import org.connectbot.data.ColorSchemeRepository
 import org.connectbot.data.HostRepository
@@ -325,6 +326,8 @@ class TerminalManager :
 
         connectivityMonitor = ConnectivityMonitor(this, lockingWifi)
         connectivityMonitor.init()
+
+        TailscaleManager.init(this)
 
         scope.launch(dispatchers.main) { CryptoProviderState.ensureLoaded(this@TerminalManager, dispatchers) }
     }
@@ -1034,6 +1037,7 @@ class TerminalManager :
      */
     fun onConnectivityLost(network: Network, lostIpAddresses: Set<String>) {
         Timber.d("Network lost ($network) - checking bridges for impact")
+        TailscaleManager.onHostNetworkChanged()
         scope.launch(dispatchers.io) {
             synchronized(_bridges) {
                 for (bridge in _bridges) {
@@ -1051,6 +1055,7 @@ class TerminalManager :
      */
     fun onConnectivityRestored() {
         Timber.d("Network restored - checking IP addresses for grace period bridges")
+        TailscaleManager.onHostNetworkChanged()
         scope.launch(dispatchers.io) {
             val newNetworkInfo = connectivityMonitor.getCurrentNetworkInfo()
 

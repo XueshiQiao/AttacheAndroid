@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,6 +52,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import org.attache.tailscale.TailscaleDialog
+import org.attache.tailscale.TailscaleManager
 import org.connectbot.terminal.TerminalDimensions
 import timber.log.Timber
 import java.util.UUID
@@ -317,9 +320,15 @@ fun AttacheSidebar(
     onDismiss: (() -> Unit)? = null,
 ) {
     val state by control.state.collectAsState()
+    val tsState by TailscaleManager.uiState.collectAsState()
     val scope = rememberCoroutineScope()
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
+    var showTailscaleDialog by remember { mutableStateOf(false) }
     val palette = if (isDark) DarkRailPalette else LightRailPalette
+
+    if (showTailscaleDialog) {
+        TailscaleDialog(onDismiss = { showTailscaleDialog = false })
+    }
 
     Row(modifier = modifier.fillMaxHeight().testTag("attacheSidebar")) {
         Column(
@@ -577,6 +586,57 @@ fun AttacheSidebar(
                         }
                     }
                 }
+            }
+
+            HorizontalDivider(thickness = 1.dp, color = palette.divider)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(palette.headerBg)
+                    .clickable { showTailscaleDialog = true }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .testTag("tmuxSidebarTailscale"),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    val tsDotColor = when {
+                        !tsState.enabled -> palette.faint
+                        tsState.status.running -> palette.goodGreen
+                        else -> palette.accentBlue
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(tsDotColor),
+                    )
+                    val tsSubtitle = when {
+                        !tsState.enabled -> "Tailscale: Off"
+                        tsState.status.running && tsState.status.selfIpv4.isNotEmpty() ->
+                            "TS ${tsState.status.selfIpv4}"
+                        tsState.status.running -> "Tailscale: Online"
+                        tsState.status.backendState == "NeedsLogin" -> "Tailscale: Needs Login"
+                        else -> "Tailscale: ${tsState.status.backendState}"
+                    }
+                    Text(
+                        text = tsSubtitle,
+                        color = palette.text,
+                        fontSize = 11.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = "⚙",
+                    color = palette.muted,
+                    fontSize = 12.sp,
+                )
             }
         }
         // Right border line

@@ -37,6 +37,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.attache.tailscale.TailscaleManager
 import org.connectbot.R
 import org.connectbot.data.entity.Host
 import org.connectbot.data.entity.KeyStorageType
@@ -114,6 +115,28 @@ open class SSH : AbsTransport {
 
     @Volatile
     private var localIpAddress: String? = null
+
+    private val tailscaleForwarderPorts = mutableSetOf<Int>()
+
+    @Volatile
+    private var routedViaTailscale = false
+
+    private suspend fun resolveDialEndpoint(targetHost: Host): Pair<String, Int> {
+        if (TailscaleManager.shouldRouteViaTailscale(targetHost.hostname)) {
+            val localPort = TailscaleManager.openForwarder(targetHost.hostname, targetHost.port)
+            if (localPort > 0) {
+                synchronized(tailscaleForwarderPorts) {
+                    tailscaleForwarderPorts.add(localPort)
+                }
+                routedViaTailscale = true
+                bridge?.outputLine("Routing ${targetHost.hostname}:${targetHost.port} via embedded Tailscale (tsnet)...")
+                return "127.0.0.1" to localPort
+            } else {
+                bridge?.outputLine("Tailscale (tsnet) not ready (code $localPort); falling back to direct connection...")
+            }
+        }
+        return targetHost.hostname to targetHost.port
+    }
 
     @Volatile
     private var lastConnectionInfo: ConnectionInfo? = null
@@ -994,6 +1017,11 @@ open class SSH : AbsTransport {
         bridge?.outputLine(manager?.res?.getString(R.string.terminal_connecting_via_jump, jumpHost.nickname))
 
         val policy = resolveCryptoPolicy(jumpHost, dispatchers) ?: return null
+        val (dialJumpHost, dialJumpPort) = if (jumpTransportFactory == null) {
+            resolveDialEndpoint(jumpHost)
+        } else {
+            jumpHost.hostname to jumpHost.port
+        }
         val config = SshClientConfig {
             // Interactive host-key approval and slow servers must not have a fixed deadline.
             handshakeTimeoutMs = 0L
@@ -1002,13 +1030,13 @@ open class SSH : AbsTransport {
             if (jumpTransportFactory != null) {
                 this.transportFactory = jumpTransportFactory
             } else {
-                this.host = jumpHost.hostname
-                this.port = jumpHost.port
+                this.host = dialJumpHost
+                this.port = dialJumpPort
             }
             this.hostKeyAlgorithms = policyHostKeyOrder(jumpHost, policy)
             this.hostKeyVerifier = ConnectBotHostKeyVerifier(jumpHost)
             this.enableCompression = jumpHost.compression
-            this.ipVersion = parseIpVersion(jumpHost.ipVersion, jumpHost.hostname)
+            this.ipVersion = if (dialJumpHost == "127.0.0.1") IpVersion.IPV4_ONLY else parseIpVersion(jumpHost.ipVersion, jumpHost.hostname)
         }
 
         jumpFailureReason = DisconnectReason.IO_ERROR
@@ -1206,6 +1234,11 @@ open class SSH : AbsTransport {
             onDisconnect()
             return
         }
+        val (dialHost, dialPort) = if (transportFactory == null) {
+            resolveDialEndpoint(currentHost)
+        } else {
+            currentHost.hostname to currentHost.port
+        }
         val config = SshClientConfig {
             // Interactive host-key approval and slow servers must not have a fixed deadline.
             handshakeTimeoutMs = 0L
@@ -1214,13 +1247,13 @@ open class SSH : AbsTransport {
             if (transportFactory != null) {
                 this.transportFactory = transportFactory
             } else {
-                this.host = currentHost.hostname
-                this.port = currentHost.port
+                this.host = dialHost
+                this.port = dialPort
             }
             this.hostKeyAlgorithms = policyHostKeyOrder(currentHost, policy)
             this.hostKeyVerifier = ConnectBotHostKeyVerifier(currentHost)
             this.enableCompression = compressionEnabled
-            this.ipVersion = parseIpVersion(currentHost.ipVersion, currentHost.hostname)
+            this.ipVersion = if (dialHost == "127.0.0.1") IpVersion.IPV4_ONLY else parseIpVersion(currentHost.ipVersion, currentHost.hostname)
             // The bridge owns teardown after the session's output has been read.
             // Mosh also needs its launcher channel to close without ending the handoff.
             this.autoDisconnectOnLastChannelClose = false
@@ -1362,6 +1395,11 @@ open class SSH : AbsTransport {
             } catch (ignored: Exception) {
             }
         }
+        val forwardersToClose = synchronized(tailscaleForwarderPorts) {
+            tailscaleForwarderPorts.toList().also { tailscaleForwarderPorts.clear() }
+        }
+        forwardersToClose.forEach { TailscaleManager.closeForwarder(it) }
+        routedViaTailscale = false
     }
 
     protected open fun onDisconnect(reason: DisconnectReason = DisconnectReason.IO_ERROR) {
@@ -1775,6 +1813,8 @@ open class SSH : AbsTransport {
     }
 
     override fun usesNetwork(): Boolean = true
+
+    override fun resetOnConnectionChange(): Boolean = !routedViaTailscale
 
     override fun getLocalIpAddress(): String? = localIpAddress
 

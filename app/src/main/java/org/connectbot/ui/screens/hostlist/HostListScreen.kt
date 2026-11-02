@@ -89,6 +89,8 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.attache.tailscale.TailscaleDialog
+import org.attache.tailscale.TailscaleStatusBadge
 import org.connectbot.R
 import org.connectbot.data.EntityIds
 import org.connectbot.data.JsonImportReader
@@ -303,7 +305,12 @@ fun HostListScreenContent(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDisconnectAllDialog by remember { mutableStateOf(false) }
+    var showTailscaleDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    if (showTailscaleDialog) {
+        TailscaleDialog(onDismiss = { showTailscaleDialog = false })
+    }
 
     // Show snackbar when there's an error
     LaunchedEffect(uiState.error) {
@@ -322,6 +329,10 @@ fun HostListScreenContent(
                 title = { Text(stringResource(R.string.app_name)) },
                 actions = {
                     if (!makingShortcut) {
+                        TailscaleStatusBadge(
+                            onClick = { showTailscaleDialog = true },
+                            modifier = Modifier.padding(end = 4.dp),
+                        )
                         IconButton(onClick = { showMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.button_more_options))
                         }
