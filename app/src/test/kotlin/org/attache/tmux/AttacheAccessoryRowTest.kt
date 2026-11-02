@@ -47,6 +47,7 @@ class AttacheAccessoryRowTest {
             exec = { null },
         )
         var interactions = 0
+        var textInputClicked = false
         var imagePicked = false
         var cleared = false
 
@@ -54,7 +55,7 @@ class AttacheAccessoryRowTest {
             ConnectBotTheme {
                 AttacheAccessoryRow(
                     control = control,
-                    onTextInput = {},
+                    onTextInput = { textInputClicked = true },
                     onPaste = {},
                     onSendSlashCommand = {},
                     slashMenuOpen = false,
@@ -72,10 +73,12 @@ class AttacheAccessoryRowTest {
 
         composeTestRule.onNodeWithTag("accessoryPreviousWindow").assertDoesNotExist()
         composeTestRule.onNodeWithTag("accessoryNextWindow").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("accessoryTextInput").assertIsDisplayed().performClick()
         composeTestRule.onNodeWithTag("accessoryImage").assertIsDisplayed().performClick()
         composeTestRule.onNodeWithTag("accessoryClear").assertIsDisplayed().performClick()
         composeTestRule.runOnIdle {
-            assertEquals(2, interactions)
+            assertEquals(3, interactions)
+            assertTrue(textInputClicked)
             assertTrue(imagePicked)
             assertTrue(cleared)
         }

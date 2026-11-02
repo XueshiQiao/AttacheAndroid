@@ -365,6 +365,12 @@ class TerminalBridge {
      */
     var onTextInputRequest: (() -> Unit)? = null
 
+    /**
+     * Callback invoked on the main thread when Enter/Return is sent from keyboard/IME input,
+     * allowing the active console screen to auto-hide the software keyboard after submitting.
+     */
+    var onEnterKeySent: (() -> Unit)? = null
+
     private val _transportMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val transportMessages: SharedFlow<String> = _transportMessages.asSharedFlow()
 
@@ -505,6 +511,11 @@ class TerminalBridge {
             defaultBackground = Color(defaultBgColor),
             onKeyboardInput = { data ->
                 enqueueTransportOperation(TransportOperation.WriteData(data, keyboard = true), semanticInputConnection)
+                if (data.isNotEmpty() && (data.last() == '\r'.code.toByte() || data.last() == '\n'.code.toByte())) {
+                    Handler(Looper.getMainLooper()).post {
+                        onEnterKeySent?.invoke()
+                    }
+                }
             },
             onBell = {
                 // Attaché: tmux with `monitor-activity on` + `visual-activity off`

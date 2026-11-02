@@ -14,8 +14,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -28,13 +32,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -181,11 +193,16 @@ fun AttacheToolbarStyleDialog(
 /**
  * Wraps BOTH [AttacheAccessoryRow] and the lower `TerminalKeyboard` row into a
  * unified container matching either Scheme B (Terminal Deck) or Scheme D (Copilot Dock).
+ * When [inlineInputActive] is true, the two button rows are replaced in-place by an
+ * inline voice/text input box with a bottom-right Send button.
  */
 @Composable
 fun AttacheToolbarContainer(
     modifier: Modifier = Modifier,
     isDark: Boolean = isSystemInDarkTheme(),
+    inlineInputActive: Boolean = false,
+    onDismissInlineInput: () -> Unit = {},
+    onSendInlineText: (String) -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val context = LocalContext.current
@@ -208,8 +225,18 @@ fun AttacheToolbarContainer(
                     .background(containerBg)
                     .border(width = 0.5.dp, color = containerBorder)
                     .padding(horizontal = 5.dp, vertical = 4.dp),
-                content = content,
-            )
+            ) {
+                if (inlineInputActive) {
+                    InlineVoiceTextInputBar(
+                        style = style,
+                        isDark = isDark,
+                        onDismiss = onDismissInlineInput,
+                        onSend = onSendInlineText,
+                    )
+                } else {
+                    content()
+                }
+            }
         }
         AttacheToolbarStyle.COPILOT_DOCK -> {
             val outerBackdrop = if (isDark) Color(0xFF090C10) else Color(0xFFF3F2EE)
@@ -234,10 +261,147 @@ fun AttacheToolbarContainer(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 5.dp, vertical = 5.dp),
-                        content = content,
-                    )
+                    ) {
+                        if (inlineInputActive) {
+                            InlineVoiceTextInputBar(
+                                style = style,
+                                isDark = isDark,
+                                onDismiss = onDismissInlineInput,
+                                onSend = onSendInlineText,
+                            )
+                        } else {
+                            content()
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun InlineVoiceTextInputBar(
+    style: AttacheToolbarStyle,
+    isDark: Boolean,
+    onDismiss: () -> Unit,
+    onSend: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    val isTerminalDeck = style == AttacheToolbarStyle.TERMINAL_DECK
+    val boxShape = if (isTerminalDeck) RoundedCornerShape(6.dp) else RoundedCornerShape(12.dp)
+    val boxBg = when {
+        isTerminalDeck && isDark -> Color(0xFF121720)
+        isTerminalDeck && !isDark -> Color(0xFFFFFFFF)
+        isDark -> Color(0xFF0F141E)
+        else -> Color(0xFFF1F5F9)
+    }
+    val boxBorder = when {
+        isTerminalDeck && isDark -> Color(0xFF30363D)
+        isTerminalDeck && !isDark -> Color(0xFFCBD5E1)
+        isDark -> Color(0x3358A6FF)
+        else -> Color(0x332563EB)
+    }
+    val textColor = if (isDark) Color(0xFFE6EDF3) else Color(0xFF0F172A)
+    val hintColor = if (isDark) Color(0xFF8B949E) else Color(0xFF64748B)
+    val accentBg = when {
+        isTerminalDeck && isDark -> Color(0xFF238636)
+        isTerminalDeck && !isDark -> Color(0xFF16A34A)
+        isDark -> Color(0xFF2563EB)
+        else -> Color(0xFF2563EB)
+    }
+
+    Row(
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 72.dp, max = 128.dp)
+            .clip(boxShape)
+            .background(boxBg)
+            .border(1.dp, boxBorder, boxShape)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .testTag("inlineVoiceInputBar"),
+    ) {
+        // Top-left / Left collapse button
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .align(Alignment.Top)
+                .size(28.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (isDark) Color(0x1AFFFFFF) else Color(0x140F172A))
+                .clickable { onDismiss() }
+                .testTag("inlineInputCollapse"),
+        ) {
+            Text(
+                text = "✕",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = hintColor,
+            )
+        }
+
+        // Center multi-line voice/text input field
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = 58.dp, max = 114.dp)
+                .padding(vertical = 2.dp),
+        ) {
+            if (text.isEmpty()) {
+                Text(
+                    text = "直接用键盘语音说话或输入内容…",
+                    color = hintColor,
+                    fontSize = 13.5.sp,
+                )
+            }
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it },
+                textStyle = TextStyle(
+                    color = textColor,
+                    fontSize = 14.sp,
+                    fontFamily = if (isTerminalDeck) FontFamily.Monospace else FontFamily.Default,
+                ),
+                cursorBrush = SolidColor(if (isDark) Color(0xFF58A6FF) else Color(0xFF2563EB)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .testTag("inlineInputField"),
+            )
+        }
+
+        // Bottom-right Send button
+        val canSend = text.isNotEmpty()
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .height(34.dp)
+                .clip(if (isTerminalDeck) RoundedCornerShape(5.dp) else RoundedCornerShape(999.dp))
+                .background(if (canSend) accentBg else accentBg.copy(alpha = 0.38f))
+                .clickable(enabled = canSend) {
+                    val toSend = text
+                    text = ""
+                    onSend(toSend)
+                }
+                .padding(horizontal = 14.dp)
+                .testTag("inlineInputSend"),
+        ) {
+            Text(
+                text = "发送 ↵",
+                color = Color.White,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = if (isTerminalDeck) FontFamily.Monospace else FontFamily.Default,
+            )
         }
     }
 }
@@ -340,7 +504,18 @@ fun AttacheAccessoryRow(
                     .height(35.dp)
                     .testTag("attacheAccessoryRow"),
             ) {
-                // 1. /cmd (Slash menu)
+                // 1. Top-left Voice/Text Input toggle
+                TerminalDeckKey(
+                    label = "🎤说",
+                    textColor = amberText,
+                    borderColor = amberBorder,
+                    bgColor = amberBg,
+                    tag = "accessoryTextInput",
+                    onClick = { onInteraction(); onTextInput() },
+                    modifier = Modifier.weight(0.95f),
+                )
+
+                // 2. /cmd (Slash menu)
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     TerminalDeckKey(
                         label = "/cmd",
@@ -358,7 +533,7 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 2. tmux (Pane / Window actions)
+                // 3. tmux (Pane / Window actions)
                 TmuxActionsButton(
                     control = control,
                     expanded = tmuxMenuOpen,
@@ -377,7 +552,7 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 3. +img (Send image)
+                // 4. +img (Send image)
                 TerminalDeckKey(
                     label = "+img",
                     textColor = defaultKeyText,
@@ -388,7 +563,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f),
                 )
 
-                // 4. inbox (File Inbox)
+                // 5. inbox (File Inbox)
                 TerminalDeckKey(
                     label = "inbox",
                     textColor = defaultKeyText,
@@ -396,10 +571,10 @@ fun AttacheAccessoryRow(
                     bgColor = defaultKeyBg,
                     tag = "accessoryFileInbox",
                     onClick = { onInteraction(); onOpenFileInbox() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1.05f),
                 )
 
-                // 5. copy (Extract pane text)
+                // 6. copy (Extract pane text)
                 TerminalDeckKey(
                     label = "copy",
                     textColor = defaultKeyText,
@@ -410,7 +585,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f),
                 )
 
-                // 6. paste (Clipboard paste)
+                // 7. paste (Clipboard paste)
                 TerminalDeckKey(
                     label = "paste",
                     textColor = greenText,
@@ -418,18 +593,7 @@ fun AttacheAccessoryRow(
                     bgColor = greenBg,
                     tag = "accessoryPaste",
                     onClick = { onInteraction(); onPaste() },
-                    modifier = Modifier.weight(1f),
-                )
-
-                // 7. ^C (Interrupt)
-                TerminalDeckKey(
-                    label = "^C",
-                    textColor = amberText,
-                    borderColor = amberBorder,
-                    bgColor = amberBg,
-                    tag = "accessoryTextInput",
-                    onClick = { onInteraction(); onInterrupt() },
-                    modifier = Modifier.weight(0.85f),
+                    modifier = Modifier.weight(1.05f),
                 )
 
                 // 8. ^U (Clear input line)
@@ -440,7 +604,7 @@ fun AttacheAccessoryRow(
                     bgColor = redBg,
                     tag = "accessoryClear",
                     onClick = { onInteraction(); onClearInput() },
-                    modifier = Modifier.weight(0.85f),
+                    modifier = Modifier.weight(0.8f),
                 )
             }
         }
@@ -454,10 +618,20 @@ fun AttacheAccessoryRow(
                     .height(34.dp)
                     .testTag("attacheAccessoryRow"),
             ) {
-                // 1. ✦ /指令
-                Box(Modifier.weight(1.12f).fillMaxHeight()) {
+                // 1. Top-left Voice/Text Input toggle
+                CopilotDockChip(
+                    label = "🎤说",
+                    isAiAccent = true,
+                    isDark = isDark,
+                    tag = "accessoryTextInput",
+                    onClick = { onInteraction(); onTextInput() },
+                    modifier = Modifier.weight(0.95f),
+                )
+
+                // 2. ✦ /指令
+                Box(Modifier.weight(1f).fillMaxHeight()) {
                     CopilotDockChip(
-                        label = "✦ /指令",
+                        label = "/指令",
                         isAiAccent = true,
                         isDark = isDark,
                         tag = "accessorySlash",
@@ -471,43 +645,43 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 2. 🖼 传图
+                // 3. 🖼 传图
                 CopilotDockChip(
-                    label = "🖼 传图",
+                    label = "🖼图",
                     isDark = isDark,
                     tag = "accessoryImage",
                     onClick = { onInteraction(); onPickImage() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(0.95f),
                 )
 
-                // 3. 📂 收件箱
+                // 4. 📂 文件
                 CopilotDockChip(
-                    label = "📂 文件",
+                    label = "📂文件",
                     isDark = isDark,
                     tag = "accessoryFileInbox",
                     onClick = { onInteraction(); onOpenFileInbox() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1.05f),
                 )
 
-                // 4. 📋 提取
+                // 5. 📋 提取
                 CopilotDockChip(
-                    label = "📋 提取",
+                    label = "📋复制",
                     isDark = isDark,
                     tag = "accessoryCopy",
                     onClick = { onInteraction(); onCopyText() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1.05f),
                 )
 
-                // 5. 📥 粘贴
+                // 6. 📥 粘贴
                 CopilotDockChip(
-                    label = "📥 粘贴",
+                    label = "📥粘贴",
                     isDark = isDark,
                     tag = "accessoryPaste",
                     onClick = { onInteraction(); onPaste() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1.05f),
                 )
 
-                // 6. ⊞ 窗格
+                // 7. ⊞ 窗格
                 TmuxActionsButton(
                     control = control,
                     expanded = tmuxMenuOpen,
@@ -516,7 +690,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 ) { onClick ->
                     CopilotDockChip(
-                        label = "⊞ 窗格",
+                        label = "⊞窗格",
                         isDark = isDark,
                         tag = "tmuxActions",
                         onClick = onClick,
@@ -524,14 +698,14 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 7. ⌫ 清空
+                // 8. ⌫ 清空
                 CopilotDockChip(
-                    label = "⌫ 清空",
+                    label = "⌫清",
                     isDanger = true,
                     isDark = isDark,
                     tag = "accessoryClear",
                     onClick = { onInteraction(); onClearInput() },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(0.9f),
                 )
             }
         }

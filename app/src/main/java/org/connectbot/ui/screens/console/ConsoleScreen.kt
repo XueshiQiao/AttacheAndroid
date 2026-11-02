@@ -454,11 +454,26 @@ private fun ConsoleTerminalPage(
     modifier: Modifier = Modifier,
     terminalModifier: Modifier = Modifier,
     isDarkTheme: Boolean = true,
+    inlineInputActive: Boolean = false,
+    onDismissInlineInput: () -> Unit = {},
+    onSendInlineText: (String) -> Unit = {},
     accessoryRow: (@Composable () -> Unit)? = null,
 ) {
     val keyboardDensity = LocalDensity.current
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val localView = androidx.compose.ui.platform.LocalView.current
     var keyboardHeight by remember { mutableStateOf(0.dp) }
     var consoleHeight by remember { mutableStateOf(480.dp) }
+    val hideSoftKeyboard = remember(keyboardController, localView, onShowSoftwareKeyboardChange) {
+        {
+            onShowSoftwareKeyboardChange(false)
+            keyboardController?.hide()
+            localView.context
+                .getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                ?.hideSoftInputFromWindow(localView.windowToken, 0)
+            Unit
+        }
+    }
     Box(modifier = modifier.onSizeChanged { consoleHeight = with(keyboardDensity) { it.height.toDp() } }) {
         val fontResult = rememberTerminalTypefaceResultFromStoredValue(bridge.fontFamily)
         val coroutineScope = rememberCoroutineScope()
@@ -492,7 +507,7 @@ private fun ConsoleTerminalPage(
             typeface = fontResult.typeface,
             initialFontSize = fontSize.sp,
             keyboardEnabled = true,
-            showSoftKeyboard = showSoftwareKeyboard && isActive,
+            showSoftKeyboard = showSoftwareKeyboard && isActive && !inlineInputActive,
             resizeSuspended = resizeSuspended,
             focusRequester = termFocusRequester,
             forcedSize = forceSize,
@@ -529,11 +544,12 @@ private fun ConsoleTerminalPage(
 
         SideEffect {
             bridge.onTextInputRequest = onTextInputRequest
+            bridge.onEnterKeySent = if (isActive) hideSoftKeyboard else null
         }
 
         if (isActive) {
             AnimatedVisibility(
-                visible = showExtraKeyboard,
+                visible = showExtraKeyboard || inlineInputActive,
                 enter = fadeIn(animationSpec = tween(durationMillis = 100)),
                 exit = fadeOut(animationSpec = tween(durationMillis = 100)),
                 modifier = Modifier
@@ -545,6 +561,15 @@ private fun ConsoleTerminalPage(
                 // for both.
                 AttacheToolbarContainer(
                     isDark = isDarkTheme,
+                    inlineInputActive = inlineInputActive,
+                    onDismissInlineInput = {
+                        hideSoftKeyboard()
+                        onDismissInlineInput()
+                    },
+                    onSendInlineText = { text ->
+                        hideSoftKeyboard()
+                        onSendInlineText(text)
+                    },
                     modifier = Modifier.onSizeChanged { keyboardHeight = with(keyboardDensity) { it.height.toDp() } },
                 ) {
                     accessoryRow?.invoke()
@@ -553,7 +578,7 @@ private fun ConsoleTerminalPage(
                         bridge = bridge,
                         onInteraction = { handleTerminalInteraction() },
                         onHideIme = {
-                            onShowSoftwareKeyboardChange(false)
+                            hideSoftKeyboard()
                         },
                         onShowIme = {
                             onShowSoftwareKeyboardChange(true)
@@ -825,7 +850,7 @@ fun ConsoleScreen(
 
     // Check if any modal (menu or dialog) is currently active
     val anyModalActive = showKeyboardSettings || showToolbarStyleDialog || showMenu || showTmuxMenu || showSlashMenu || showCopyTextDialog || showFileInboxDialog || showImagePicker || showUrlScanDialog || showResizeDialog ||
-        showDisconnectDialog || showSessionPickerDialog || showTextInputDialog || showConnectionInfoDialog ||
+        showDisconnectDialog || showSessionPickerDialog || showConnectionInfoDialog ||
         portraitDrawerOpen || isBiometricPromptActive || currentAuthBanner != null
 
     fun restartTitleBarTimer() {
@@ -1445,6 +1470,25 @@ fun ConsoleScreen(
                                         modifier = Modifier.fillMaxSize(),
                                         terminalModifier = terminalModifier,
                                         isDarkTheme = isDarkTheme,
+                                        inlineInputActive = showTextInputDialog,
+                                        onDismissInlineInput = {
+                                            showTextInputDialog = false
+                                            showSoftwareKeyboard = false
+                                            termFocusRequester.requestFocus()
+                                        },
+                                        onSendInlineText = { sent ->
+                                            composeController?.clearComposeBuffer()
+                                            if (sent.isNotEmpty()) {
+                                                bridge.injectString(sent)
+                                            }
+                                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                                                { bridge.injectString("\r") },
+                                                80L,
+                                            )
+                                            showTextInputDialog = false
+                                            showSoftwareKeyboard = false
+                                            termFocusRequester.requestFocus()
+                                        },
                                         accessoryRow = pageTmuxControl?.let { control ->
                                             {
                                                 // Menus open and close the way the overflow menu
@@ -1859,18 +1903,10 @@ fun ConsoleScreen(
             )
         }
 
-        if (showTextInputDialog && promptState == null && currentBridge != null) {
-            // TODO: Get selected text from TerminalEmulator when selection is implemented
-            val selectedText = ""
-
-            FloatingTextInputDialog(
-                bridge = currentBridge,
-                initialText = selectedText,
-                onDismiss = {
-                    showTextInputDialog = false
-                    termFocusRequester.requestFocus()
-                },
-            )
+        BackHandler(enabled = showTextInputDialog) {
+            showTextInputDialog = false
+            showSoftwareKeyboard = false
+            termFocusRequester.requestFocus()
         }
 
         // Overlay TopAppBar - always visible when titleBarHide is false,
