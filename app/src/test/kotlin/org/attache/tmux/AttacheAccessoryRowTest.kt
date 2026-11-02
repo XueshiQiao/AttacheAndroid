@@ -128,6 +128,7 @@ class AttacheAccessoryRowTest {
         val hostId = UUID(0, 42)
         var selectedHost: UUID? = null
         var dismissed = false
+        var themeToggled = false
 
         composeTestRule.setContent {
             ConnectBotTheme {
@@ -144,13 +145,17 @@ class AttacheAccessoryRowTest {
                     ),
                     onSelectHost = { selectedHost = it },
                     onDismiss = { dismissed = true },
+                    isDark = false,
+                    onToggleTheme = { themeToggled = true },
                 )
             }
         }
 
         composeTestRule.onNodeWithTag("attacheSidebar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tmuxSidebarThemeToggle").assertIsDisplayed().performClick()
         composeTestRule.onNodeWithTag("attacheHost-$hostId").assertIsDisplayed().performClick()
         composeTestRule.runOnIdle {
+            assertTrue(themeToggled)
             assertEquals(hostId, selectedHost)
             assertTrue(dismissed)
         }

@@ -1563,11 +1563,75 @@ class TerminalBridge {
         setFontSize(fontSizeSp - FONT_SIZE_STEP, false)
     }
 
+    fun updateFontSizeSp(sizeSp: Float) {
+        setFontSize(sizeSp.coerceIn(8f, 32f), false)
+    }
+
+    fun applyThemeAppearance(isDark: Boolean) {
+        if (isDark) {
+            val fgColor = fullColorPalette.getOrElse(defaultFg) { 0xFFCCCCCC.toInt() }
+            val bgColor = fullColorPalette.getOrElse(defaultBg) { 0xFF000000.toInt() }
+            val ansi = if (fullColorPalette.size >= 16) {
+                fullColorPalette.sliceArray(0 until 16)
+            } else {
+                ATTACHE_DARK_ANSI_COLORS
+            }
+            terminalEmulator.applyColorScheme(ansi, fgColor, bgColor)
+        } else {
+            terminalEmulator.applyColorScheme(
+                ATTACHE_LIGHT_ANSI_COLORS,
+                ATTACHE_LIGHT_FG,
+                ATTACHE_LIGHT_BG,
+            )
+        }
+    }
+
     companion object {
         const val TAG = "CB.TerminalBridge"
 
         private const val DEFAULT_FONT_SIZE_SP = 10
         private const val FONT_SIZE_STEP = 2
+
+        private const val ATTACHE_LIGHT_BG = 0xFFFAF9F5.toInt()
+        private const val ATTACHE_LIGHT_FG = 0xFF1F2328.toInt()
+
+        private val ATTACHE_LIGHT_ANSI_COLORS = intArrayOf(
+            0xFF1F2328.toInt(), // 0: black
+            0xFFCF222E.toInt(), // 1: red
+            0xFF1A7F37.toInt(), // 2: green
+            0xFF9A6700.toInt(), // 3: yellow/amber
+            0xFF0969DA.toInt(), // 4: blue
+            0xFF8250DF.toInt(), // 5: magenta
+            0xFF1B7C83.toInt(), // 6: cyan
+            0xFF24292F.toInt(), // 7: white (mapped to dark slate for legibility on light bg)
+            0xFF57606A.toInt(), // 8: bright black (dim grey)
+            0xFFA40E26.toInt(), // 9: bright red
+            0xFF116329.toInt(), // 10: bright green
+            0xFF7D4E00.toInt(), // 11: bright yellow
+            0xFF0550AE.toInt(), // 12: bright blue
+            0xFF6639BA.toInt(), // 13: bright magenta
+            0xFF0969DA.toInt(), // 14: bright cyan
+            0xFF1F2328.toInt(), // 15: bright white (mapped to deep charcoal on light bg)
+        )
+
+        private val ATTACHE_DARK_ANSI_COLORS = intArrayOf(
+            0xFF000000.toInt(),
+            0xFFCC0000.toInt(),
+            0xFF00CC00.toInt(),
+            0xFFCCCC00.toInt(),
+            0xFF0000CC.toInt(),
+            0xFFCC00CC.toInt(),
+            0xFF00CCCC.toInt(),
+            0xFFCCCCCC.toInt(),
+            0xFF444444.toInt(),
+            0xFFFF4444.toInt(),
+            0xFF44FF44.toInt(),
+            0xFFFFFF44.toInt(),
+            0xFF4444FF.toInt(),
+            0xFFFF44FF.toInt(),
+            0xFF44FFFF.toInt(),
+            0xFFFFFFFF.toInt(),
+        )
     }
 }
 

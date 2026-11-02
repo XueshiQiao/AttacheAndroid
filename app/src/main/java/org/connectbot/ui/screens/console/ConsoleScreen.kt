@@ -697,6 +697,21 @@ fun ConsoleScreen(
     var landscapeSidebarOpen by rememberSaveable { mutableStateOf(true) }
     var portraitDrawerOpen by rememberSaveable { mutableStateOf(false) }
 
+    var themeMode by remember {
+        mutableStateOf(org.connectbot.util.ThemeMode.fromString(prefs.getString(PreferenceConstants.THEME_MODE, null)))
+    }
+    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val isDarkTheme = when (themeMode) {
+        org.connectbot.util.ThemeMode.LIGHT -> false
+        org.connectbot.util.ThemeMode.DARK -> true
+        org.connectbot.util.ThemeMode.SYSTEM -> systemDark
+    }
+    fun toggleTheme() {
+        val next = if (isDarkTheme) org.connectbot.util.ThemeMode.LIGHT else org.connectbot.util.ThemeMode.DARK
+        themeMode = next
+        prefs.edit { putString(PreferenceConstants.THEME_MODE, next.name) }
+    }
+
     LaunchedEffect(isLandscape) {
         if (isLandscape && portraitDrawerOpen) {
             portraitDrawerOpen = false
@@ -739,6 +754,27 @@ fun ConsoleScreen(
     val currentBridge = uiState.bridges
         .getOrNull(uiState.currentBridgeIndex)
     val currentBridgeId = currentBridge?.host?.id
+    val currentTmuxControl by (currentBridge?.tmuxControl ?: noTmuxControl).collectAsState()
+
+    LaunchedEffect(currentBridge, isDarkTheme) {
+        currentBridge?.applyThemeAppearance(isDarkTheme)
+    }
+
+    LaunchedEffect(currentBridge, currentTmuxControl != null) {
+        val bridge = currentBridge ?: return@LaunchedEffect
+        if (currentTmuxControl != null) {
+            val savedFontSize = prefs.getFloat("attache_font_size_sp", 14f)
+            bridge.updateFontSizeSp(savedFontSize)
+        }
+    }
+
+    fun changeFontSize(delta: Float) {
+        val bridge = currentBridge ?: return
+        val current = bridge.fontSizeFlow.value.takeIf { it > 0f } ?: 14f
+        val next = (current + delta).coerceIn(8f, 32f)
+        bridge.updateFontSizeSp(next)
+        prefs.edit { putFloat("attache_font_size_sp", next) }
+    }
     var showKeyboardSettings by rememberSaveable(currentBridgeId) { mutableStateOf(false) }
     var showConnectionInfoDialog by remember(currentBridgeId) { mutableStateOf(false) }
     val automationState by currentBridge?.automationState?.collectAsState()
@@ -1184,8 +1220,8 @@ fun ConsoleScreen(
                 volumeKeysChangeFontSize = volumeKeysChangeFontSize,
                 copySelection = { selectionController?.copySelection() },
                 pasteClipboardContents = { pasteClipboardContents() },
-                increaseFontSize = { currentBridge?.increaseFontSize() },
-                decreaseFontSize = { currentBridge?.decreaseFontSize() },
+                increaseFontSize = { changeFontSize(1f) },
+                decreaseFontSize = { changeFontSize(-1f) },
             )
         }
 
@@ -1268,6 +1304,8 @@ fun ConsoleScreen(
                                         control = control,
                                         hosts = hostEntries,
                                         onSelectHost = ::selectHostFromSidebar,
+                                        isDark = isDarkTheme,
+                                        onToggleTheme = ::toggleTheme,
                                         modifier = Modifier.fillMaxHeight(),
                                     )
                                 }
@@ -1483,6 +1521,8 @@ fun ConsoleScreen(
                                     control = control,
                                     hosts = hostEntries,
                                     onSelectHost = ::selectHostFromSidebar,
+                                    isDark = isDarkTheme,
+                                    onToggleTheme = ::toggleTheme,
                                     onDismiss = {
                                         portraitDrawerOpen = false
                                         termFocusRequester.requestFocus()
@@ -1625,7 +1665,7 @@ fun ConsoleScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 },
-                expandedHeight = if (tmuxControl != null) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
+                expandedHeight = if (tmuxControl != null) 34.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
                 modifier = Modifier
                     .testTag("top_app_bar")
                     .onSizeChanged {
@@ -1649,6 +1689,30 @@ fun ConsoleScreen(
                     TopAppBarDefaults.topAppBarColors()
                 },
                 actions = {
+                    if (tmuxControl != null) {
+                        TextButton(
+                            onClick = { changeFontSize(-2f) },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier.testTag("title_bar_font_decrease"),
+                        ) {
+                            Text("A-", fontSize = 12.sp)
+                        }
+                        TextButton(
+                            onClick = { changeFontSize(2f) },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier.testTag("title_bar_font_increase"),
+                        ) {
+                            Text("A+", fontSize = 12.sp)
+                        }
+                        TextButton(
+                            onClick = { toggleTheme() },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier.testTag("title_bar_theme_toggle"),
+                        ) {
+                            Text(if (isDarkTheme) "☀️" else "🌙", fontSize = 13.sp)
+                        }
+                    }
+
                     if (hasMultipleSessions) {
                         IconButton(onClick = { showSessionPickerDialog = true }) {
                             Icon(

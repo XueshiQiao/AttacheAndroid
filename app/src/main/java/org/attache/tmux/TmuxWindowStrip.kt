@@ -256,20 +256,51 @@ data class AttacheHostEntry(
     val current: Boolean,
 )
 
-private val RailBg = Color(0xFF1E1F22)
-private val RailHeaderBg = Color(0xFF18191B)
-private val RailEdge = Color(0xFF2C2E33)
-private val RailDivider = Color(0xFF27292E)
-private val RailActiveHostBg = Color(0xFF282B31)
-private val RailAccentBlue = Color(0xFF4E7FB8)
-private val RailText = Color(0xFFE3E3E6)
-private val RailMuted = Color(0xFF9A9CA3)
-private val RailFaint = Color(0xFF686A70)
-private val RailGoodGreen = Color(0xFF5FBF7F)
+private data class RailPalette(
+    val bg: Color,
+    val headerBg: Color,
+    val edge: Color,
+    val divider: Color,
+    val activeHostBg: Color,
+    val accentBlue: Color,
+    val text: Color,
+    val muted: Color,
+    val faint: Color,
+    val goodGreen: Color,
+    val buttonBorder: Color,
+)
+
+private val DarkRailPalette = RailPalette(
+    bg = Color(0xFF1E1F22),
+    headerBg = Color(0xFF18191B),
+    edge = Color(0xFF2C2E33),
+    divider = Color(0xFF27292E),
+    activeHostBg = Color(0xFF282B31),
+    accentBlue = Color(0xFF4E7FB8),
+    text = Color(0xFFE3E3E6),
+    muted = Color(0xFF9A9CA3),
+    faint = Color(0xFF686A70),
+    goodGreen = Color(0xFF5FBF7F),
+    buttonBorder = Color(0xFF32353C),
+)
+
+private val LightRailPalette = RailPalette(
+    bg = Color(0xFFF3F2EE),
+    headerBg = Color(0xFFEBE9E3),
+    edge = Color(0xFFDDDAD0),
+    divider = Color(0xFFE2DFD5),
+    activeHostBg = Color(0xFFE5E2D8),
+    accentBlue = Color(0xFF3B6EA8),
+    text = Color(0xFF1F1E1C),
+    muted = Color(0xFF52504B),
+    faint = Color(0xFF7D7971),
+    goodGreen = Color(0xFF2E7D47),
+    buttonBorder = Color(0xFFD0CCC0),
+)
 
 /**
  * Unified Attaché sidebar component used in both orientations:
- * - In landscape mode, docked on the left side of the terminal (`216.dp` wide).
+ * - In landscape mode, docked on the left side of the terminal (`224.dp` wide).
  * - In portrait mode, slides out from the left edge as a drawer when the top bar
  *   session/window button is tapped.
  *
@@ -281,18 +312,21 @@ fun AttacheSidebar(
     hosts: List<AttacheHostEntry>,
     onSelectHost: (UUID) -> Unit,
     modifier: Modifier = Modifier,
+    isDark: Boolean = true,
+    onToggleTheme: (() -> Unit)? = null,
     onDismiss: (() -> Unit)? = null,
 ) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
+    val palette = if (isDark) DarkRailPalette else LightRailPalette
 
     Row(modifier = modifier.fillMaxHeight().testTag("attacheSidebar")) {
         Column(
             modifier = Modifier
-                .width(if (onDismiss != null) 248.dp else 216.dp)
+                .width(if (onDismiss != null) 256.dp else 224.dp)
                 .fillMaxHeight()
-                .background(RailBg),
+                .background(palette.bg),
         ) {
             // Top bar of the sidebar
             Row(
@@ -300,13 +334,13 @@ fun AttacheSidebar(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(42.dp)
-                    .background(RailHeaderBg)
+                    .height(36.dp)
+                    .background(palette.headerBg)
                     .padding(horizontal = 10.dp),
             ) {
                 Text(
                     text = "ATTACHÉ",
-                    color = RailMuted,
+                    color = palette.muted,
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 0.6.sp,
@@ -315,20 +349,36 @@ fun AttacheSidebar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    if (onToggleTheme != null) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(5.dp))
+                                .border(1.dp, palette.buttonBorder, RoundedCornerShape(5.dp))
+                                .clickable { onToggleTheme() }
+                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                .testTag("tmuxSidebarThemeToggle"),
+                        ) {
+                            Text(
+                                text = if (isDark) "☀️" else "🌙",
+                                color = palette.text,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(5.dp))
-                            .border(1.dp, Color(0xFF32353C), RoundedCornerShape(5.dp))
+                            .border(1.dp, palette.buttonBorder, RoundedCornerShape(5.dp))
                             .clickable {
                                 onDismiss?.invoke()
                                 scope.tmuxAction("new-window") { control.newWindow() }
                             }
-                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                            .padding(horizontal = 7.dp, vertical = 2.dp)
                             .testTag("tmuxSidebarNewWindow"),
                     ) {
                         Text(
                             text = "+ Window",
-                            color = RailText,
+                            color = palette.text,
                             fontSize = 11.sp,
                         )
                     }
@@ -336,21 +386,21 @@ fun AttacheSidebar(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(5.dp))
-                                .border(1.dp, Color(0xFF32353C), RoundedCornerShape(5.dp))
+                                .border(1.dp, palette.buttonBorder, RoundedCornerShape(5.dp))
                                 .clickable { onDismiss() }
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                                .padding(horizontal = 7.dp, vertical = 2.dp)
                                 .testTag("tmuxSidebarClose"),
                         ) {
                             Text(
                                 text = "✕",
-                                color = RailMuted,
+                                color = palette.muted,
                                 fontSize = 11.sp,
                             )
                         }
                     }
                 }
             }
-            HorizontalDivider(thickness = 1.dp, color = RailDivider)
+            HorizontalDivider(thickness = 1.dp, color = palette.divider)
 
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
@@ -363,8 +413,8 @@ fun AttacheSidebar(
                     item(key = "header-hosts") {
                         Text(
                             text = "HOSTS (主机)",
-                            color = RailFaint,
-                            fontSize = 10.sp,
+                            color = palette.faint,
+                            fontSize = 10.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             letterSpacing = 0.6.sp,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -377,7 +427,7 @@ fun AttacheSidebar(
                                 .fillMaxWidth()
                                 .padding(vertical = 1.dp)
                                 .clip(RoundedCornerShape(6.dp))
-                                .background(if (host.current) RailActiveHostBg else Color.Transparent)
+                                .background(if (host.current) palette.activeHostBg else Color.Transparent)
                                 .clickable {
                                     onDismiss?.invoke()
                                     onSelectHost(host.id)
@@ -389,14 +439,14 @@ fun AttacheSidebar(
                                 modifier = Modifier
                                     .size(7.dp)
                                     .clip(CircleShape)
-                                    .background(if (host.connected) RailGoodGreen else RailFaint),
+                                    .background(if (host.connected) palette.goodGreen else palette.faint),
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = host.name,
-                                    color = if (host.current) RailText else RailMuted,
-                                    fontSize = 12.5.sp,
+                                    color = if (host.current) palette.text else palette.muted,
+                                    fontSize = 13.5.sp,
                                     fontWeight = if (host.current) FontWeight.SemiBold else FontWeight.Normal,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -404,8 +454,8 @@ fun AttacheSidebar(
                                 if (host.subtitle.isNotBlank()) {
                                     Text(
                                         text = host.subtitle,
-                                        color = RailFaint,
-                                        fontSize = 10.5.sp,
+                                        color = palette.faint,
+                                        fontSize = 11.sp,
                                         fontFamily = FontFamily.Monospace,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -417,7 +467,7 @@ fun AttacheSidebar(
                     item(key = "divider-hosts") {
                         HorizontalDivider(
                             thickness = 1.dp,
-                            color = RailDivider,
+                            color = palette.divider,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
                         )
                     }
@@ -426,8 +476,8 @@ fun AttacheSidebar(
                 item(key = "header-sessions") {
                     Text(
                         text = "SESSIONS & WINDOWS",
-                        color = RailFaint,
-                        fontSize = 10.sp,
+                        color = palette.faint,
+                        fontSize = 10.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         letterSpacing = 0.6.sp,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -464,15 +514,15 @@ fun AttacheSidebar(
                             ) {
                                 Text(
                                     text = if (isCollapsed) "▸" else "▾",
-                                    color = RailFaint,
-                                    fontSize = 10.sp,
+                                    color = palette.faint,
+                                    fontSize = 10.5.sp,
                                 )
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = session.name.uppercase(),
-                                color = if (isCurrentSession) RailText else RailMuted,
-                                fontSize = 11.sp,
+                                color = if (isCurrentSession) palette.text else palette.muted,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.5.sp,
                                 maxLines = 1,
@@ -481,8 +531,8 @@ fun AttacheSidebar(
                             )
                             Text(
                                 text = "${session.windows.size}",
-                                color = RailFaint,
-                                fontSize = 10.5.sp,
+                                color = palette.faint,
+                                fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
                             )
                         }
@@ -497,18 +547,18 @@ fun AttacheSidebar(
                                     .fillMaxWidth()
                                     .padding(start = 4.dp, top = 1.dp, bottom = 1.dp)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(if (here) RailAccentBlue else Color.Transparent)
+                                    .background(if (here) palette.accentBlue else Color.Transparent)
                                     .clickable {
                                         onDismiss?.invoke()
                                         scope.tmuxAction("switch-client") { control.switchTo(window.id) }
                                     }
-                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
                                     .testTag("tmuxSessionWindow-${window.id}"),
                             ) {
                                 Text(
                                     text = "${window.index}",
-                                    color = if (here) Color.White.copy(alpha = 0.8f) else RailFaint,
-                                    fontSize = 11.sp,
+                                    color = if (here) Color.White.copy(alpha = 0.85f) else palette.faint,
+                                    fontSize = 11.5.sp,
                                     fontFamily = FontFamily.Monospace,
                                     textAlign = TextAlign.End,
                                     modifier = Modifier.width(18.dp),
@@ -516,8 +566,8 @@ fun AttacheSidebar(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = window.name,
-                                    color = if (here) Color.White else RailMuted,
-                                    fontSize = 12.5.sp,
+                                    color = if (here) Color.White else palette.muted,
+                                    fontSize = 13.5.sp,
                                     fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -534,7 +584,7 @@ fun AttacheSidebar(
             modifier = Modifier
                 .width(1.dp)
                 .fillMaxHeight()
-                .background(RailEdge),
+                .background(palette.edge),
         )
     }
 }
@@ -556,17 +606,19 @@ fun TmuxSessionsButton(
     val window = state.windows.firstOrNull { it.active }
     TextButton(
         onClick = { onClick?.invoke() },
-        modifier = modifier.testTag("tmuxSessions"),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        modifier = modifier.height(30.dp).testTag("tmuxSessions"),
     ) {
         val sessionText = if (isLandscape) {
             "◧ " + (current?.name ?: "tmux")
         } else {
             (current?.name ?: "tmux") + " ▾"
         }
-        Text(sessionText, maxLines = 1, softWrap = false)
+        Text(sessionText, fontSize = 13.sp, maxLines = 1, softWrap = false)
         if (window != null) {
             Text(
                 "  ${window.index}: ${window.name}",
+                fontSize = 13.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
