@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -34,6 +35,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +59,8 @@ import androidx.preference.PreferenceManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * Visual and ergonomic style applied to BOTH the upper Attaché action row
@@ -526,6 +530,8 @@ fun AttacheAccessoryRow(
     onDismissTmuxMenu: () -> Unit,
     onInteraction: () -> Unit,
     modifier: Modifier = Modifier,
+    recentMenuOpen: Boolean = false,
+    onToggleRecentMenu: () -> Unit = {},
     onPickImage: () -> Unit = {},
     onOpenFileInbox: () -> Unit = {},
     onCopyText: () -> Unit = {},
@@ -542,12 +548,22 @@ fun AttacheAccessoryRow(
     }
     val style by AttacheToolbarPrefs.styleFlow.collectAsState()
     val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
+    val state by control.state.collectAsState()
+    val recentCount = state.recentWindows.size.coerceAtLeast(1)
 
     when (style) {
         AttacheToolbarStyle.TERMINAL_DECK -> {
             val defaultKeyBg = if (isDark) Color(0xFF121720) else Color(0xFFFFFFFF)
             val defaultKeyBorder = if (isDark) Color(0xFF2B323C) else Color(0xFFCBD5E1)
             val defaultKeyText = if (isDark) Color(0xFFC9D1D9) else Color(0xFF1E293B)
+
+            val skyText = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+            val skyBorder = if (recentMenuOpen) skyText else if (isDark) Color(0x6638BDF8) else Color(0xFF7DD3FC)
+            val skyBg = if (recentMenuOpen) {
+                if (isDark) Color(0x2E38BDF8) else Color(0xFFBAE6FD)
+            } else {
+                if (isDark) Color(0x1838BDF8) else Color(0xFFE0F2FE)
+            }
 
             val cyanText = if (isDark) Color(0xFF58A6FF) else Color(0xFF1D4ED8)
             val cyanBorder = if (isDark) Color(0x6658A6FF) else Color(0xFF93C5FD)
@@ -567,7 +583,7 @@ fun AttacheAccessoryRow(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
                 modifier = modifier
                     .fillMaxWidth()
                     .height(35.dp)
@@ -584,7 +600,18 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
-                // 2. /cmd (Slash menu)
+                // 2. Plan A Recent 5 Windows Popover button
+                TerminalDeckKey(
+                    label = if (iconOnly) "🕘$recentCount" else "🕘${recentCount}▾",
+                    textColor = skyText,
+                    borderColor = skyBorder,
+                    bgColor = skyBg,
+                    tag = "accessoryRecentWindows",
+                    onClick = { onInteraction(); onToggleRecentMenu() },
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
+                )
+
+                // 3. /cmd (Slash menu)
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     TerminalDeckKey(
                         label = if (iconOnly) "/" else "/cmd",
@@ -602,7 +629,7 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 3. tmux (Pane / Window actions)
+                // 4. tmux (Pane / Window actions)
                 TmuxActionsButton(
                     control = control,
                     expanded = tmuxMenuOpen,
@@ -621,7 +648,7 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 4. +img (Send image)
+                // 5. +img (Send image)
                 TerminalDeckKey(
                     label = if (iconOnly) "🖼" else "+img",
                     textColor = defaultKeyText,
@@ -632,7 +659,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f),
                 )
 
-                // 5. inbox (File Inbox)
+                // 6. inbox (File Inbox)
                 TerminalDeckKey(
                     label = if (iconOnly) "📂" else "inbox",
                     textColor = defaultKeyText,
@@ -643,7 +670,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
                 )
 
-                // 6. copy (Extract pane text)
+                // 7. copy (Extract pane text)
                 TerminalDeckKey(
                     label = if (iconOnly) "📋" else "copy",
                     textColor = defaultKeyText,
@@ -654,7 +681,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f),
                 )
 
-                // 7. paste (Clipboard paste)
+                // 8. paste (Clipboard paste)
                 TerminalDeckKey(
                     label = if (iconOnly) "📥" else "paste",
                     textColor = greenText,
@@ -665,7 +692,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
                 )
 
-                // 8. ^U (Clear input line)
+                // 9. ^U (Clear input line)
                 TerminalDeckKey(
                     label = if (iconOnly) "⌫" else "^U",
                     textColor = redText,
@@ -681,7 +708,7 @@ fun AttacheAccessoryRow(
         AttacheToolbarStyle.COPILOT_DOCK -> {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
                 modifier = modifier
                     .fillMaxWidth()
                     .height(34.dp)
@@ -697,7 +724,18 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
-                // 2. ✦ /指令
+                // 2. Plan A Recent 5 Windows Popover button
+                CopilotDockChip(
+                    label = if (iconOnly) "🕘$recentCount" else "🕘${recentCount}▾",
+                    isSkyAccent = true,
+                    isActive = recentMenuOpen,
+                    isDark = isDark,
+                    tag = "accessoryRecentWindows",
+                    onClick = { onInteraction(); onToggleRecentMenu() },
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
+                )
+
+                // 3. ✦ /指令
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     CopilotDockChip(
                         label = if (iconOnly) "/" else "/指令",
@@ -714,43 +752,43 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 3. 🖼 传图
+                // 4. 🖼 传图
                 CopilotDockChip(
                     label = if (iconOnly) "🖼" else "🖼图",
                     isDark = isDark,
                     tag = "accessoryImage",
                     onClick = { onInteraction(); onPickImage() },
-                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.9f),
                 )
 
-                // 4. 📂 文件
+                // 5. 📂 文件
                 CopilotDockChip(
-                    label = if (iconOnly) "📂" else "📂文件",
+                    label = if (iconOnly) "📂" else "📂收",
                     isDark = isDark,
                     tag = "accessoryFileInbox",
                     onClick = { onInteraction(); onOpenFileInbox() },
-                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
-                // 5. 📋 提取
+                // 6. 📋 提取
                 CopilotDockChip(
-                    label = if (iconOnly) "📋" else "📋复制",
+                    label = if (iconOnly) "📋" else "📋取",
                     isDark = isDark,
                     tag = "accessoryCopy",
                     onClick = { onInteraction(); onCopyText() },
-                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
-                // 6. 📥 粘贴
+                // 7. 📥 粘贴
                 CopilotDockChip(
-                    label = if (iconOnly) "📥" else "📥粘贴",
+                    label = if (iconOnly) "📥" else "📥贴",
                     isDark = isDark,
                     tag = "accessoryPaste",
                     onClick = { onInteraction(); onPaste() },
-                    modifier = Modifier.weight(if (iconOnly) 1f else 1.05f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
-                // 7. ⊞ 窗格
+                // 8. ⊞ 窗格
                 TmuxActionsButton(
                     control = control,
                     expanded = tmuxMenuOpen,
@@ -759,7 +797,7 @@ fun AttacheAccessoryRow(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 ) { onClick ->
                     CopilotDockChip(
-                        label = if (iconOnly) "⊞" else "⊞窗格",
+                        label = if (iconOnly) "⊞" else "⊞窗",
                         isDark = isDark,
                         tag = "tmuxActions",
                         onClick = onClick,
@@ -767,15 +805,220 @@ fun AttacheAccessoryRow(
                     )
                 }
 
-                // 8. ⌫ 清空
+                // 9. ⌫ 清空
                 CopilotDockChip(
                     label = if (iconOnly) "⌫" else "⌫清",
                     isDanger = true,
                     isDark = isDark,
                     tag = "accessoryClear",
                     onClick = { onInteraction(); onClearInput() },
-                    modifier = Modifier.weight(if (iconOnly) 1f else 0.9f),
+                    modifier = Modifier.weight(if (iconOnly) 1f else 0.85f),
                 )
+            }
+        }
+    }
+}
+
+private val SESSION_BADGE_COLORS = listOf(
+    Color(0xFF0284C7), // Sky Blue (Dev)
+    Color(0xFF0D9488), // Teal (Daily)
+    Color(0xFFD97706), // Amber (Video)
+    Color(0xFF7C3AED), // Purple
+    Color(0xFFE11D48), // Rose
+)
+
+private fun sessionBadgeColor(sessionName: String): Color {
+    val lower = sessionName.lowercase()
+    return when {
+        lower.contains("dev") -> SESSION_BADGE_COLORS[0]
+        lower.contains("daily") -> SESSION_BADGE_COLORS[1]
+        lower.contains("video") -> SESSION_BADGE_COLORS[2]
+        else -> SESSION_BADGE_COLORS[abs(sessionName.hashCode()) % SESSION_BADGE_COLORS.size]
+    }
+}
+
+internal fun formatRecentVisitedTime(nowMs: Long, visitedMs: Long): String {
+    val diffSec = ((nowMs - visitedMs) / 1000L).coerceAtLeast(0L)
+    return when {
+        diffSec < 45L -> "刚刚"
+        diffSec < 3600L -> "${diffSec / 60L} 分钟前"
+        diffSec < 86400L -> "${diffSec / 3600L} 小时前"
+        else -> "${diffSec / 86400L} 天前"
+    }
+}
+
+/**
+ * Plan A (方案 A：底部上浮气泡菜单 Floating Popover Card):
+ * Pops up directly above the bottom toolbar when `[🕘 5▾]` is tapped,
+ * displaying up to 5 most-recently visited windows across all tmux sessions
+ * for effortless one-thumb switching.
+ */
+@Composable
+fun TmuxRecentWindowsPopover(
+    control: TmuxControl,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    isDark: Boolean = isSystemInDarkTheme(),
+) {
+    val state by control.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    val nowMs = remember(state.recentWindows) { System.currentTimeMillis() }
+
+    val items = remember(state.recentWindows, state.sessions, state.sessionId, state.windows) {
+        if (state.recentWindows.isNotEmpty()) {
+            state.recentWindows.take(MAX_RECENT_WINDOWS)
+        } else {
+            val currentSessionName = state.sessions.firstOrNull { it.id == state.sessionId }?.name ?: "tmux"
+            state.windows.take(MAX_RECENT_WINDOWS).map { w ->
+                TmuxRecentWindow(
+                    sessionName = currentSessionName,
+                    windowId = w.id,
+                    windowIndex = w.index,
+                    windowName = w.name,
+                    lastVisitedMs = nowMs,
+                )
+            }
+        }
+    }
+
+    val cardBg = if (isDark) Color(0xF7111827) else Color(0xFAFFFFFF)
+    val cardBorder = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val headerTextColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val accentColor = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+    val dividerColor = if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)
+
+    fun selectItem(item: TmuxRecentWindow) {
+        onDismiss()
+        scope.launch {
+            try {
+                control.selectRecentWindow(item)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = cardBg,
+        border = BorderStroke(1.5.dp, cardBorder),
+        shadowElevation = 16.dp,
+        tonalElevation = 8.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("tmuxRecentWindowsPopover"),
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier.padding(13.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = "🕘 最近访问的 5 个窗口 (跨 Session)",
+                    color = headerTextColor,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (items.size >= 2) {
+                    Text(
+                        text = "⇄ 再点秒切上一窗口",
+                        color = accentColor,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { selectItem(items[1]) }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("tmuxRecentQuickFlip"),
+                    )
+                }
+            }
+
+            HorizontalDivider(thickness = 1.dp, color = dividerColor)
+
+            if (items.isEmpty()) {
+                Text(
+                    text = "正在同步 tmux 窗口列表…",
+                    color = headerTextColor,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                )
+            } else {
+                items.forEachIndexed { index, item ->
+                    val isCurrent = index == 0
+                    val isPrevious = index == 1
+                    val rowBg = when {
+                        isCurrent -> if (isDark) Color(0x2438BDF8) else Color(0xFFE0F2FE)
+                        else -> if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9)
+                    }
+                    val rowBorder = when {
+                        isCurrent -> accentColor
+                        isPrevious -> accentColor.copy(alpha = 0.45f)
+                        else -> if (isDark) Color(0xFF2D3B4E) else Color(0xFFCBD5E1)
+                    }
+                    val titleColor = if (isDark) Color(0xFFF8FAFC) else Color(0xFF0F172A)
+                    val rightText = when {
+                        isCurrent -> "● 当前窗口"
+                        isPrevious -> "${formatRecentVisitedTime(nowMs, item.lastVisitedMs)} · 上一窗口"
+                        else -> formatRecentVisitedTime(nowMs, item.lastVisitedMs)
+                    }
+                    val rightColor = if (isCurrent || isPrevious) accentColor else headerTextColor
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(rowBg)
+                            .border(1.dp, rowBorder, RoundedCornerShape(12.dp))
+                            .clickable { selectItem(item) }
+                            .padding(horizontal = 13.dp, vertical = 10.dp)
+                            .testTag("tmuxRecentItem-$index"),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(sessionBadgeColor(item.sessionName))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                            ) {
+                                Text(
+                                    text = item.sessionName,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                )
+                            }
+                            Text(
+                                text = "${item.windowIndex}: ${item.windowName}",
+                                color = titleColor,
+                                fontSize = 15.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            text = rightText,
+                            color = rightColor,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -850,23 +1093,36 @@ private fun CopilotDockChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isAiAccent: Boolean = false,
+    isSkyAccent: Boolean = false,
+    isActive: Boolean = false,
     isDanger: Boolean = false,
     isDark: Boolean = true,
 ) {
     val shape = RoundedCornerShape(50)
     val borderColor = when {
+        isSkyAccent && isActive -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
+        isSkyAccent -> if (isDark) Color(0x7338BDF8) else Color(0x660284C7)
         isAiAccent -> if (isDark) Color(0x73818CF8) else Color(0x664F46E5)
         isDark -> Color(0x16FFFFFF)
         else -> Color(0x140F172A)
     }
     val textColor = when {
+        isSkyAccent -> if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7)
         isAiAccent -> if (isDark) Color(0xFFA5B4FC) else Color(0xFF4338CA)
         isDanger -> if (isDark) Color(0xFFF87171) else Color(0xFFDC2626)
         isDark -> Color(0xFFE6EDF3)
         else -> Color(0xFF1E293B)
     }
-    val bgModifier = if (isAiAccent) {
-        Modifier.background(
+    val bgModifier = when {
+        isSkyAccent -> Modifier.background(
+            color = if (isActive) {
+                if (isDark) Color(0x3838BDF8) else Color(0xFFBAE6FD)
+            } else {
+                if (isDark) Color(0x1F38BDF8) else Color(0xFFE0F2FE)
+            },
+            shape = shape,
+        )
+        isAiAccent -> Modifier.background(
             brush = Brush.linearGradient(
                 colors = if (isDark) {
                     listOf(Color(0x476366F1), Color(0x473B82F6))
@@ -876,8 +1132,7 @@ private fun CopilotDockChip(
             ),
             shape = shape,
         )
-    } else {
-        Modifier.background(
+        else -> Modifier.background(
             color = if (isDark) Color(0x0FFFFFFF) else Color(0x0D0F172A),
             shape = shape,
         )
@@ -889,18 +1144,18 @@ private fun CopilotDockChip(
             .fillMaxHeight()
             .clip(shape)
             .then(bgModifier)
-            .border(1.dp, borderColor, shape)
+            .border(if (isActive) 1.5.dp else 1.dp, borderColor, shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp)
+            .padding(horizontal = 3.dp)
             .testTag(tag),
     ) {
         Text(
             text = label,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 11.sp,
+            fontSize = 10.5.sp,
             color = textColor,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            overflow = TextOverflow.Clip,
         )
     }
 }

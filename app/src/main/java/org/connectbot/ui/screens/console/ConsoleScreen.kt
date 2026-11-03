@@ -127,6 +127,7 @@ import org.attache.tmux.AttacheToolbarPrefs
 import org.attache.tmux.AttacheToolbarStyleDialog
 import org.attache.tmux.FileDownloadProgress
 import org.attache.tmux.TmuxCopyTextDialog
+import org.attache.tmux.TmuxRecentWindowsPopover
 import org.attache.tmux.sendAgentCommand
 import org.attache.tmux.tmuxTouch
 import androidx.compose.ui.Modifier
@@ -528,6 +529,7 @@ private fun ConsoleTerminalPage(
     onDismissInlineInput: () -> Unit = {},
     onSendInlineText: (String) -> Unit = {},
     accessoryRow: (@Composable () -> Unit)? = null,
+    recentWindowsPopover: (@Composable (androidx.compose.ui.unit.Dp) -> Unit)? = null,
 ) {
     val keyboardDensity = LocalDensity.current
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -675,6 +677,10 @@ private fun ConsoleTerminalPage(
                     )
                 }
             }
+
+            recentWindowsPopover?.invoke(
+                if (showExtraKeyboard || inlineInputActive) keyboardHeight else 0.dp,
+            )
 
             val promptState by bridge.promptManager.promptState.collectAsState()
 
@@ -863,6 +869,7 @@ fun ConsoleScreen(
     var menuImeWasVisible by remember { mutableStateOf(false) }
     var showTmuxMenu by remember { mutableStateOf(false) }
     var showSlashMenu by remember { mutableStateOf(false) }
+    var showRecentWindowsPopover by remember { mutableStateOf(false) }
     var showCopyTextDialog by remember { mutableStateOf(false) }
     var showFileInboxDialog by remember { mutableStateOf(false) }
     var showToolbarStyleDialog by remember { mutableStateOf(false) }
@@ -1646,6 +1653,17 @@ fun ConsoleScreen(
                                                         showTmuxMenu = false
                                                         termFocusRequester.requestFocus()
                                                     },
+                                                    recentMenuOpen = showRecentWindowsPopover,
+                                                    onToggleRecentMenu = {
+                                                        if (!showRecentWindowsPopover) {
+                                                            autoHideJobRef.titleBarJob?.cancel()
+                                                            autoHideJobRef.keyboardJob?.cancel()
+                                                            showRecentWindowsPopover = true
+                                                        } else {
+                                                            showRecentWindowsPopover = false
+                                                            termFocusRequester.requestFocus()
+                                                        }
+                                                    },
                                                     onInteraction = { handleTerminalInteraction(resetTitleBarTimer = false) },
                                                     onPickImage = {
                                                         openMenu {
@@ -1678,6 +1696,45 @@ fun ConsoleScreen(
                                                     },
                                                     isDark = isDarkTheme,
                                                 )
+                                            }
+                                        },
+                                        recentWindowsPopover = pageTmuxControl?.let { control ->
+                                            { bottomBarHeight ->
+                                                androidx.compose.animation.AnimatedVisibility(
+                                                    visible = showRecentWindowsPopover,
+                                                    enter = fadeIn(animationSpec = tween(durationMillis = 150)),
+                                                    exit = fadeOut(animationSpec = tween(durationMillis = 120)),
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .padding(bottom = bottomBarHeight),
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .fillMaxSize()
+                                                                .clickable(
+                                                                    interactionSource = remember { MutableInteractionSource() },
+                                                                    indication = null,
+                                                                ) {
+                                                                    showRecentWindowsPopover = false
+                                                                    termFocusRequester.requestFocus()
+                                                                }
+                                                                .testTag("tmuxRecentPopoverScrim"),
+                                                        )
+                                                        TmuxRecentWindowsPopover(
+                                                            control = control,
+                                                            isDark = isDarkTheme,
+                                                            onDismiss = {
+                                                                showRecentWindowsPopover = false
+                                                                termFocusRequester.requestFocus()
+                                                            },
+                                                            modifier = Modifier
+                                                                .align(Alignment.BottomCenter)
+                                                                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                                                        )
+                                                    }
+                                                }
                                             }
                                         },
                                     )

@@ -89,6 +89,101 @@ data class RemoteFileEntry(
     val isDirectory: Boolean = false,
 )
 
+/** A recently visited window across any tmux session on the server (MRU order, max 5). */
+data class TmuxRecentWindow(
+    val sessionName: String,
+    val windowId: String,
+    val windowIndex: Int,
+    val windowName: String,
+    val lastVisitedMs: Long = System.currentTimeMillis(),
+)
+
+internal const val MAX_RECENT_WINDOWS = 5
+
+internal fun updateRecentWindows(
+    existing: List<TmuxRecentWindow>,
+    current: TmuxRecentWindow?,
+    validSessions: List<TmuxSession> = emptyList(),
+    seedFromSessionsIfEmpty: Boolean = false,
+): List<TmuxRecentWindow> {
+    val windowsBySessionName = if (validSessions.isNotEmpty()) {
+        validSessions.associate { s -> s.name to s.windows.associateBy { it.id } }
+    } else {
+        emptyMap()
+    }
+    val pruned = if (windowsBySessionName.isNotEmpty()) {
+        existing.mapNotNull { entry ->
+            val sessionMap = windowsBySessionName[entry.sessionName] ?: return@mapNotNull null
+            val liveWin = sessionMap[entry.windowId] ?: return@mapNotNull null
+            entry.copy(windowIndex = liveWin.index, windowName = liveWin.name)
+        }
+    } else {
+        existing
+    }
+
+    val updated = if (current == null) {
+        pruned.take(MAX_RECENT_WINDOWS)
+    } else {
+        val head = pruned.firstOrNull()
+        if (head != null && head.sessionName == current.sessionName && head.windowId == current.windowId) {
+            buildList {
+                add(head.copy(windowIndex = current.windowIndex, windowName = current.windowName))
+                addAll(pruned.drop(1))
+            }.take(MAX_RECENT_WINDOWS)
+        } else {
+            buildList {
+                add(current)
+                for (item in pruned) {
+                    if (item.windowId != current.windowId) {
+                        add(item)
+                    }
+                }
+            }.take(MAX_RECENT_WINDOWS)
+        }
+    }
+
+    if (!seedFromSessionsIfEmpty || existing.isNotEmpty() || validSessions.isEmpty()) {
+        return updated
+    }
+
+    val result = updated.toMutableList()
+    val seenWindowIds = result.mapTo(hashSetOf()) { it.windowId }
+    val now = current?.lastVisitedMs ?: System.currentTimeMillis()
+    for (s in validSessions) {
+        if (result.size >= MAX_RECENT_WINDOWS) break
+        val activeWin = s.windows.firstOrNull { it.active } ?: continue
+        if (seenWindowIds.add(activeWin.id)) {
+            result += TmuxRecentWindow(
+                sessionName = s.name,
+                windowId = activeWin.id,
+                windowIndex = activeWin.index,
+                windowName = activeWin.name,
+                lastVisitedMs = now - result.size * 60_000L,
+            )
+        }
+    }
+    val orderedSessions = if (current != null) {
+        validSessions.sortedByDescending { it.name == current.sessionName }
+    } else {
+        validSessions
+    }
+    for (s in orderedSessions) {
+        for (w in s.windows) {
+            if (result.size >= MAX_RECENT_WINDOWS) break
+            if (seenWindowIds.add(w.id)) {
+                result += TmuxRecentWindow(
+                    sessionName = s.name,
+                    windowId = w.id,
+                    windowIndex = w.index,
+                    windowName = w.name,
+                    lastVisitedMs = now - result.size * 60_000L,
+                )
+            }
+        }
+    }
+    return result
+}
+
 /** What tmux last reported. Nothing in it is authored here. */
 data class TmuxState(
     /** The session this connection is showing. */
@@ -101,6 +196,8 @@ data class TmuxState(
     val zoomed: Boolean = false,
     /** Current working directory of the active pane, if known. */
     val activePanePath: String = "",
+    /** Up to [MAX_RECENT_WINDOWS] most-recently visited windows across all sessions (index 0 = current). */
+    val recentWindows: List<TmuxRecentWindow> = emptyList(),
 ) {
     val activePane: TmuxPane? get() = panes.firstOrNull { it.active }
 }
@@ -498,8 +595,11 @@ class TmuxControl(
               echo "Queued for Attaché mobile inbox: ${d}ABS"
             done
             TOKEN="${d}(date +%s)-${d}${d}:${d}LAST_ABS"
-            WNAME=${d}(tmux display-message -p '#W' 2>/dev/null)
-            tmux set -g @attache_push "${d}TOKEN" \; rename-window "${d}WNAME" 2>/dev/null || true
+            tmux set -g @attache_push "${d}TOKEN" 2>/dev/null || true
+            for S in ${d}(tmux list-sessions -F '#S' 2>/dev/null); do
+              W=${d}(tmux display-message -p -t "${d}S" '#W' 2>/dev/null)
+              tmux rename-window -t "${d}S" "${d}W" 2>/dev/null || true
+            done
             EOF
             ln -sf "${d}CMD_PATH" /tmp/attache-send 2>/dev/null || true
             export PATH=/opt/homebrew/bin:/usr/local/bin:${d}PATH
@@ -785,6 +885,24 @@ class TmuxControl(
                     )
                 }
             }
+            val currentSessionName = sessions.firstOrNull { it.id == current }?.name
+            val currentRecent = if (currentSessionName != null && active != null) {
+                TmuxRecentWindow(
+                    sessionName = currentSessionName,
+                    windowId = active.id,
+                    windowIndex = active.index,
+                    windowName = active.name,
+                    lastVisitedMs = System.currentTimeMillis(),
+                )
+            } else {
+                null
+            }
+            val recentWindows = updateRecentWindows(
+                existing = _state.value.recentWindows,
+                current = currentRecent,
+                validSessions = sessions,
+                seedFromSessionsIfEmpty = true,
+            )
             _state.value = TmuxState(
                 sessionId = current,
                 sessions = sessions,
@@ -792,17 +910,20 @@ class TmuxControl(
                 panes = panes,
                 zoomed = zoomed,
                 activePanePath = _state.value.activePanePath,
+                recentWindows = recentWindows,
             )
             // Check if the computer queued a file via `attache-send <file>`
             val pushValue = send("show-options -gqv @attache_push").firstOrNull()?.trim().orEmpty()
             if (pushValue.isNotEmpty() && pushValue != lastHandledPushToken) {
+                val isFirstObservation = lastHandledPushToken.isEmpty()
                 lastHandledPushToken = pushValue
-                try {
-                    send("set-option -gu @attache_push")
-                } catch (_: Exception) {
-                }
+                val tokenEpoch = pushValue.substringBefore('-').toLongOrNull()
+                val isStaleOnConnect = isFirstObservation &&
+                    tokenEpoch != null &&
+                    tokenEpoch >= 1_700_000_000L &&
+                    (System.currentTimeMillis() / 1000L - tokenEpoch) > 120L
                 val drained = drainRemotePushQueue()
-                if (drained.isEmpty()) {
+                if (drained.isEmpty() && !isStaleOnConnect) {
                     val colonIdx = pushValue.indexOf(':')
                     val remotePath = if (colonIdx >= 0) pushValue.substring(colonIdx + 1).trim() else pushValue
                     if (remotePath.startsWith("/")) {
@@ -859,6 +980,27 @@ class TmuxControl(
             terminalClient = null // the tty may have been reused; look again next time
             throw e
         }
+    }
+
+    /**
+     * Switches this connection (both terminal and control client) to [item],
+     * whether [item] is in the current session or another session on the server,
+     * and moves [item] to index 0 of [TmuxState.recentWindows].
+     */
+    suspend fun selectRecentWindow(item: TmuxRecentWindow) {
+        require(WINDOW_ID.matches(item.windowId)) { "not a window id: ${item.windowId}" }
+        val currentSession = _state.value.sessions.firstOrNull { it.id == _state.value.sessionId }
+        val updated = updateRecentWindows(
+            existing = _state.value.recentWindows,
+            current = item.copy(lastVisitedMs = System.currentTimeMillis()),
+        )
+        _state.value = _state.value.copy(recentWindows = updated)
+        if (currentSession != null && currentSession.name == item.sessionName) {
+            selectWindow(item.windowId)
+        } else {
+            switchTo(item.windowId)
+        }
+        refreshRequests.trySend(Unit)
     }
 
     /** Throws [TmuxCommandError] when tmux answers `%error`, and

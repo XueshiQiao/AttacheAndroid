@@ -273,4 +273,101 @@ class AttacheAccessoryRowTest {
             assertEquals(1, dismissCount)
         }
     }
+
+    @Test
+    fun updateRecentWindows_maintainsMruOrderMax5AndPrunesClosedWindows() {
+        val w1 = TmuxRecentWindow("Dev", "@1", 1, "claude", 1000L)
+        val w2 = TmuxRecentWindow("Daily", "@2", 1, "agy", 2000L)
+        val w3 = TmuxRecentWindow("Video", "@3", 2, "agy", 3000L)
+        val w4 = TmuxRecentWindow("Dev", "@4", 6, "claude", 4000L)
+        val w5 = TmuxRecentWindow("Daily", "@5", 3, "zsh", 5000L)
+        val w6 = TmuxRecentWindow("Dev", "@6", 9, "htop", 6000L)
+
+        var list = emptyList<TmuxRecentWindow>()
+        list = updateRecentWindows(list, w1)
+        list = updateRecentWindows(list, w2)
+        list = updateRecentWindows(list, w3)
+        list = updateRecentWindows(list, w4)
+        list = updateRecentWindows(list, w5)
+        list = updateRecentWindows(list, w6)
+
+        assertEquals(5, list.size)
+        assertEquals(listOf("@6", "@5", "@4", "@3", "@2"), list.map { it.windowId })
+
+        // Re-visiting @3 moves it to index 0 without duplicates
+        list = updateRecentWindows(list, w3.copy(lastVisitedMs = 7000L))
+        assertEquals(listOf("@3", "@6", "@5", "@4", "@2"), list.map { it.windowId })
+
+        // Visiting the current top window with a renamed title updates in place
+        list = updateRecentWindows(list, w3.copy(windowName = "agy-pro", lastVisitedMs = 8000L))
+        assertEquals("agy-pro", list.first().windowName)
+        assertEquals(listOf("@3", "@6", "@5", "@4", "@2"), list.map { it.windowId })
+
+        // Pruning removes windows whose session or windowId no longer exists
+        val liveSessions = listOf(
+            TmuxSession("\$1", "Video", true, listOf(TmuxWindow("@3", 2, "agy-pro", true))),
+            TmuxSession("\$2", "Daily", false, listOf(TmuxWindow("@2", 1, "agy", true))),
+        )
+        list = updateRecentWindows(list, null, validSessions = liveSessions)
+        assertEquals(listOf("@3", "@2"), list.map { it.windowId })
+    }
+
+    @Test
+    fun recentWindowsPopover_displaysRecentWindowsAndTogglesFromAccessoryRow() {
+        val session = mock(SshSession::class.java)
+        val control = TmuxControl(
+            session = session,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            onEnded = {},
+            exec = { null },
+        )
+        val stateField = TmuxControl::class.java.getDeclaredField("_state").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        val stateFlow = stateField.get(control) as MutableStateFlow<TmuxState>
+        stateFlow.value = TmuxState(
+            sessionId = "\$1",
+            recentWindows = listOf(
+                TmuxRecentWindow("Dev", "@13", 13, "claude", 10_000L),
+                TmuxRecentWindow("Daily", "@1", 1, "agy", 9_000L),
+                TmuxRecentWindow("Video", "@2", 2, "agy", 8_000L),
+            ),
+        )
+
+        var toggled = false
+        var dismissed = false
+        composeTestRule.setContent {
+            ConnectBotTheme {
+                androidx.compose.foundation.layout.Column {
+                    TmuxRecentWindowsPopover(
+                        control = control,
+                        onDismiss = { dismissed = true },
+                    )
+                    AttacheAccessoryRow(
+                        control = control,
+                        onTextInput = {},
+                        onPaste = {},
+                        onSendSlashCommand = {},
+                        slashMenuOpen = false,
+                        onOpenSlashMenu = {},
+                        onDismissSlashMenu = {},
+                        tmuxMenuOpen = false,
+                        onOpenTmuxMenu = {},
+                        onDismissTmuxMenu = {},
+                        recentMenuOpen = true,
+                        onToggleRecentMenu = { toggled = true },
+                        onInteraction = {},
+                    )
+                }
+            }
+        }
+
+        composeTestRule.onNodeWithTag("accessoryRecentWindows").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("tmuxRecentWindowsPopover").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tmuxRecentItem-0").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tmuxRecentItem-1").assertIsDisplayed().performClick()
+        composeTestRule.runOnIdle {
+            assertTrue(toggled)
+            assertTrue(dismissed)
+        }
+    }
 }
