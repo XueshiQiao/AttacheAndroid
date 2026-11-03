@@ -260,6 +260,8 @@ class ConsoleViewModel @Inject constructor(
                             handleInitialSelectionError("Failed to open connection: host not found")
                         }
                     }
+                } else if ((existingBridge.isDisconnected || existingBridge.transport?.isConnected() != true) && !existingBridge.isConnecting) {
+                    terminalManager?.requestReconnect(existingBridge)
                 }
             } catch (e: Exception) {
                 handleInitialSelectionError(e.message ?: "Failed to create connection")
@@ -313,6 +315,13 @@ class ConsoleViewModel @Inject constructor(
         val existingIndex = findBridgeIndex(_uiState.value.bridges, targetHostId)
         if (existingIndex != -1) {
             selectBridge(existingIndex)
+            val existingBridge = _uiState.value.bridges.getOrNull(existingIndex)
+            if (existingBridge != null &&
+                (existingBridge.isDisconnected || existingBridge.transport?.isConnected() != true) &&
+                !existingBridge.isConnecting
+            ) {
+                terminalManager?.requestReconnect(existingBridge)
+            }
             return
         }
         selectedHostId = targetHostId

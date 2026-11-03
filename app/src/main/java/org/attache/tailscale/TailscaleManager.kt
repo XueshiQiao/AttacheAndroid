@@ -275,18 +275,25 @@ object TailscaleManager {
         if (!TsnetNative.isAvailable || !_uiState.value.enabled) {
             return@withContext -1
         }
+        refreshStatusNow()
         val ctx = appContext
         if (ctx != null && !_uiState.value.status.running) {
             val s = _uiState.value
             startInternal(ctx, s.hostname, s.authKey, s.controlUrl)
-            // Wait up to 6 seconds for tsnet backend to reach Running if it's Starting.
-            repeat(12) {
+        }
+        // Wait up to 8 seconds on cold start for tsnet backend to reach Running and acquire its tailnet IP.
+        if (_uiState.value.status.backendState != "Running" || _uiState.value.status.selfIpv4.isBlank()) {
+            for (attempt in 0 until 32) {
                 refreshStatusNow()
-                val st = _uiState.value.status.backendState
-                if (st == "Running" || st == "NeedsLogin" || st == "NeedsMachineAuth") {
-                    return@repeat
+                val status = _uiState.value.status
+                val st = status.backendState
+                if ((st == "Running" && status.selfIpv4.isNotBlank()) ||
+                    st == "NeedsLogin" ||
+                    st == "NeedsMachineAuth"
+                ) {
+                    break
                 }
-                delay(500)
+                delay(250)
             }
         }
         TsnetNative.nativeOpenTcpForwarder(targetHost, targetPort)
@@ -338,7 +345,7 @@ object TailscaleManager {
             while (isActive && _uiState.value.enabled) {
                 refreshStatusNow()
                 val st = _uiState.value.status.backendState
-                val intervalMs = if (st == "Starting" || st == "NeedsLogin") 1500L else 3000L
+                val intervalMs = if (st == "Starting" || st == "NeedsLogin") 1500L else 12000L
                 delay(intervalMs)
             }
         }
@@ -349,7 +356,9 @@ object TailscaleManager {
         val raw = runCatching { TsnetNative.nativeStatusJson() }.getOrDefault("")
         if (raw.isBlank()) return
         val parsed = parseStatusJson(raw)
-        _uiState.update { it.copy(status = parsed) }
+        if (parsed != _uiState.value.status) {
+            _uiState.update { it.copy(status = parsed) }
+        }
     }
 
     internal fun parseStatusJson(raw: String): TailscaleStatus {

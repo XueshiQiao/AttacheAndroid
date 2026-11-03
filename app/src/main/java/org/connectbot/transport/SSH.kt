@@ -1331,38 +1331,74 @@ open class SSH : AbsTransport {
             this.autoDisconnectOnLastChannelClose = false
         }
 
-        client = SshClient(config)
-        client?.let { policyClients[it] = currentHost }
+        val maxConnectAttempts = if (routedViaTailscale) 6 else 1
+        var connectedSuccessfully = false
+        for (attempt in 0 until maxConnectAttempts) {
+            currentCoroutineContext().ensureActive()
+            if (locallyClosed) return
+            client = SshClient(config)
+            client?.let { policyClients[it] = currentHost }
 
-        try {
-            when (val connectResult = client?.connect()) {
-                is ConnectResult.Success -> {
-                    lastConnectionInfo = client?.connectionInfo
-                    updateLocalIpAddress(client)
-                }
+            try {
+                when (val connectResult = client?.connect()) {
+                    is ConnectResult.Success -> {
+                        lastConnectionInfo = client?.connectionInfo
+                        updateLocalIpAddress(client)
+                        connectedSuccessfully = true
+                        break
+                    }
 
-                else -> {
-                    bridge?.outputLine(describeConnectResult(connectResult))
-                    close()
-                    onDisconnect()
-                    return
-                }
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "Problem in SSH connection thread during connect")
-
-            var t: Throwable? = e
-            while (t != null) {
-                val message = t.message
-                if (message != null) {
-                    bridge?.outputLine(message)
-                    if (t is NoRouteToHostException) {
-                        bridge?.outputLine(manager?.res?.getString(R.string.terminal_no_route))
+                    else -> {
+                        val isRetryable = routedViaTailscale &&
+                            attempt < maxConnectAttempts - 1 &&
+                            connectResult !is ConnectResult.HostKeyRejected &&
+                            connectResult !is ConnectResult.AlgorithmMismatch
+                        if (isRetryable) {
+                            if (attempt == 0) {
+                                bridge?.outputLine("Waiting for Tailscale (tsnet) tunnel to warm up...")
+                            }
+                            runCatching { client?.disconnect() }
+                            TailscaleManager.refreshStatusNow()
+                            delay(1200L)
+                            continue
+                        }
+                        bridge?.outputLine(describeConnectResult(connectResult))
+                        close()
+                        onDisconnect()
+                        return
                     }
                 }
-                t = t.cause
-            }
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (routedViaTailscale && attempt < maxConnectAttempts - 1) {
+                    if (attempt == 0) {
+                        bridge?.outputLine("Waiting for Tailscale (tsnet) tunnel to warm up...")
+                    }
+                    runCatching { client?.disconnect() }
+                    TailscaleManager.refreshStatusNow()
+                    delay(1200L)
+                    continue
+                }
+                Timber.e(e, "Problem in SSH connection thread during connect")
 
+                var t: Throwable? = e
+                while (t != null) {
+                    val message = t.message
+                    if (message != null) {
+                        bridge?.outputLine(message)
+                        if (t is NoRouteToHostException) {
+                            bridge?.outputLine(manager?.res?.getString(R.string.terminal_no_route))
+                        }
+                    }
+                    t = t.cause
+                }
+
+                close()
+                onDisconnect()
+                return
+            }
+        }
+        if (!connectedSuccessfully) {
             close()
             onDisconnect()
             return

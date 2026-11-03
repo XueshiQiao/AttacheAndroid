@@ -780,7 +780,11 @@ class TerminalBridge {
             }
         }
         notificationSessionId = java.util.UUID.randomUUID().toString()
-        connecting = true
+        synchronized(this) {
+            disconnected = false
+            connecting = true
+            disconnectReason = DisconnectReason.UNKNOWN
+        }
         manager.notifyBridgeStateChanged()
 
         transport = newTransport

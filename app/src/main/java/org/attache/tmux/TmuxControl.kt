@@ -12,6 +12,7 @@ import androidx.core.graphics.drawable.IconCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
@@ -66,7 +67,8 @@ object TmuxTrial {
     // tmux 3.6a replaces control bytes in replies with `_` — measured over
     // this exact channel: the \u0001 field separators came back as `_` and
     // the window list parsed to nothing.
-    fun controlCommand(t: Target) = "$PATH_SETUP tmux -u ${t.socketArg}-C new-session -A -s '${t.session}'"
+    fun controlCommand(t: Target) =
+        "export $PATH_SETUP; pkill -f '[t]mux -u ${t.socketArg}-C new-session -A -s' 2>/dev/null || true; exec tmux -u ${t.socketArg}-C new-session -A -s '${t.session}'"
 
     fun attachCommand(t: Target) = "export $PATH_SETUP; exec tmux ${t.socketArg}new-session -A -s '${t.session}'"
 }
@@ -300,7 +302,7 @@ class TmuxControl(
                 // `%output` lines on this control channel at all, while keeping
                 // command replies and layout/window notifications intact.
                 try {
-                    send("refresh-client -f no-output")
+                    send("refresh-client -f no-output,ignore-size")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -1034,8 +1036,6 @@ class TmuxControl(
         }
     }
 
-    @Volatile private var lastPublishedShortcutsSignature: String = ""
-
     private fun publishShareShortcuts(sessions: List<TmuxSession>, currentSessionId: String?) {
         val ctx = appContext ?: return
         if (sessions.isEmpty()) return
@@ -1049,46 +1049,48 @@ class TmuxControl(
         if (signature == lastPublishedShortcutsSignature) return
         lastPublishedShortcutsSignature = signature
 
-        runCatching {
-            val newIds = topWindows.mapTo(hashSetOf()) { "$SHORTCUT_ID_PREFIX${it.id}" }
-            val staleIds = ShortcutManagerCompat.getDynamicShortcuts(ctx)
-                .map { it.id }
-                .filter { it.startsWith(SHORTCUT_ID_PREFIX) && it !in newIds }
-            if (staleIds.isNotEmpty()) {
-                ShortcutManagerCompat.removeDynamicShortcuts(ctx, staleIds)
-            }
-            val shareActivityComponent = ComponentName(ctx.packageName, "org.connectbot.ui.AttacheQuickShareActivity")
-            val mainActivityComponent = ComponentName(ctx.packageName, "org.connectbot.ui.MainActivity")
-            topWindows.forEachIndexed { index, window ->
-                val displayName = window.name.ifBlank { "Window ${window.index}" }
-                val icon = createShareShortcutIcon(index, window.index, displayName)
-                val person = Person.Builder()
-                    .setName(displayName)
-                    .setKey(window.id)
-                    .setIcon(icon)
-                    .build()
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    component = shareActivityComponent
-                    type = "text/plain"
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    putExtra(EXTRA_SHARE_WINDOW_ID, window.id)
-                    putExtra(EXTRA_SHARE_SESSION_NAME, targetSession.name)
+        scope.launch(Dispatchers.Default) {
+            runCatching {
+                val newIds = topWindows.mapTo(hashSetOf()) { "$SHORTCUT_ID_PREFIX${it.id}" }
+                val staleIds = ShortcutManagerCompat.getDynamicShortcuts(ctx)
+                    .map { it.id }
+                    .filter { it.startsWith(SHORTCUT_ID_PREFIX) && it !in newIds }
+                if (staleIds.isNotEmpty()) {
+                    ShortcutManagerCompat.removeDynamicShortcuts(ctx, staleIds)
                 }
-                val shortcut = ShortcutInfoCompat.Builder(ctx, "$SHORTCUT_ID_PREFIX${window.id}")
-                    .setActivity(mainActivityComponent)
-                    .setShortLabel(displayName)
-                    .setLongLabel("$displayName (${targetSession.name})")
-                    .setIcon(icon)
-                    .setPerson(person)
-                    .setIntent(shareIntent)
-                    .setCategories(setOf(SHARE_TARGET_CATEGORY))
-                    .setLongLived(true)
-                    .setRank(index)
-                    .build()
-                ShortcutManagerCompat.pushDynamicShortcut(ctx, shortcut)
+                val shareActivityComponent = ComponentName(ctx.packageName, "org.connectbot.ui.AttacheQuickShareActivity")
+                val mainActivityComponent = ComponentName(ctx.packageName, "org.connectbot.ui.MainActivity")
+                topWindows.forEachIndexed { index, window ->
+                    val displayName = window.name.ifBlank { "Window ${window.index}" }
+                    val icon = createShareShortcutIcon(index, window.index, displayName)
+                    val person = Person.Builder()
+                        .setName(displayName)
+                        .setKey(window.id)
+                        .setIcon(icon)
+                        .build()
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        component = shareActivityComponent
+                        type = "text/plain"
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra(EXTRA_SHARE_WINDOW_ID, window.id)
+                        putExtra(EXTRA_SHARE_SESSION_NAME, targetSession.name)
+                    }
+                    val shortcut = ShortcutInfoCompat.Builder(ctx, "$SHORTCUT_ID_PREFIX${window.id}")
+                        .setActivity(mainActivityComponent)
+                        .setShortLabel(displayName)
+                        .setLongLabel("$displayName (${targetSession.name})")
+                        .setIcon(icon)
+                        .setPerson(person)
+                        .setIntent(shareIntent)
+                        .setCategories(setOf(SHARE_TARGET_CATEGORY))
+                        .setLongLived(true)
+                        .setRank(index)
+                        .build()
+                    ShortcutManagerCompat.pushDynamicShortcut(ctx, shortcut)
+                }
+            }.onFailure { e ->
+                Timber.w(e, "Failed to publish Direct Share shortcuts")
             }
-        }.onFailure { e ->
-            Timber.w(e, "Failed to publish Direct Share shortcuts")
         }
     }
 
@@ -1284,6 +1286,7 @@ class TmuxControl(
     }
 
     companion object {
+        @Volatile private var lastPublishedShortcutsSignature: String = ""
         const val SHARE_TARGET_CATEGORY = "me.xueshi.attache.category.SHARE_TARGET"
         const val SHORTCUT_ID_PREFIX = "attache_share_"
         const val EXTRA_SHARE_WINDOW_ID = "attache_share_window_id"
