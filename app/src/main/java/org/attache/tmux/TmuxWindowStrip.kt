@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -29,6 +30,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -356,9 +358,27 @@ fun AttacheSidebar(
     val state by control.state.collectAsState()
     val tsState by TailscaleManager.uiState.collectAsState()
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
+    var hasScrolledToActiveOnOpen by remember { mutableStateOf(false) }
     var showTailscaleDialog by remember { mutableStateOf(false) }
     val palette = if (isDark) DarkRailPalette else LightRailPalette
+
+    LaunchedEffect(state.sessionId, state.sessions.size, hosts.size) {
+        val sid = state.sessionId ?: return@LaunchedEffect
+        if (state.sessions.isEmpty() || hasScrolledToActiveOnOpen) return@LaunchedEffect
+        collapsedSessions[sid] = false
+        val targetIndex = computeActiveWindowScrollIndex(
+            hostsCount = hosts.size,
+            sessions = state.sessions,
+            currentSessionId = sid,
+            collapsedSessions = collapsedSessions,
+        )
+        if (targetIndex != null) {
+            hasScrolledToActiveOnOpen = true
+            listState.scrollToItem((targetIndex - 2).coerceAtLeast(0))
+        }
+    }
 
     if (showTailscaleDialog) {
         TailscaleDialog(onDismiss = { showTailscaleDialog = false })
@@ -446,6 +466,7 @@ fun AttacheSidebar(
             HorizontalDivider(thickness = 1.dp, color = palette.divider)
 
             LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
                 modifier = Modifier
                     .weight(1f)
@@ -712,6 +733,37 @@ fun AttacheSidebar(
                 .background(palette.edge),
         )
     }
+}
+
+internal fun computeActiveWindowScrollIndex(
+    hostsCount: Int,
+    sessions: List<TmuxSession>,
+    currentSessionId: String?,
+    collapsedSessions: Map<String, Boolean>,
+): Int? {
+    if (currentSessionId == null || sessions.isEmpty()) return null
+    var idx = if (hostsCount > 0) hostsCount + 2 else 0
+    idx += 1 // "header-sessions"
+    for (session in sessions) {
+        val isCurrentSession = session.id == currentSessionId
+        val sessionHeaderIdx = idx
+        idx += 1 // "session-${session.id}"
+        val isCollapsed = collapsedSessions[session.id] == true
+        if (!isCollapsed) {
+            if (isCurrentSession) {
+                val activeWinPos = session.windows.indexOfFirst { it.active }
+                return if (activeWinPos >= 0) {
+                    idx + activeWinPos
+                } else {
+                    sessionHeaderIdx
+                }
+            }
+            idx += session.windows.size
+        } else if (isCurrentSession) {
+            return sessionHeaderIdx
+        }
+    }
+    return null
 }
 
 /**

@@ -2052,11 +2052,16 @@ fun ConsoleScreen(
                             isLandscape = isLandscape,
                             onClick = {
                                 if (isLandscape) {
-                                    landscapeSidebarOpen = !landscapeSidebarOpen
+                                    val opening = !landscapeSidebarOpen
+                                    landscapeSidebarOpen = opening
+                                    if (opening) {
+                                        showSoftwareKeyboard = false
+                                        keyboardController?.hide()
+                                    }
                                 } else {
                                     if (!portraitDrawerOpen) {
-                                        menuImeWasVisible = imeVisible
-                                        resizeSuspended = true
+                                        showSoftwareKeyboard = false
+                                        keyboardController?.hide()
                                         autoHideJobRef.titleBarJob?.cancel()
                                         portraitDrawerOpen = true
                                     } else {
