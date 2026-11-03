@@ -21,14 +21,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -56,8 +52,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
-import org.attache.tailscale.TailscaleDialog
-import org.attache.tailscale.TailscaleManager
 import org.connectbot.terminal.TerminalDimensions
 import timber.log.Timber
 import java.util.UUID
@@ -316,20 +310,18 @@ fun AttacheSidebar(
     onDismiss: (() -> Unit)? = null,
 ) {
     val state by control.state.collectAsState()
-    val tsState by TailscaleManager.uiState.collectAsState()
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
     var hasScrolledToActiveOnOpen by remember { mutableStateOf(false) }
-    var showTailscaleDialog by remember { mutableStateOf(false) }
     val palette = attacheGlassPalette(isDark)
 
-    LaunchedEffect(state.sessionId, state.sessions.size, hosts.size) {
+    LaunchedEffect(state.sessionId, state.sessions.size) {
         val sid = state.sessionId ?: return@LaunchedEffect
         if (state.sessions.isEmpty() || hasScrolledToActiveOnOpen) return@LaunchedEffect
         collapsedSessions[sid] = false
         val targetIndex = computeActiveWindowScrollIndex(
-            hostsCount = hosts.size,
+            hostsCount = 0,
             sessions = state.sessions,
             currentSessionId = sid,
             collapsedSessions = collapsedSessions,
@@ -338,10 +330,6 @@ fun AttacheSidebar(
             hasScrolledToActiveOnOpen = true
             listState.scrollToItem((targetIndex - 2).coerceAtLeast(0))
         }
-    }
-
-    if (showTailscaleDialog) {
-        TailscaleDialog(onDismiss = { showTailscaleDialog = false })
     }
 
     Column(modifier = modifier.fillMaxHeight().testTag("attacheSidebar")) {
@@ -353,75 +341,8 @@ fun AttacheSidebar(
                 .fillMaxWidth()
                 .testTag("tmuxSessionList"),
         ) {
-            if (hosts.isNotEmpty()) {
-                // Index layout must stay in sync with computeActiveWindowScrollIndex:
-                // header, hosts…, spacer, then the sessions header.
-                item(key = "header-hosts") {
-                    SidebarSectionHeader(text = "主机", palette = palette)
-                }
-                items(hosts, key = { "host-${it.id}" }) { host ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 1.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable {
-                                onDismiss?.invoke()
-                                onSelectHost(host.id)
-                            }
-                            .padding(start = 6.dp, end = 10.dp, top = 7.dp, bottom = 8.dp)
-                            .testTag("attacheHost-${host.id}"),
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.size(14.dp),
-                        ) {
-                            if (host.connected) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(13.dp)
-                                        .clip(CircleShape)
-                                        .background(palette.green.copy(alpha = 0.22f)),
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(if (host.connected) palette.green else palette.faint),
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = host.name,
-                                color = palette.ink,
-                                fontSize = 14.sp,
-                                fontWeight = if (host.current) FontWeight.SemiBold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (host.subtitle.isNotBlank()) {
-                                Text(
-                                    text = host.subtitle,
-                                    color = palette.muted,
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                }
-                item(key = "divider-hosts") {
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-            }
-
             item(key = "header-sessions") {
-                SidebarSectionHeader(text = "会话 · 窗口", palette = palette) {
+                SidebarSectionHeader(text = "Session · Window", palette = palette) {
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
@@ -432,14 +353,14 @@ fun AttacheSidebar(
                                 onDismiss?.invoke()
                                 scope.tmuxAction("new-window") { control.newWindow() }
                             }
-                            .padding(horizontal = 10.dp)
+                            .padding(horizontal = 8.dp)
                             .testTag("tmuxSidebarNewWindow"),
                     ) {
                         Text(
-                            text = "＋ 窗口",
+                            text = "＋",
                             color = palette.accent,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                 }
@@ -535,63 +456,6 @@ fun AttacheSidebar(
                         }
                     }
                 }
-            }
-        }
-
-        // Footer: Tailscale.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp)
-                .height(1.dp)
-                .background(palette.line),
-        )
-        Column(modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 10.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .clickable { showTailscaleDialog = true }
-                    .padding(start = 14.dp, end = 4.dp)
-                    .testTag("tmuxSidebarTailscale"),
-            ) {
-                val tsDotColor = when {
-                    !tsState.enabled -> palette.faint
-                    tsState.status.running -> palette.green
-                    else -> palette.accent
-                }
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(tsDotColor),
-                )
-                val tsSubtitle = when {
-                    !tsState.enabled -> "Tailscale: Off"
-                    tsState.status.running && tsState.status.selfIpv4.isNotEmpty() ->
-                        "TS ${tsState.status.selfIpv4}"
-                    tsState.status.running -> "Tailscale: Online"
-                    tsState.status.backendState == "NeedsLogin" -> "Tailscale: Needs Login"
-                    else -> "Tailscale: ${tsState.status.backendState}"
-                }
-                Text(
-                    text = tsSubtitle,
-                    color = palette.ink,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    Icons.Outlined.Settings,
-                    contentDescription = null,
-                    tint = palette.muted,
-                    modifier = Modifier.size(28.dp).padding(5.dp),
-                )
             }
         }
     }

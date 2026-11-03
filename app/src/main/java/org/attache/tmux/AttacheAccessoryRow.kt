@@ -1,10 +1,19 @@
 package org.attache.tmux
 
 import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.os.SystemClock
+import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,14 +21,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -30,12 +43,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,18 +61,27 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.preference.PreferenceManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -151,21 +176,101 @@ fun AttacheToolbarStyleDialog(
     currentStyle: AttacheToolbarStyle,
     onSelectStyle: (AttacheToolbarStyle) -> Unit,
     onDismiss: () -> Unit,
+    currentFontSizeSp: Float = 14f,
+    onChangeFontSize: ((Float) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
+    LaunchedEffect(Unit) {
+        org.attache.tailscale.TailscaleManager.init(context)
+    }
+    val tsState by org.attache.tailscale.TailscaleManager.uiState.collectAsState()
+    var showTailscaleDialog by remember { mutableStateOf(false) }
+
+    if (showTailscaleDialog) {
+        org.attache.tailscale.TailscaleDialog(
+            onDismiss = { showTailscaleDialog = false },
+        )
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("底部双排快捷栏设置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("设置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
+                if (onChangeFontSize != null) {
+                    Text(
+                        text = "终端字体大小",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onChangeFontSize(-2f) }
+                                .testTag("settings_font_decrease"),
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(vertical = 9.dp),
+                            ) {
+                                Text(
+                                    text = "A-  缩小",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        Text(
+                            text = "${currentFontSizeSp.toInt()} sp",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 6.dp),
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onChangeFontSize(2f) }
+                                .testTag("settings_font_increase"),
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(vertical = 9.dp),
+                            ) {
+                                Text(
+                                    text = "A+  放大",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                }
+
                 Text(
                     text = "第一排按钮显示",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = if (onChangeFontSize != null) 4.dp else 0.dp),
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -253,6 +358,65 @@ fun AttacheToolbarStyleDialog(
                         }
                     }
                 }
+
+                Text(
+                    text = "网络连接 (Tailscale)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showTailscaleDialog = true }
+                        .testTag("tmuxSidebarTailscale"),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    ) {
+                        val tsDotColor = when {
+                            !tsState.enabled -> Color(0xFF7A7D85)
+                            tsState.status.running -> Color(0xFF4CAF50)
+                            tsState.status.backendState == "NeedsLogin" -> Color(0xFFFFB300)
+                            else -> Color(0xFF42A5F5)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(tsDotColor),
+                        )
+                        val tsSubtitle = when {
+                            !tsState.enabled -> "Tailscale: Off"
+                            tsState.status.running && tsState.status.selfIpv4.isNotEmpty() ->
+                                "TS ${tsState.status.selfIpv4}"
+                            tsState.status.running -> "Tailscale: Online"
+                            tsState.status.backendState == "NeedsLogin" -> "Tailscale: Needs Login"
+                            else -> "Tailscale: ${tsState.status.backendState}"
+                        }
+                        Text(
+                            text = tsSubtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "配置 ▸",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
@@ -263,19 +427,48 @@ fun AttacheToolbarStyleDialog(
     )
 }
 
+const val MAX_ATTACHED_IMAGES = 5
+
+/**
+ * Represents an image picked by the user and staged in the thumbnail preview strip
+ * directly above the expanded input bar until the user taps `[发送 ↵]`.
+ */
+data class PendingImageAttachment(
+    val id: Long,
+    val thumbnail: ImageBitmap?,
+    val remotePath: String? = null,
+    val progressFraction: Float = 0f,
+)
+
+fun decodeImageThumbnail(bytes: ByteArray, maxDimPx: Int = 180): ImageBitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    var sampleSize = 1
+    while ((bounds.outWidth / sampleSize) > maxDimPx * 2 || (bounds.outHeight / sampleSize) > maxDimPx * 2) {
+        sampleSize *= 2
+    }
+    val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)?.asImageBitmap()
+}.getOrNull()
+
 /**
  * Wraps BOTH [AttacheAccessoryRow] and the lower `TerminalKeyboard` row into a
  * unified container matching either Scheme B (Terminal Deck) or Scheme D (Copilot Dock).
  * When [inlineInputActive] is true, the two button rows are replaced in-place by an
- * inline voice/text input box with a bottom-right Send button.
+ * inline voice/text input box with a bottom-right Send button and an optional
+ * top thumbnail preview strip for attached images.
  */
 @Composable
 fun AttacheToolbarContainer(
     modifier: Modifier = Modifier,
     isDark: Boolean = isSystemInDarkTheme(),
     inlineInputActive: Boolean = false,
+    autoStartVoice: Boolean = true,
+    pendingImages: List<PendingImageAttachment> = emptyList(),
+    onRemovePendingImage: (Long) -> Unit = {},
     onDismissInlineInput: () -> Unit = {},
     onSendInlineText: (String) -> Unit = {},
+    onPickImage: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val context = LocalContext.current
@@ -298,7 +491,12 @@ fun AttacheToolbarContainer(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = modifier
                     .fillMaxWidth()
-                    .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+                    .padding(
+                        start = 10.dp,
+                        end = 10.dp,
+                        top = 6.dp,
+                        bottom = AttacheChrome.BottomGap,
+                    )
                     .shadow(
                         elevation = 10.dp,
                         shape = shape,
@@ -314,8 +512,12 @@ fun AttacheToolbarContainer(
                     InlineVoiceTextInputBar(
                         style = style,
                         isDark = isDark,
+                        autoStartVoice = autoStartVoice,
+                        pendingImages = pendingImages,
+                        onRemovePendingImage = onRemovePendingImage,
                         onDismiss = onDismissInlineInput,
                         onSend = onSendInlineText,
+                        onPickImage = onPickImage,
                     )
                 } else {
                     content()
@@ -330,7 +532,12 @@ fun AttacheToolbarContainer(
                 modifier = modifier
                     .fillMaxWidth()
                     .background(outerBackdrop)
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                    .padding(
+                        start = 6.dp,
+                        end = 6.dp,
+                        top = 4.dp,
+                        bottom = AttacheChrome.BottomGap,
+                    ),
             ) {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
@@ -350,8 +557,12 @@ fun AttacheToolbarContainer(
                             InlineVoiceTextInputBar(
                                 style = style,
                                 isDark = isDark,
+                                autoStartVoice = autoStartVoice,
+                                pendingImages = pendingImages,
+                                onRemovePendingImage = onRemovePendingImage,
                                 onDismiss = onDismissInlineInput,
                                 onSend = onSendInlineText,
+                                onPickImage = onPickImage,
                             )
                         } else {
                             content()
@@ -363,20 +574,87 @@ fun AttacheToolbarContainer(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun InlineVoiceTextInputBar(
     style: AttacheToolbarStyle,
     isDark: Boolean,
+    autoStartVoice: Boolean = true,
+    pendingImages: List<PendingImageAttachment> = emptyList(),
+    onRemovePendingImage: (Long) -> Unit = {},
     onDismiss: () -> Unit,
     onSend: (String) -> Unit,
+    onPickImage: (() -> Unit)? = null,
 ) {
+    val context = LocalContext.current
+    val localView = LocalView.current
+    val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf("") }
+    val latestText by rememberUpdatedState(text)
+    val latestPendingImages by rememberUpdatedState(pendingImages)
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    LaunchedEffect(Unit) {
+    val isHoldingSpacebar by AttacheAccessibilityService.isHoldingSpacebarFlow.collectAsState()
+    val triggerMode by AttacheAccessibilityService.triggerModeFlow.collectAsState()
+    val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
+    var voiceTriggerSeq by remember { mutableIntStateOf(if (autoStartVoice) 1 else 0) }
+
+    LaunchedEffect(context) {
+        AttacheAccessibilityService.syncPrefs(context)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            AttacheAccessibilityService.stopSpacebarHold()
+        }
+    }
+
+    // Focus the BasicTextField, show the soft keyboard, wait for the IME height to stabilize,
+    // and then dispatch the WeType voice gesture via AttacheAccessibilityService.
+    LaunchedEffect(voiceTriggerSeq) {
+        if (voiceTriggerSeq <= 0) return@LaunchedEffect
         focusRequester.requestFocus()
         keyboardController?.show()
+        if (!AttacheAccessibilityService.isServiceEnabled(context)) return@LaunchedEffect
+
+        val minImePx = (160f * context.resources.displayMetrics.density).toInt()
+        var lastImePx = 0
+        var stableFrames = 0
+        val startMs = SystemClock.uptimeMillis()
+        while (SystemClock.uptimeMillis() - startMs < 2600L) {
+            val insets = ViewCompat.getRootWindowInsets(localView)
+            val imePx = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+            if (imePx >= minImePx) {
+                if (abs(imePx - lastImePx) <= 4) {
+                    stableFrames++
+                    if (stableFrames >= 3) {
+                        delay(130L)
+                        val settledInsets = ViewCompat.getRootWindowInsets(localView)
+                        val settledImePx = settledInsets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: imePx
+                        val navPx = settledInsets?.getInsets(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
+                        val rootW = localView.rootView.width.takeIf { it > 0 }
+                            ?: context.resources.displayMetrics.widthPixels
+                        val rootH = localView.rootView.height.takeIf { it > 0 }
+                            ?: context.resources.displayMetrics.heightPixels
+                        AttacheAccessibilityService.triggerVoiceInput(
+                            context = context,
+                            screenWidthPx = rootW,
+                            screenHeightPx = rootH,
+                            imeBottomPx = settledImePx,
+                            navBarBottomPx = navPx,
+                        )
+                        break
+                    }
+                } else {
+                    stableFrames = 0
+                }
+            } else {
+                stableFrames = 0
+            }
+            lastImePx = imePx
+            delay(40L)
+        }
     }
 
     val isTerminalDeck = style == AttacheToolbarStyle.TERMINAL_DECK
@@ -388,6 +666,7 @@ private fun InlineVoiceTextInputBar(
         else -> Color(0xFFF1F5F9)
     }
     val boxBorder = when {
+        isHoldingSpacebar -> if (isDark) Color(0xFFF85149) else Color(0xFFDC2626)
         isTerminalDeck && isDark -> Color(0xFF30363D)
         isTerminalDeck && !isDark -> Color(0xFFCBD5E1)
         isDark -> Color(0x3358A6FF)
@@ -401,91 +680,386 @@ private fun InlineVoiceTextInputBar(
         isDark -> Color(0xFF2563EB)
         else -> Color(0xFF2563EB)
     }
+    val inputFontFamily = if (isTerminalDeck) FontFamily.Monospace else FontFamily.Default
 
-    Row(
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 72.dp, max = 128.dp)
-            .clip(boxShape)
-            .background(boxBg)
-            .border(1.dp, boxBorder, boxShape)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .testTag("inlineVoiceInputBar"),
+    Column(
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        // Top-left / Left collapse button
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .align(Alignment.Top)
-                .size(28.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(if (isDark) Color(0x1AFFFFFF) else Color(0x140F172A))
-                .clickable { onDismiss() }
-                .testTag("inlineInputCollapse"),
-        ) {
-            Text(
-                text = "✕",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = hintColor,
-            )
+        // Top Thumbnail Preview Strip (shown above the input box when one or more images are attached)
+        if (pendingImages.isNotEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 2.dp, vertical = 2.dp)
+                    .testTag("inlineImagePreviewStrip"),
+            ) {
+                pendingImages.forEachIndexed { index, item ->
+                    val cardShape = RoundedCornerShape(10.dp)
+                    val isUploaded = item.remotePath != null
+                    val cardBorder = if (isUploaded) {
+                        if (isDark) Color(0x8838BDF8) else Color(0xFF0284C7)
+                    } else {
+                        if (isDark) Color(0x558B949E) else Color(0xFF94A3B8)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(cardShape)
+                            .background(if (isDark) Color(0xFF161B22) else Color(0xFFE2E8F0))
+                            .border(1.dp, cardBorder, cardShape),
+                    ) {
+                        if (item.thumbnail != null) {
+                            Image(
+                                bitmap = item.thumbnail,
+                                contentDescription = "已选图片 #${index + 1}",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                Text(text = "🖼", fontSize = 18.sp)
+                            }
+                        }
+
+                        // Uploading progress overlay
+                        if (!isUploaded) {
+                            val pct = (item.progressFraction * 100f).toInt().coerceIn(1, 99)
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0x8C000000)),
+                            ) {
+                                Text(
+                                    text = "$pct%",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = inputFontFamily,
+                                )
+                            }
+                        }
+
+                        // Bottom-left index badge (#1, #2, ...)
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(3.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xB30F172A))
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "#${index + 1}",
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = inputFontFamily,
+                            )
+                        }
+
+                        // Top-right remove button (×)
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(2.dp)
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xCC0F172A))
+                                .clickable { onRemovePendingImage(item.id) }
+                                .testTag("removePendingImage-$index"),
+                        ) {
+                            Text(
+                                text = "✕",
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+
+                // Quick "+继续加图 (N/5)" mini-card at the right end of the strip
+                if (onPickImage != null) {
+                    val addShape = RoundedCornerShape(10.dp)
+                    val isFull = pendingImages.size >= MAX_ATTACHED_IMAGES
+                    Column(
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(addShape)
+                            .background(if (isDark) Color(0x14FFFFFF) else Color(0x0F0F172A))
+                            .border(
+                                width = 1.dp,
+                                color = if (isDark) Color(0x338B949E) else Color(0xFFCBD5E1),
+                                shape = addShape,
+                            )
+                            .clickable {
+                                if (isFull) {
+                                    Toast.makeText(
+                                        context,
+                                        "最多同时添加 $MAX_ATTACHED_IMAGES 张图片",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    AttacheAccessibilityService.stopSpacebarHold()
+                                    onPickImage()
+                                }
+                            }
+                            .testTag("addMorePendingImage"),
+                    ) {
+                        if (!isFull) {
+                            Text(
+                                text = "+",
+                                color = hintColor,
+                                fontSize = 16.sp,
+                                lineHeight = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Text(
+                            text = "${pendingImages.size}/$MAX_ATTACHED_IMAGES",
+                            color = hintColor,
+                            fontSize = 10.sp,
+                            lineHeight = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = inputFontFamily,
+                        )
+                    }
+                }
+            }
         }
 
-        // Center multi-line voice/text input field
-        Box(
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
-                .weight(1f)
-                .heightIn(min = 58.dp, max = 114.dp)
-                .padding(vertical = 2.dp),
+                .fillMaxWidth()
+                .heightIn(min = 72.dp, max = 128.dp)
+                .clip(boxShape)
+                .background(boxBg)
+                .border(if (isHoldingSpacebar) 1.5.dp else 1.dp, boxBorder, boxShape)
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .testTag("inlineVoiceInputBar"),
         ) {
-            if (text.isEmpty()) {
-                Text(
-                    text = "直接用键盘语音说话或输入内容…",
-                    color = hintColor,
-                    fontSize = 13.5.sp,
-                )
+            // Left column: Top [✕] collapse + Bottom [🎤/⏹] voice trigger/release button
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.align(Alignment.Top),
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isDark) Color(0x1AFFFFFF) else Color(0x140F172A))
+                        .clickable {
+                            AttacheAccessibilityService.stopSpacebarHold()
+                            onDismiss()
+                        }
+                        .testTag("inlineInputCollapse"),
+                ) {
+                    Text(
+                        text = "✕",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = hintColor,
+                    )
+                }
+
+                val micBg = if (isHoldingSpacebar) {
+                    if (isDark) Color(0x38F85149) else Color(0xFFFEE2E2)
+                } else {
+                    if (isDark) Color(0x24D29922) else Color(0xFFFEF3C7)
+                }
+                val micBorder = if (isHoldingSpacebar) {
+                    if (isDark) Color(0xFFF85149) else Color(0xFFDC2626)
+                } else {
+                    if (isDark) Color(0x66D29922) else Color(0xFFFCD34D)
+                }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(micBg)
+                        .border(1.dp, micBorder, RoundedCornerShape(6.dp))
+                        .combinedClickable(
+                            onClick = {
+                                if (isHoldingSpacebar) {
+                                    AttacheAccessibilityService.stopSpacebarHold()
+                                } else {
+                                    voiceTriggerSeq++
+                                }
+                            },
+                            onLongClick = {
+                                val next = AttacheAccessibilityService.toggleTriggerMode(context)
+                                Toast.makeText(context, next.toastTitle, Toast.LENGTH_SHORT).show()
+                            },
+                        )
+                        .testTag("inlineInputRetriggerVoice"),
+                ) {
+                    Text(
+                        text = if (isHoldingSpacebar) "⏹" else "🎤",
+                        fontSize = 12.sp,
+                    )
+                }
             }
+
+            // Center multi-line voice/text input field
+            val sharedInputTextStyle = TextStyle(
+                color = textColor,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                fontFamily = inputFontFamily,
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                ),
+            )
             BasicTextField(
                 value = text,
                 onValueChange = { text = it },
-                textStyle = TextStyle(
-                    color = textColor,
-                    fontSize = 14.sp,
-                    fontFamily = if (isTerminalDeck) FontFamily.Monospace else FontFamily.Default,
-                ),
+                textStyle = sharedInputTextStyle,
                 cursorBrush = SolidColor(if (isDark) Color(0xFF58A6FF) else Color(0xFF2563EB)),
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .weight(1f)
+                    .heightIn(min = 58.dp, max = 114.dp)
+                    .padding(vertical = 4.dp)
                     .focusRequester(focusRequester)
                     .testTag("inlineInputField"),
+                decorationBox = { innerTextField ->
+                    Box(
+                        contentAlignment = Alignment.TopStart,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (text.isEmpty()) {
+                            val hintText = when {
+                                isHoldingSpacebar -> "已自动按住空格，请直接说话…"
+                                pendingImages.isNotEmpty() ->
+                                    "已附 ${pendingImages.size}/$MAX_ATTACHED_IMAGES 张图，可直接发送或点左侧语音补充说明…"
+                                AttacheAccessibilityService.isServiceEnabled(context) ->
+                                    "直接说话或输入…（当前：${triggerMode.shortLabel}，长按左侧语音键切换）"
+                                else -> "直接用键盘语音说话或输入内容…"
+                            }
+                            Text(
+                                text = hintText,
+                                style = sharedInputTextStyle.copy(
+                                    color = when {
+                                        isHoldingSpacebar -> if (isDark) Color(0xFFFFA657) else Color(0xFFD97706)
+                                        pendingImages.isNotEmpty() -> if (isDark) Color(0xFF58A6FF) else Color(0xFF2563EB)
+                                        else -> hintColor
+                                    },
+                                ),
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
             )
-        }
 
-        // Bottom-right Send button
-        val canSend = text.isNotEmpty()
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .height(34.dp)
-                .clip(if (isTerminalDeck) RoundedCornerShape(5.dp) else RoundedCornerShape(999.dp))
-                .background(if (canSend) accentBg else accentBg.copy(alpha = 0.38f))
-                .clickable(enabled = canSend) {
-                    val toSend = text
-                    text = ""
-                    onSend(toSend)
+            // Right column: Top image button (100% identical to external toolbar button) + Bottom [发送 ↵] button
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.align(Alignment.Bottom),
+            ) {
+                if (onPickImage != null) {
+                    val handlePickImageClick = {
+                        if (pendingImages.size >= MAX_ATTACHED_IMAGES) {
+                            Toast.makeText(
+                                context,
+                                "最多同时添加 $MAX_ATTACHED_IMAGES 张图片",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            AttacheAccessibilityService.stopSpacebarHold()
+                            onPickImage()
+                        }
+                    }
+                    if (isTerminalDeck) {
+                        val defaultKeyBg = if (isDark) Color(0xFF121720) else Color(0xFFFFFFFF)
+                        val defaultKeyBorder = if (isDark) Color(0xFF2B323C) else Color(0xFFCBD5E1)
+                        val defaultKeyText = if (isDark) Color(0xFFC9D1D9) else Color(0xFF1E293B)
+                        TerminalDeckKey(
+                            label = if (iconOnly) "🖼" else "+img",
+                            textColor = defaultKeyText,
+                            borderColor = defaultKeyBorder,
+                            bgColor = defaultKeyBg,
+                            tag = "inlineInputPickImage",
+                            onClick = handlePickImageClick,
+                            modifier = Modifier
+                                .height(28.dp)
+                                .width(if (iconOnly) 36.dp else 46.dp),
+                        )
+                    } else {
+                        CopilotDockChip(
+                            label = if (iconOnly) "🖼" else "🖼图",
+                            isDark = isDark,
+                            tag = "inlineInputPickImage",
+                            onClick = handlePickImageClick,
+                            modifier = Modifier
+                                .height(28.dp)
+                                .width(if (iconOnly) 36.dp else 46.dp),
+                        )
+                    }
                 }
-                .padding(horizontal = 14.dp)
-                .testTag("inlineInputSend"),
-        ) {
-            Text(
-                text = "发送 ↵",
-                color = Color.White,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = if (isTerminalDeck) FontFamily.Monospace else FontFamily.Default,
-            )
+
+                val anyUploading = pendingImages.any { it.remotePath == null }
+                val canSend = !anyUploading && (text.isNotEmpty() || isHoldingSpacebar || pendingImages.isNotEmpty())
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .height(32.dp)
+                        .clip(if (isTerminalDeck) RoundedCornerShape(5.dp) else RoundedCornerShape(999.dp))
+                        .background(if (canSend) accentBg else accentBg.copy(alpha = 0.38f))
+                        .clickable(enabled = canSend) {
+                            if (isHoldingSpacebar) {
+                                AttacheAccessibilityService.stopSpacebarHold {
+                                    scope.launch {
+                                        delay(280L)
+                                        val toSend = latestText
+                                        val hadImages = latestPendingImages.any { it.remotePath != null }
+                                        text = ""
+                                        if (toSend.isNotEmpty() || hadImages) {
+                                            onSend(toSend)
+                                        }
+                                    }
+                                }
+                            } else {
+                                val toSend = text
+                                text = ""
+                                onSend(toSend)
+                            }
+                        }
+                        .padding(horizontal = 14.dp)
+                        .testTag("inlineInputSend"),
+                ) {
+                    Text(
+                        text = when {
+                            anyUploading -> "传图中…"
+                            isHoldingSpacebar && text.isEmpty() -> "说完发送 ↵"
+                            else -> "发送 ↵"
+                        },
+                        color = Color.White,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = inputFontFamily,
+                    )
+                }
+            }
         }
     }
 }
@@ -562,6 +1136,68 @@ fun AttacheAccessoryRow(
     val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
     val state by control.state.collectAsState()
     val recentCount = state.recentWindows.size.coerceAtLeast(1)
+    var showAccessibilityGuideDialog by remember { mutableStateOf(false) }
+
+    val handleVoiceClick = {
+        onInteraction()
+        if (AttacheAccessibilityService.isServiceEnabled(context)) {
+            onTextInput()
+        } else {
+            showAccessibilityGuideDialog = true
+        }
+    }
+    val handleVoiceLongClick = {
+        onInteraction()
+        val next = AttacheAccessibilityService.toggleTriggerMode(context)
+        Toast.makeText(context, next.toastTitle, Toast.LENGTH_SHORT).show()
+    }
+
+    if (showAccessibilityGuideDialog) {
+        AlertDialog(
+            onDismissRequest = { showAccessibilityGuideDialog = false },
+            title = {
+                Text(
+                    text = "开启一键语音输入辅助",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            },
+            text = {
+                Text(
+                    text = "请在系统「无障碍」设置中开启「Attaché 一键语音辅助」，即可在点击「🎤说」时自动弹出键盘并长按微信输入法空格键直接说话。\n\n" +
+                        "💡 提示：\n" +
+                        "1. 若系统提示“受限设置”，请先在「系统设置 → 应用 → Attaché → 右上角菜单」中选择“允许受限设置”。\n" +
+                        "2. 长按「🎤说」可切换「模式1：自动长按空格键」与「模式2：自动点击候选栏话筒”。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showAccessibilityGuideDialog = false
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                ) {
+                    Text("去开启无障碍", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showAccessibilityGuideDialog = false
+                        onTextInput()
+                    },
+                ) {
+                    Text("仅弹出键盘")
+                }
+            },
+        )
+    }
 
     when (style) {
         AttacheToolbarStyle.TERMINAL_DECK -> {
@@ -608,7 +1244,8 @@ fun AttacheAccessoryRow(
                     borderColor = amberBorder,
                     bgColor = amberBg,
                     tag = "accessoryTextInput",
-                    onClick = { onInteraction(); onTextInput() },
+                    onClick = handleVoiceClick,
+                    onLongClick = handleVoiceLongClick,
                     modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
@@ -732,7 +1369,8 @@ fun AttacheAccessoryRow(
                     isAiAccent = true,
                     isDark = isDark,
                     tag = "accessoryTextInput",
-                    onClick = { onInteraction(); onTextInput() },
+                    onClick = handleVoiceClick,
+                    onLongClick = handleVoiceLongClick,
                     modifier = Modifier.weight(if (iconOnly) 1f else 0.95f),
                 )
 
@@ -881,14 +1519,19 @@ fun TmuxRecentWindowsPopover(
             state.recentWindows.take(MAX_RECENT_WINDOWS)
         } else {
             val currentSessionName = state.sessions.firstOrNull { it.id == state.sessionId }?.name ?: "tmux"
-            state.windows.take(MAX_RECENT_WINDOWS).map { w ->
-                TmuxRecentWindow(
-                    sessionName = currentSessionName,
-                    windowId = w.id,
-                    windowIndex = w.index,
-                    windowName = w.name,
-                    lastVisitedMs = nowMs,
+            val activeWin = state.windows.firstOrNull { it.active } ?: state.windows.firstOrNull()
+            if (activeWin != null) {
+                listOf(
+                    TmuxRecentWindow(
+                        sessionName = currentSessionName,
+                        windowId = activeWin.id,
+                        windowIndex = activeWin.index,
+                        windowName = activeWin.name,
+                        lastVisitedMs = nowMs,
+                    ),
                 )
+            } else {
+                emptyList()
             }
         }
     }
@@ -931,17 +1574,19 @@ fun TmuxRecentWindowsPopover(
                     .padding(horizontal = 4.dp, vertical = 2.dp),
             ) {
                 Text(
-                    text = "🕘 最近访问的 5 个窗口 (跨 Session)",
+                    text = "最近访问",
                     color = headerTextColor,
-                    fontSize = 12.5.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
                 )
                 if (items.size >= 2) {
                     Text(
-                        text = "⇄ 再点秒切上一窗口",
+                        text = "⇄ 再点秒切上一 Window",
                         color = accentColor,
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
                             .clickable { selectItem(items[1]) }
@@ -955,7 +1600,7 @@ fun TmuxRecentWindowsPopover(
 
             if (items.isEmpty()) {
                 Text(
-                    text = "正在同步 tmux 窗口列表…",
+                    text = "正在同步 tmux Window 列表…",
                     color = headerTextColor,
                     fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
@@ -975,8 +1620,8 @@ fun TmuxRecentWindowsPopover(
                     }
                     val titleColor = if (isDark) Color(0xFFF8FAFC) else Color(0xFF0F172A)
                     val rightText = when {
-                        isCurrent -> "● 当前窗口"
-                        isPrevious -> "${formatRecentVisitedTime(nowMs, item.lastVisitedMs)} · 上一窗口"
+                        isCurrent -> "● 当前 Window"
+                        isPrevious -> "${formatRecentVisitedTime(nowMs, item.lastVisitedMs)} · 上一 Window"
                         else -> formatRecentVisitedTime(nowMs, item.lastVisitedMs)
                     }
                     val rightColor = if (isCurrent || isPrevious) accentColor else headerTextColor
@@ -1065,12 +1710,14 @@ private fun SlashCommandDropdown(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TerminalDeckKey(
     label: String,
     tag: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     textColor: Color = Color(0xFFC9D1D9),
     borderColor: Color = Color(0xFF2B323C),
     bgColor: Color = Color(0xFF121720),
@@ -1083,7 +1730,7 @@ private fun TerminalDeckKey(
             .clip(shape)
             .background(bgColor)
             .border(1.dp, borderColor, shape)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .testTag(tag),
     ) {
         Text(
@@ -1098,12 +1745,14 @@ private fun TerminalDeckKey(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CopilotDockChip(
     label: String,
     tag: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     isAiAccent: Boolean = false,
     isSkyAccent: Boolean = false,
     isActive: Boolean = false,
@@ -1157,7 +1806,7 @@ private fun CopilotDockChip(
             .clip(shape)
             .then(bgModifier)
             .border(if (isActive) 1.5.dp else 1.dp, borderColor, shape)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 3.dp)
             .testTag(tag),
     ) {

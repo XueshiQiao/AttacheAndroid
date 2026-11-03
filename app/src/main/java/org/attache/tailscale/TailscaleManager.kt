@@ -113,6 +113,7 @@ object TailscaleManager {
     @Synchronized
     fun init(context: Context) {
         val ctx = context.applicationContext
+        org.attache.tmux.AttacheMigrationProvider.migrateFromLegacyPackageIfNeeded(ctx)
         appContext = ctx
         val sp = PreferenceManager.getDefaultSharedPreferences(ctx)
         prefs = sp

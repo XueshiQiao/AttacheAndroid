@@ -27,6 +27,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import org.attache.tmux.AttacheMigrationProvider
 import org.connectbot.data.ConnectBotDatabase
 import org.connectbot.data.EntityIds
 import org.connectbot.data.keyboard.KeyboardDefaults
@@ -40,31 +41,34 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideConnectBotDatabase(@ApplicationContext context: Context): ConnectBotDatabase = Room.databaseBuilder(
-        context,
-        ConnectBotDatabase::class.java,
-        DATABASE_NAME,
-    )
-        .addMigrations(ConnectBotDatabase.MIGRATION_4_5, ConnectBotDatabase.MIGRATION_10_11, ConnectBotDatabase.MIGRATION_14_15)
-        .addCallback(object : RoomDatabase.Callback() {
-            override fun onOpen(db: SupportSQLiteDatabase) {
-                SyncDatabase.install(db)
-                migrateExternalIds(context, db)
-            }
+    fun provideConnectBotDatabase(@ApplicationContext context: Context): ConnectBotDatabase {
+        AttacheMigrationProvider.migrateFromLegacyPackageIfNeeded(context)
+        return Room.databaseBuilder(
+            context,
+            ConnectBotDatabase::class.java,
+            DATABASE_NAME,
+        )
+            .addMigrations(ConnectBotDatabase.MIGRATION_4_5, ConnectBotDatabase.MIGRATION_10_11, ConnectBotDatabase.MIGRATION_14_15)
+            .addCallback(object : RoomDatabase.Callback() {
+                override fun onOpen(db: SupportSQLiteDatabase) {
+                    SyncDatabase.install(db)
+                    migrateExternalIds(context, db)
+                }
 
-            override fun onCreate(db: SupportSQLiteDatabase) {
-                super.onCreate(db)
-                KeyboardDefaults.seed(db)
-                // Create default profile on fresh database creation
-                db.execSQL(
-                    """
-                        INSERT INTO profiles (id, name, color_scheme_id, font_size, del_key, encoding, emulation)
-                        VALUES ('${EntityIds.DEFAULT_PROFILE}', 'Default', '${EntityIds.DEFAULT_SCHEME}', 10, 'del', 'UTF-8', 'xterm-256color')
-                    """.trimIndent(),
-                )
-            }
-        })
-        .build()
+                override fun onCreate(db: SupportSQLiteDatabase) {
+                    super.onCreate(db)
+                    KeyboardDefaults.seed(db)
+                    // Create default profile on fresh database creation
+                    db.execSQL(
+                        """
+                            INSERT INTO profiles (id, name, color_scheme_id, font_size, del_key, encoding, emulation)
+                            VALUES ('${EntityIds.DEFAULT_PROFILE}', 'Default', '${EntityIds.DEFAULT_SCHEME}', 10, 'del', 'UTF-8', 'xterm-256color')
+                        """.trimIndent(),
+                    )
+                }
+            })
+            .build()
+    }
 
     private fun migrateExternalIds(context: Context, db: SupportSQLiteDatabase) {
         db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='legacy_id_map'").use {

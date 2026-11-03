@@ -76,6 +76,7 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.connectbot.BuildConfig
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
@@ -110,14 +111,65 @@ object AttacheFileStorage {
     private const val KEY_LOCAL_SUBDIR = "local_subdir"
     private const val KEY_REMOTE_BIN_DIR = "remote_bin_dir"
     private const val KEY_AUTO_SYNC_RULES = "auto_sync_agent_rules"
+    private const val KEY_LAST_HANDLED_PUSH_TOKEN = "last_handled_push_token"
+    private const val KEY_HANDLED_PUSH_TOKENS = "handled_push_tokens"
+    private const val MAX_HANDLED_PUSH_TOKENS = 64
     const val DEFAULT_LOCAL_SUBDIR = "Attache"
     const val DEFAULT_REMOTE_BIN_DIR = "~/.local/bin"
 
     private val IMAGE_EXTS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
     private val VIDEO_EXTS = setOf("mp4", "mov", "mkv", "webm", "avi", "m4v")
+    private val ATTACHE_APK_BUILD_REGEX = Regex("""^Attache-v[^/]+-b(\d+)-.*\.apk$""", RegexOption.IGNORE_CASE)
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    @Synchronized
+    fun getLastHandledPushToken(context: Context): String =
+        prefs(context).getString(KEY_LAST_HANDLED_PUSH_TOKEN, null)?.trim().orEmpty()
+
+    @Synchronized
+    fun isPushTokenHandled(context: Context, token: String): Boolean {
+        val clean = token.trim()
+        if (clean.isEmpty()) return true
+        val p = prefs(context)
+        if (p.getString(KEY_LAST_HANDLED_PUSH_TOKEN, null)?.trim() == clean) return true
+        val history = p.getString(KEY_HANDLED_PUSH_TOKENS, null).orEmpty()
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+        return clean in history
+    }
+
+    @Synchronized
+    fun markPushTokenHandled(context: Context, token: String) {
+        val clean = token.trim()
+        if (clean.isEmpty()) return
+        val p = prefs(context)
+        val existing = p.getString(KEY_HANDLED_PUSH_TOKENS, null).orEmpty()
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != clean }
+            .toList()
+        val updated = (listOf(clean) + existing).take(MAX_HANDLED_PUSH_TOKENS).joinToString("\n")
+        p.edit()
+            .putString(KEY_LAST_HANDLED_PUSH_TOKEN, clean)
+            .putString(KEY_HANDLED_PUSH_TOKENS, updated)
+            .commit()
+    }
+
+    /**
+     * Returns true if [remotePath] is an `Attache-v*-b<N>-*.apk` whose build number `<N>`
+     * is less than or equal to the currently installed build (`BuildConfig.VERSION_CODE - 12_000_000`).
+     */
+    fun isAlreadyInstalledOrOlderAttacheApk(remotePath: String): Boolean {
+        val fileName = remotePath.trim().substringAfterLast('/')
+        val match = ATTACHE_APK_BUILD_REGEX.matchEntire(fileName) ?: return false
+        val pushedBuild = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return false
+        val installedBuild = BuildConfig.VERSION_CODE - 12_000_000
+        return installedBuild > 0 && pushedBuild <= installedBuild
+    }
 
     fun getLocalSubdir(context: Context): String =
         prefs(context).getString(KEY_LOCAL_SUBDIR, DEFAULT_LOCAL_SUBDIR)

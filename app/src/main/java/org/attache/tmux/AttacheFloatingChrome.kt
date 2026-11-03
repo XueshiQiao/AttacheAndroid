@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -140,11 +141,21 @@ object AttacheChrome {
     /** Inset of the floating panel from the screen edges. */
     val PanelInset = 8.dp
 
+    /**
+     * Unified bottom gap above the bottom safe-area inset shared by BOTH the
+     * left sidebar panel and the bottom 2-row toolbar so their bottom edges
+     * always align on the exact same horizontal line in portrait and landscape.
+     */
+    val BottomGap = 6.dp
+
+    /** Minimum bottom safe-area inset when system gesture pill is hidden (e.g. vivo Pad). */
+    val MinBottomSafeInset = 15.dp
+
     /** Docked panel width in landscape. */
-    val LandscapePanelWidth = 256.dp
+    val LandscapePanelWidth = 236.dp
 
     /** Drawer panel width in portrait (clamped to the screen). */
-    val PortraitPanelWidth = 300.dp
+    val PortraitPanelWidth = 248.dp
 
     /** Horizontal room the terminal leaves for the docked landscape panel. */
     val LandscapePanelSlot = PanelInset + LandscapePanelWidth + PanelInset
@@ -183,6 +194,7 @@ fun AttacheFloatingChrome(
     actions: @Composable RowScope.() -> Unit,
     sidebar: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
+    bottomSafeInset: Dp = 0.dp,
     backContentDescription: String? = null,
 ) {
     val palette = attacheGlassPalette(isDark)
@@ -204,10 +216,8 @@ fun AttacheFloatingChrome(
                 minOf(AttacheChrome.PortraitPanelWidth, screenWidth - startInset - endInset - 56.dp)
             }
             val panelTop = statusTop + AttacheChrome.CapsuleTopGap
-            val closedCapsuleWidth = minOf(
-                244.dp,
-                screenWidth - startInset - endInset - rightCapsuleWidth - 28.dp,
-            ).coerceAtLeast(120.dp)
+            val maxClosedCapsuleWidth = (screenWidth - startInset - endInset - rightCapsuleWidth - 24.dp)
+                .coerceAtLeast(110.dp)
             val leftShown = barVisible || sidebarOpen
 
             // Terminal top inset: status bar + capsule row + breathing gap, so
@@ -277,9 +287,11 @@ fun AttacheFloatingChrome(
                         animationSpec = tween(durationMillis = 180),
                     ),
                 modifier = Modifier
-                    .padding(start = startInset + AttacheChrome.PanelInset, top = panelTop)
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-                    .padding(bottom = AttacheChrome.PanelInset),
+                    .padding(
+                        start = startInset + AttacheChrome.PanelInset,
+                        top = panelTop,
+                        bottom = bottomSafeInset + AttacheChrome.BottomGap,
+                    ),
             ) {
                 val shape = RoundedCornerShape(22.dp)
                 Column(
@@ -315,7 +327,8 @@ fun AttacheFloatingChrome(
                 }
             }
 
-            // Left capsule: glass when closed, merged into the panel header when open.
+            // Left capsule: glass & dynamically sized to its text when closed;
+            // merged into the panel header at full panel width when open.
             if (leftShown) {
                 val left by animateDpAsState(
                     startInset + if (sidebarOpen) AttacheChrome.PanelInset + 6.dp else 10.dp,
@@ -327,32 +340,26 @@ fun AttacheFloatingChrome(
                     motion,
                     label = "capsuleTop",
                 )
-                val width by animateDpAsState(
-                    if (sidebarOpen) panelWidth - 12.dp else closedCapsuleWidth,
-                    motion,
-                    label = "capsuleWidth",
-                )
                 GlassCapsule(
                     palette = palette,
                     merged = sidebarOpen,
                     modifier = Modifier
                         .offset(x = left, y = top)
-                        .width(width)
+                        .then(
+                            if (sidebarOpen) {
+                                Modifier.width(panelWidth - 12.dp)
+                            } else {
+                                Modifier.widthIn(max = maxClosedCapsuleWidth)
+                            },
+                        )
                         .testTag("attacheLeftCapsule"),
                     contentPadding = 3.dp,
                 ) {
-                    CapsuleIconButton(onClick = onBack, testTag = "attacheBack") {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = backContentDescription,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
                     CapsuleTitle(
                         control = control,
                         palette = palette,
                         onClick = onToggleSidebar,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f, fill = sidebarOpen),
                     )
                     CapsuleIconButton(onClick = onToggleSidebar, testTag = "attacheSidebarToggle") {
                         SidebarGlyph(color = palette.ink, modifier = Modifier.size(18.dp))
@@ -422,7 +429,7 @@ fun CapsuleIconButton(
     }
 }
 
-/** Text/icon button of the right capsule (A- A+ theme ▦ ⋮). */
+/** Text/icon button of the right capsule (theme ▦ ⋮). */
 @Composable
 fun CapsuleActionButton(
     onClick: () -> Unit,
@@ -442,7 +449,7 @@ fun CapsuleActionButton(
     }
 }
 
-/** `Daily ▾  1: maintenance` — session in accent, window muted. */
+/** Shows only the active `window` name when collapsed (fallback to session name if blank). */
 @Composable
 private fun CapsuleTitle(
     control: TmuxControl,
@@ -453,39 +460,33 @@ private fun CapsuleTitle(
     val state by control.state.collectAsState()
     val current = state.sessions.firstOrNull { it.id == state.sessionId }
     val window = state.windows.firstOrNull { it.active }
+    val displayTitle = window?.name?.takeIf { it.isNotBlank() } ?: current?.name ?: "tmux"
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .height(34.dp)
             .clip(RoundedCornerShape(17.dp))
             .clickable(onClick = onClick)
-            .padding(start = 2.dp, end = 4.dp)
+            .padding(start = 10.dp, end = 4.dp)
             .testTag("tmuxSessions"),
     ) {
         Text(
-            text = current?.name ?: "tmux",
+            text = displayTitle,
             color = palette.accent,
             fontSize = 14.5.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
-            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .testTag("tmuxCurrentWindow"),
         )
         Text(
-            text = " ▾ ",
+            text = " ▾",
             color = palette.muted,
             fontSize = 11.sp,
             maxLines = 1,
         )
-        if (window != null) {
-            Text(
-                text = "${window.index}: ${window.name}",
-                color = palette.ink.copy(alpha = 0.75f),
-                fontSize = 14.5.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("tmuxCurrentWindow"),
-            )
-        }
     }
 }
 

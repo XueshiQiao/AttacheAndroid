@@ -62,8 +62,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.mandatorySystemGestures
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -532,8 +535,12 @@ private fun ConsoleTerminalPage(
     terminalModifier: Modifier = Modifier,
     isDarkTheme: Boolean = true,
     inlineInputActive: Boolean = false,
+    autoStartVoiceOnOpen: Boolean = true,
+    pendingImages: List<org.attache.tmux.PendingImageAttachment> = emptyList(),
+    onRemovePendingImage: (Long) -> Unit = {},
     onDismissInlineInput: () -> Unit = {},
     onSendInlineText: (String) -> Unit = {},
+    onPickInlineImage: (() -> Unit)? = null,
     accessoryRow: (@Composable () -> Unit)? = null,
     recentWindowsPopover: (@Composable (androidx.compose.ui.unit.Dp) -> Unit)? = null,
 ) {
@@ -650,6 +657,9 @@ private fun ConsoleTerminalPage(
                 AttacheToolbarContainer(
                     isDark = isDarkTheme,
                     inlineInputActive = inlineInputActive,
+                    autoStartVoice = autoStartVoiceOnOpen,
+                    pendingImages = pendingImages,
+                    onRemovePendingImage = onRemovePendingImage,
                     onDismissInlineInput = {
                         hideSoftKeyboard()
                         onDismissInlineInput()
@@ -658,6 +668,7 @@ private fun ConsoleTerminalPage(
                         hideSoftKeyboard()
                         onSendInlineText(text)
                     },
+                    onPickImage = onPickInlineImage,
                     modifier = Modifier.onSizeChanged { keyboardHeight = with(keyboardDensity) { it.height.toDp() } },
                 ) {
                     accessoryRow?.invoke()
@@ -891,6 +902,8 @@ fun ConsoleScreen(
     var showDisconnectDialog by remember { mutableStateOf(false) }
     var showSessionPickerDialog by remember { mutableStateOf(false) }
     var showTextInputDialog by remember { mutableStateOf(false) }
+    var autoStartVoiceOnOpen by remember { mutableStateOf(true) }
+    var pendingImages by remember { mutableStateOf<List<org.attache.tmux.PendingImageAttachment>>(emptyList()) }
     var showExtraKeyboard by remember { mutableStateOf(true) } // Start visible to show animation
     var hasPlayedKeyboardAnimation by remember { mutableStateOf(false) }
     var showTitleBar by remember { mutableStateOf(!titleBarHide) }
@@ -1321,54 +1334,115 @@ fun ConsoleScreen(
     }
 
     val latestBridge by rememberUpdatedState(currentBridge)
-    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val latestShowTextInputDialog by rememberUpdatedState(showTextInputDialog)
+    val latestPendingImages by rememberUpdatedState(pendingImages)
+    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         showImagePicker = false
         resizeSuspended = false
-        termFocusRequester.requestFocus()
         val bridge = latestBridge ?: return@rememberLauncherForActivityResult
         @Suppress("USELESS_ELVIS")
         val control = (bridge.tmuxControl ?: noTmuxControl).value ?: return@rememberLauncherForActivityResult
-        if (uri == null) {
+        if (uris.isEmpty()) {
+            if (!latestShowTextInputDialog) {
+                termFocusRequester.requestFocus()
+            }
             return@rememberLauncherForActivityResult
         }
-        imageUploadJob?.cancel()
+        val remainingSlots = (org.attache.tmux.MAX_ATTACHED_IMAGES - latestPendingImages.size).coerceAtLeast(0)
+        if (remainingSlots <= 0) {
+            android.widget.Toast.makeText(
+                context,
+                "最多同时添加 ${org.attache.tmux.MAX_ATTACHED_IMAGES} 张图片",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+            return@rememberLauncherForActivityResult
+        }
+        if (uris.size > remainingSlots) {
+            android.widget.Toast.makeText(
+                context,
+                "最多同时添加 ${org.attache.tmux.MAX_ATTACHED_IMAGES} 张图片，已添加前 $remainingSlots 张",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
+        val acceptedUris = uris.take(remainingSlots)
+        // Automatically expand our inline input bar so the user sees the image thumbnail
+        // preview strip above the input box (without forcing the keyboard open unless already open).
+        if (!latestShowTextInputDialog) {
+            autoStartVoiceOnOpen = false
+            showTextInputDialog = true
+        }
+        val baseId = android.os.SystemClock.uptimeMillis()
         val job = coroutineScope.launch(Dispatchers.IO) {
             try {
-                val bytes = try {
-                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                } catch (e: Exception) {
-                    Timber.w(e, "Failed to read picked image")
-                    null
+                val staged = acceptedUris.mapIndexedNotNull { idx, uri ->
+                    val bytes = try {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to read picked image")
+                        null
+                    }
+                    if (bytes == null || bytes.isEmpty()) {
+                        null
+                    } else {
+                        val ext = when (context.contentResolver.getType(uri)) {
+                            "image/png" -> "png"
+                            "image/jpeg" -> "jpg"
+                            "image/webp" -> "webp"
+                            else -> "png"
+                        }
+                        val thumb = org.attache.tmux.decodeImageThumbnail(bytes)
+                        Triple(baseId + idx, bytes to ext, thumb)
+                    }
                 }
-                if (bytes == null || bytes.isEmpty()) {
+                if (staged.isEmpty()) {
                     withContext(Dispatchers.Main) {
                         imageUploadState = null
                         snackbarHostState.showSnackbar("Failed to read image")
                     }
                     return@launch
                 }
-                val total = bytes.size.toLong()
-                imageUploadState = ImageUploadState(0L, total)
-                val ext = when (context.contentResolver.getType(uri)) {
-                    "image/png" -> "png"
-                    "image/jpeg" -> "jpg"
-                    "image/webp" -> "webp"
-                    else -> "png"
-                }
-                val remotePath = control.uploadImage(bytes, ext) { uploaded, totalBytes ->
-                    imageUploadState = ImageUploadState(uploaded, totalBytes)
-                }
                 withContext(Dispatchers.Main) {
-                    imageUploadState = null
-                    if (remotePath != null) {
-                        bridge.injectString("$remotePath ")
-                    } else {
-                        snackbarHostState.showSnackbar("Failed to upload image")
+                    val newItems = staged.map { (attachmentId, _, thumb) ->
+                        org.attache.tmux.PendingImageAttachment(
+                            id = attachmentId,
+                            thumbnail = thumb,
+                            remotePath = null,
+                            progressFraction = 0.02f,
+                        )
                     }
-                    termFocusRequester.requestFocus()
+                    pendingImages = (pendingImages + newItems).take(org.attache.tmux.MAX_ATTACHED_IMAGES)
+                }
+                for ((attachmentId, payload, _) in staged) {
+                    val (bytes, ext) = payload
+                    val remotePath = control.uploadImage(bytes, ext) { uploaded, totalBytes ->
+                        val frac = if (totalBytes > 0L) {
+                            (uploaded.toFloat() / totalBytes.toFloat()).coerceIn(0.02f, 0.99f)
+                        } else {
+                            0.5f
+                        }
+                        pendingImages = pendingImages.map { item ->
+                            if (item.id == attachmentId) item.copy(progressFraction = frac) else item
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        if (remotePath != null) {
+                            pendingImages = pendingImages.map { item ->
+                                if (item.id == attachmentId) {
+                                    item.copy(remotePath = remotePath, progressFraction = 1f)
+                                } else {
+                                    item
+                                }
+                            }
+                        } else {
+                            pendingImages = pendingImages.filterNot { it.id == attachmentId }
+                            snackbarHostState.showSnackbar("Failed to upload image")
+                        }
+                    }
                 }
             } finally {
-                imageUploadState = null
+                withContext(Dispatchers.Main) {
+                    imageUploadState = null
+                }
             }
         }
         imageUploadJob = job
@@ -1415,7 +1489,7 @@ fun ConsoleScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {},
         containerColor = unifiedConsoleBg,
         contentColor = unifiedConsoleFg,
         modifier = modifier
@@ -1437,6 +1511,20 @@ fun ConsoleScreen(
 
         // Terminal content with keyboard overlay
         val layoutDirection = LocalLayoutDirection.current
+        val gestureBottom = with(density) {
+            max(
+                WindowInsets.mandatorySystemGestures.getBottom(density),
+                WindowInsets.systemGestures.getBottom(density),
+            ).toDp()
+        }
+        val safeDrawingBottom = with(density) { WindowInsets.safeDrawing.getBottom(density).toDp() }
+        val minBottomSafeArea = if (fullscreen) 0.dp else org.attache.tmux.AttacheChrome.MinBottomSafeInset
+        val bottomSafeInset = maxOf(
+            innerPadding.calculateBottomPadding(),
+            gestureBottom,
+            safeDrawingBottom,
+            minBottomSafeArea,
+        )
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -1445,7 +1533,7 @@ fun ConsoleScreen(
                     start = innerPadding.calculateStartPadding(layoutDirection),
                     end = innerPadding.calculateEndPadding(layoutDirection),
                     top = if (!titleBarHide) titleBarHeight else innerPadding.calculateTopPadding(),
-                    bottom = innerPadding.calculateBottomPadding(),
+                    bottom = bottomSafeInset,
                 )
                 .windowInsetsPadding(WindowInsets.imeAnimationTarget)
                 .onPreviewKeyEvent(handleShortcut),
@@ -1576,7 +1664,10 @@ fun ConsoleScreen(
                                         },
                                         onShowSoftwareKeyboardChange = { showSoftwareKeyboard = it },
                                         onImeVisibilityChange = { imeVisible = it },
-                                        onTextInputRequest = { showTextInputDialog = true },
+                                        onTextInputRequest = {
+                                            autoStartVoiceOnOpen = true
+                                            showTextInputDialog = true
+                                        },
                                         onDisconnectRequest = {
                                             bridge.dispatchDisconnect(DisconnectReason.USER_REQUESTED)
                                         },
@@ -1603,15 +1694,32 @@ fun ConsoleScreen(
                                         terminalModifier = terminalModifier,
                                         isDarkTheme = isDarkTheme,
                                         inlineInputActive = showTextInputDialog,
+                                        autoStartVoiceOnOpen = autoStartVoiceOnOpen,
+                                        pendingImages = pendingImages,
+                                        onRemovePendingImage = { id ->
+                                            pendingImages = pendingImages.filterNot { it.id == id }
+                                        },
                                         onDismissInlineInput = {
+                                            pendingImages = emptyList()
                                             showTextInputDialog = false
                                             showSoftwareKeyboard = false
                                             termFocusRequester.requestFocus()
                                         },
                                         onSendInlineText = { sent ->
                                             composeController?.clearComposeBuffer()
-                                            if (sent.isNotEmpty()) {
-                                                bridge.injectString(sent)
+                                            val readyPaths = latestPendingImages.mapNotNull { it.remotePath }
+                                            pendingImages = emptyList()
+                                            val combined = buildString {
+                                                if (readyPaths.isNotEmpty()) {
+                                                    append(readyPaths.joinToString(" "))
+                                                    append(" ")
+                                                }
+                                                if (sent.isNotEmpty()) {
+                                                    append(sent)
+                                                }
+                                            }
+                                            if (combined.isNotEmpty()) {
+                                                bridge.injectString(combined)
                                             }
                                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
                                                 { bridge.injectString("\r") },
@@ -1620,6 +1728,31 @@ fun ConsoleScreen(
                                             showTextInputDialog = false
                                             showSoftwareKeyboard = false
                                             termFocusRequester.requestFocus()
+                                        },
+                                        onPickInlineImage = pageTmuxControl?.let {
+                                            {
+                                                if (pendingImages.size >= org.attache.tmux.MAX_ATTACHED_IMAGES) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "最多同时添加 ${org.attache.tmux.MAX_ATTACHED_IMAGES} 张图片",
+                                                        android.widget.Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                } else {
+                                                    menuImeWasVisible = imeVisible
+                                                    resizeSuspended = true
+                                                    autoHideJobRef.titleBarJob?.cancel()
+                                                    showImagePicker = true
+                                                    try {
+                                                        imagePickerLauncher.launch("image/*")
+                                                    } catch (e: ActivityNotFoundException) {
+                                                        showImagePicker = false
+                                                        resizeSuspended = false
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("No image picker found")
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         },
                                         accessoryRow = pageTmuxControl?.let { control ->
                                             {
@@ -1634,7 +1767,10 @@ fun ConsoleScreen(
                                                 }
                                                 AttacheAccessoryRow(
                                                     control = control,
-                                                    onTextInput = { showTextInputDialog = true },
+                                                    onTextInput = {
+                                                        autoStartVoiceOnOpen = true
+                                                        showTextInputDialog = true
+                                                    },
                                                     onPaste = ::pasteClipboardContents,
                                                     onSendSlashCommand = { command ->
                                                         termFocusRequester.requestFocus()
@@ -1900,6 +2036,15 @@ fun ConsoleScreen(
                                         }
                                     }
                                 }
+
+                                // Top-aligned SnackbarHost (directly below the top navigation bar)
+                                // so file-received toasts and notifications never cover the bottom toolbar buttons.
+                                SnackbarHost(
+                                    hostState = snackbarHostState,
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                )
                             }
                         }
 
@@ -1953,6 +2098,7 @@ fun ConsoleScreen(
         }
 
         if (showToolbarStyleDialog) {
+            val currentFontSizeSp by (currentBridge?.fontSizeFlow ?: remember { kotlinx.coroutines.flow.MutableStateFlow(14f) }).collectAsState()
             AttacheToolbarStyleDialog(
                 currentStyle = currentToolbarStyle,
                 onSelectStyle = { style ->
@@ -1962,6 +2108,8 @@ fun ConsoleScreen(
                     showToolbarStyleDialog = false
                     termFocusRequester.requestFocus()
                 },
+                currentFontSizeSp = currentFontSizeSp,
+                onChangeFontSize = { delta -> changeFontSize(delta) },
             )
         }
 
@@ -2043,6 +2191,7 @@ fun ConsoleScreen(
         }
 
         BackHandler(enabled = showTextInputDialog) {
+            pendingImages = emptyList()
             showTextInputDialog = false
             showSoftwareKeyboard = false
             termFocusRequester.requestFocus()
@@ -2078,21 +2227,9 @@ fun ConsoleScreen(
         val topBarActions: @Composable RowScope.() -> Unit = {
             val tmuxControl = chromeTmuxControl
             if (tmuxControl != null) {
-                // Right glass capsule: A- A+ theme ▦ (⋮ follows below). The
-                // only theme toggle — the sidebar no longer has its own.
+                // Right glass capsule: theme ▦ (⋮ follows below). Font size
+                // adjustment now lives inside the Settings (▦) dialog.
                 val chipText = org.attache.tmux.attacheGlassPalette(isDarkTheme).ink
-                org.attache.tmux.CapsuleActionButton(
-                    onClick = { changeFontSize(-2f) },
-                    modifier = Modifier.testTag("title_bar_font_decrease"),
-                ) {
-                    Text("A-", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = chipText)
-                }
-                org.attache.tmux.CapsuleActionButton(
-                    onClick = { changeFontSize(2f) },
-                    modifier = Modifier.testTag("title_bar_font_increase"),
-                ) {
-                    Text("A+", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = chipText)
-                }
                 org.attache.tmux.CapsuleActionButton(
                     onClick = { toggleTheme() },
                     modifier = Modifier.testTag("title_bar_theme_toggle"),
@@ -2188,6 +2325,17 @@ fun ConsoleScreen(
                         termFocusRequester.requestFocus()
                     },
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("返回 Host 列表") },
+                        onClick = {
+                            showMenu = false
+                            navigateBack()
+                        },
+                        leadingIcon = {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                        },
+                    )
+
                     // Reconnect (shown only when disconnected)
                     if (disconnected) {
                         DropdownMenuItem(
@@ -2390,6 +2538,7 @@ fun ConsoleScreen(
                 },
                 onBarHeightChanged = { titleBarHeight = it },
                 actions = topBarActions,
+                bottomSafeInset = bottomSafeInset,
                 backContentDescription = stringResource(R.string.button_back),
                 sidebar = { sidebarModifier ->
                     AttacheSidebar(

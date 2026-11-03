@@ -29,6 +29,10 @@
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
 	<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+	<queries>
+		<package android:name="org.connectbot.debug" />
+	</queries>
+
 	<uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
 
 	<supports-screens
@@ -56,6 +60,7 @@
 		<activity
 			android:name=".ui.MainActivity"
 			android:exported="true"
+			android:label="@string/app_name"
 			android:launchMode="singleTop"
 			android:resizeableActivity="true"
 			android:windowSoftInputMode="adjustResize">
@@ -104,6 +109,19 @@
 			android:foregroundServiceType="remoteMessaging"/>
 
 		<service
+			android:name="org.attache.tmux.AttacheAccessibilityService"
+			android:exported="true"
+			android:label="@string/attache_accessibility_service_label"
+			android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+			<intent-filter>
+				<action android:name="android.accessibilityservice.AccessibilityService" />
+			</intent-filter>
+			<meta-data
+				android:name="android.accessibilityservice"
+				android:resource="@xml/attache_accessibility_service" />
+		</service>
+
+		<service
 			android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
 			android:enabled="true"
 			android:exported="false">
@@ -121,6 +139,11 @@
 				android:name="android.support.FILE_PROVIDER_PATHS"
 				android:resource="@xml/attache_file_paths" />
 		</provider>
+
+		<provider
+			android:name="org.attache.tmux.AttacheMigrationProvider"
+			android:authorities="${applicationId}.migration"
+			android:exported="true" />
 
 		<meta-data
 			android:name="com.google.android.backup.api_key"

@@ -244,7 +244,14 @@ class TmuxControl(
     @Volatile private var currentDownloadJob: Job? = null
     private val downloadQueue = Channel<String>(Channel.UNLIMITED)
     private val activeOrQueuedPaths = java.util.Collections.synchronizedSet( linkedSetOf<String>() )
-    @Volatile private var lastHandledPushToken: String = ""
+    @Volatile private var lastHandledPushToken: String =
+        appContext?.let { AttacheFileStorage.getLastHandledPushToken(it) }.orEmpty()
+    private val handledPushTokens = java.util.Collections.synchronizedSet(
+        linkedSetOf<String>().apply {
+            if (lastHandledPushToken.isNotEmpty()) add(lastHandledPushToken)
+        },
+    )
+    private val pushCheckLock = Mutex()
 
     /** Scroll the finger has asked for, positive back in history. One
      * loop drains it and merges what has piled up for the same pane, so a
@@ -303,7 +310,7 @@ class TmuxControl(
                 val binDir = appContext?.let { AttacheFileStorage.getRemoteBinDir(it) } ?: "~/.local/bin"
                 val autoSyncRules = appContext?.let { AttacheFileStorage.isAutoSyncAgentRulesEnabled(it) } ?: true
                 installRemoteSendHelper(binDir, autoSyncRules)
-                drainRemotePushQueue()
+                handleRemotePushIfAny()
             }
             jobs += scope.launch {
                 for (remotePath in downloadQueue) {
@@ -420,6 +427,16 @@ class TmuxControl(
         if (trimmed.isNotEmpty() && activeOrQueuedPaths.add(trimmed)) {
             downloadQueue.trySend(trimmed)
         }
+    }
+
+    private fun enqueueAutoPushDownload(remotePath: String) {
+        val trimmed = remotePath.trim()
+        if (trimmed.isEmpty()) return
+        if (AttacheFileStorage.isAlreadyInstalledOrOlderAttacheApk(trimmed)) {
+            Timber.i("Skipping auto-download of already-installed Attaché APK: %s", trimmed)
+            return
+        }
+        enqueueDownload(trimmed)
     }
 
     fun cancelActiveDownload() {
@@ -645,8 +662,41 @@ class TmuxControl(
             .filter { it.startsWith("/") }
             .distinct()
             .toList()
-        paths.forEach { enqueueDownload(it) }
+        paths.forEach { enqueueAutoPushDownload(it) }
         return paths
+    }
+
+    private suspend fun handleRemotePushIfAny() {
+        pushCheckLock.withLock {
+            val pushValue = send("show-options -gqv @attache_push").firstOrNull()?.trim().orEmpty()
+            if (pushValue.isEmpty()) {
+                drainRemotePushQueue()
+                return@withLock
+            }
+            val alreadyHandled = pushValue == lastHandledPushToken ||
+                !handledPushTokens.add(pushValue) ||
+                (appContext != null && AttacheFileStorage.isPushTokenHandled(appContext, pushValue))
+            if (alreadyHandled) {
+                lastHandledPushToken = pushValue
+                return@withLock
+            }
+            val isFirstObservation = lastHandledPushToken.isEmpty()
+            lastHandledPushToken = pushValue
+            appContext?.let { AttacheFileStorage.markPushTokenHandled(it, pushValue) }
+            val tokenEpoch = pushValue.substringBefore('-').toLongOrNull()
+            val isStaleOnConnect = isFirstObservation &&
+                tokenEpoch != null &&
+                tokenEpoch >= 1_700_000_000L &&
+                (System.currentTimeMillis() / 1000L - tokenEpoch) > 120L
+            val drained = drainRemotePushQueue()
+            if (drained.isEmpty() && !isStaleOnConnect) {
+                val colonIdx = pushValue.indexOf(':')
+                val remotePath = if (colonIdx >= 0) pushValue.substring(colonIdx + 1).trim() else pushValue
+                if (remotePath.startsWith("/")) {
+                    enqueueAutoPushDownload(remotePath)
+                }
+            }
+        }
     }
 
     suspend fun split(sideBySide: Boolean) {
@@ -901,7 +951,7 @@ class TmuxControl(
                 existing = _state.value.recentWindows,
                 current = currentRecent,
                 validSessions = sessions,
-                seedFromSessionsIfEmpty = true,
+                seedFromSessionsIfEmpty = false,
             )
             _state.value = TmuxState(
                 sessionId = current,
@@ -913,24 +963,7 @@ class TmuxControl(
                 recentWindows = recentWindows,
             )
             // Check if the computer queued a file via `attache-send <file>`
-            val pushValue = send("show-options -gqv @attache_push").firstOrNull()?.trim().orEmpty()
-            if (pushValue.isNotEmpty() && pushValue != lastHandledPushToken) {
-                val isFirstObservation = lastHandledPushToken.isEmpty()
-                lastHandledPushToken = pushValue
-                val tokenEpoch = pushValue.substringBefore('-').toLongOrNull()
-                val isStaleOnConnect = isFirstObservation &&
-                    tokenEpoch != null &&
-                    tokenEpoch >= 1_700_000_000L &&
-                    (System.currentTimeMillis() / 1000L - tokenEpoch) > 120L
-                val drained = drainRemotePushQueue()
-                if (drained.isEmpty() && !isStaleOnConnect) {
-                    val colonIdx = pushValue.indexOf(':')
-                    val remotePath = if (colonIdx >= 0) pushValue.substring(colonIdx + 1).trim() else pushValue
-                    if (remotePath.startsWith("/")) {
-                        enqueueDownload(remotePath)
-                    }
-                }
-            }
+            handleRemotePushIfAny()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

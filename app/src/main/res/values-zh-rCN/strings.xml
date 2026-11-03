@@ -326,7 +326,7 @@
   <string name="dialog_title_edit_color">编辑颜色 %1$d</string>
   <string name="dialog_title_reset_all">重置所有颜色？</string>
   <string name="dialog_message_reset_all">这将把所有 256 种颜色重置为其默认值。此操作无法撤销。</string>
-  <string name="app_is_running">ConnectBot 正在运行</string>
+  <string name="app_is_running">Attaché 正在运行</string>
   <string name="label_red">红色</string>
   <string name="label_green">绿色</string>
   <string name="label_blue">蓝色</string>
@@ -689,11 +689,11 @@
   <string name="pref_connection_alerts_summary" tools:machine_translated="true">显示终端提示音和连接中断提醒。</string>
   <string name="pref_connection_alerts_disabled_summary" tools:machine_translated="true">已关闭连接提醒。后台连接支持仍然启用。</string>
   <string name="pref_service_notification_visibility" tools:machine_translated="true">Android 系统控制当前连接通知的显示方式，与连接提醒功能无关。</string>
-  <string name="pref_notifications_blocked" tools:machine_translated="true">Android 已阻止 ConnectBot 的通知。后台连接功能仍然启用。</string>
+  <string name="pref_notifications_blocked" tools:machine_translated="true">Android 已阻止 Attaché 的通知。后台连接功能仍然启用。</string>
   <string name="connection_alert_permission_title" tools:machine_translated="true">连接通知</string>
   <string name="connection_alert_permission_message" tools:machine_translated="true">允许接收通知，以便查看已连接的主机，并接收终端提示音和连接中断提醒。即使没有此权限，连接仍然可以在后台运行。</string>
   <string name="connection_alert_permission_denied_title" tools:machine_translated="true">启用通知</string>
-  <string name="connection_alert_permission_denied_message" tools:machine_translated="true">在 Android 设置中启用 ConnectBot 的通知，以便查看已连接的主机，并接收终端提示音和连接中断提醒。后台连接支持将继续启用。</string>
+  <string name="connection_alert_permission_denied_message" tools:machine_translated="true">在 Android 设置中启用 Attaché 的通知，以便查看已连接的主机，并接收终端提示音和连接中断提醒。后台连接支持将继续启用。</string>
   <string name="profile_bold_as_bright" tools:machine_translated="true">将粗体颜色设置为高亮颜色</string>
   <string name="profile_bold_as_bright_summary" tools:machine_translated="true">对粗体文本使用鲜艳的 ANSI 颜色。此设置将应用于新的终端会话。</string>
   <string name="known_hosts_title" tools:machine_translated="true">已知的服务器</string>

@@ -18,7 +18,7 @@
  */
 -->
 <resources>
-	<string name="app_name" translatable="false">Attache</string>
+	<string name="app_name" translatable="false">Attaché</string>
 
 	<!-- Placeholder for source port field. Should show  -->
 	<string name="portforward_source_port_placeholder">8080</string>
@@ -47,4 +47,8 @@
 
 	<!-- Default filename for exported hosts JSON file -->
 	<string name="export_hosts_filename">connectbot_hosts.json</string>
+
+	<!-- Accessibility service for 1-step WeType voice input trigger -->
+	<string name="attache_accessibility_service_label" translatable="false">Attaché 一键语音辅助</string>
+	<string name="attache_accessibility_service_desc" translatable="false">在 Attaché 中点击「🎤说」时，自动弹出键盘并长按微信输入法空格键（或点击工具栏话筒）直接开始语音输入。不读取任何屏幕内容。</string>
 </resources>

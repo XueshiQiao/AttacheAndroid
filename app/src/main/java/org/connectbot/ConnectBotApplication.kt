@@ -20,6 +20,7 @@ package org.connectbot
 import android.app.Application
 import android.content.Context
 import dagger.hilt.android.HiltAndroidApp
+import org.attache.tmux.AttacheMigrationProvider
 import org.connectbot.logging.TimberInitializer
 import org.connectbot.util.SplitCompatLoader
 import javax.inject.Inject
@@ -36,6 +37,7 @@ class ConnectBotApplication : Application() {
     }
 
     override fun onCreate() {
+        AttacheMigrationProvider.migrateFromLegacyPackageIfNeeded(this)
         super.onCreate()
         timberInitializer.initialize()
     }
