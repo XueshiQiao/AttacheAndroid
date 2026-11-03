@@ -341,6 +341,70 @@ internal fun shouldPreserveSoftwareKeyboardForBridgeChange(
     showSoftwareKeyboard &&
     !hasHardwareKeyboard
 
+@VisibleForTesting
+internal fun shouldDismissKeyboardOnDownwardSwipe(
+    imeVisible: Boolean,
+    showSoftwareKeyboard: Boolean,
+    inlineInputActive: Boolean,
+): Boolean = !inlineInputActive && (imeVisible || showSoftwareKeyboard)
+
+@VisibleForTesting
+internal fun isNonTmuxTerminalScrollable(
+    bridge: TerminalBridge,
+    pgUpDnGestureEnabled: Boolean,
+): Boolean {
+    if (pgUpDnGestureEnabled) return true
+    val scrollbackConfigured = (bridge.host?.scrollbackLines ?: 140) > 0
+    val rows = bridge.terminalEmulator?.dimensions?.rows ?: 0
+    return scrollbackConfigured && rows > 0
+}
+
+private fun Modifier.dismissKeyboardOnDownwardScroll(
+    key: Any?,
+    selectionActive: () -> Boolean,
+    canScroll: () -> Boolean,
+    onDismissKeyboard: () -> Unit,
+): Modifier = pointerInput(key) {
+    val slop = viewConfiguration.touchSlop
+    val dismissThresholdPx = max(slop * 2.5f, 24.dp.toPx())
+    val longPress = viewConfiguration.longPressTimeoutMillis
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        if (selectionActive() || !canScroll()) return@awaitEachGesture
+        var scrolling = false
+        var keyboardDismissedInGesture = false
+        var moved = false
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (selectionActive()) return@awaitEachGesture
+            if (event.changes.size > 1) return@awaitEachGesture
+            val change = event.changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+            if (!change.pressed) return@awaitEachGesture
+            val total = change.position - down.position
+            if (!scrolling) {
+                if (!moved && change.uptimeMillis - down.uptimeMillis >= longPress) return@awaitEachGesture
+                if (abs(total.x) > slop || abs(total.y) > slop) moved = true
+                if (abs(total.y) > slop && abs(total.y) > abs(total.x)) {
+                    scrolling = true
+                } else if (moved) {
+                    return@awaitEachGesture
+                }
+            }
+            if (scrolling && !keyboardDismissedInGesture) {
+                val deltaY = change.position.y - change.previousPosition.y
+                if (
+                    deltaY > 0f &&
+                    total.y > dismissThresholdPx &&
+                    abs(total.y) > abs(total.x) * 1.5f
+                ) {
+                    keyboardDismissedInGesture = true
+                    onDismissKeyboard()
+                }
+            }
+        }
+    }
+}
+
 private fun Modifier.sessionSwipeNavigation(
     currentIndex: Int,
     sessionCount: Int,
@@ -1407,6 +1471,22 @@ fun ConsoleScreen(
                         val bridge = uiState.bridges[uiState.currentBridgeIndex]
                         @Suppress("USELESS_ELVIS")
                         val pageTmuxControl by (bridge.tmuxControl ?: noTmuxControl).collectAsState()
+                        val localView = androidx.compose.ui.platform.LocalView.current
+                        val dismissSoftKeyboardOnSwipe by rememberUpdatedState {
+                            if (
+                                shouldDismissKeyboardOnDownwardSwipe(
+                                    imeVisible = imeVisible,
+                                    showSoftwareKeyboard = showSoftwareKeyboard,
+                                    inlineInputActive = showTextInputDialog,
+                                )
+                            ) {
+                                showSoftwareKeyboard = false
+                                keyboardController?.hide()
+                                localView.context
+                                    .getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                                    ?.hideSoftInputFromWindow(localView.windowToken, 0)
+                            }
+                        }
                         val terminalModifier = if (swipeBetweenSessions) {
                             Modifier.sessionSwipeNavigation(
                                 currentIndex = uiState.currentBridgeIndex,
@@ -1428,8 +1508,14 @@ fun ConsoleScreen(
                                     control = control,
                                     selectionActive = { selectionController?.isSelectionActive == true },
                                     dimensions = { bridge.terminalEmulator.dimensions },
+                                    onDismissKeyboard = { dismissSoftKeyboardOnSwipe() },
                                 )
-                            } ?: Modifier,
+                            } ?: Modifier.dismissKeyboardOnDownwardScroll(
+                                key = bridge,
+                                selectionActive = { selectionController?.isSelectionActive == true },
+                                canScroll = { isNonTmuxTerminalScrollable(bridge, pgUpDnGestureEnabled) },
+                                onDismissKeyboard = { dismissSoftKeyboardOnSwipe() },
+                            ),
                         )
 
                         Row(modifier = Modifier.fillMaxSize()) {

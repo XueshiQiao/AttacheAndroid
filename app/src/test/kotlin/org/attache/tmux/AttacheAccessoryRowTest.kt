@@ -1,26 +1,43 @@
 package org.attache.tmux
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.connectbot.HiltComponentActivity
+import org.connectbot.data.entity.Host
+import org.connectbot.service.TerminalBridge
 import org.connectbot.sshlib.SshSession
+import org.connectbot.terminal.TerminalDimensions
+import org.connectbot.terminal.TerminalEmulatorFactory
 import org.connectbot.ui.screens.console.CLEAR_INPUT_SEQUENCE
+import org.connectbot.ui.screens.console.isNonTmuxTerminalScrollable
+import org.connectbot.ui.screens.console.shouldDismissKeyboardOnDownwardSwipe
 import org.connectbot.ui.theme.ConnectBotTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.`when`
 import java.util.UUID
 
 @HiltAndroidTest
@@ -161,6 +178,99 @@ class AttacheAccessoryRowTest {
             assertTrue(themeToggled)
             assertEquals(hostId, selectedHost)
             assertTrue(dismissed)
+        }
+    }
+
+    @Test
+    fun downwardSwipeKeyboardDismissal_respectsInlineInputAndScrollability() {
+        assertTrue(
+            shouldDismissKeyboardOnDownwardSwipe(
+                imeVisible = true,
+                showSoftwareKeyboard = false,
+                inlineInputActive = false,
+            ),
+        )
+        assertTrue(
+            shouldDismissKeyboardOnDownwardSwipe(
+                imeVisible = false,
+                showSoftwareKeyboard = true,
+                inlineInputActive = false,
+            ),
+        )
+        assertFalse(
+            shouldDismissKeyboardOnDownwardSwipe(
+                imeVisible = true,
+                showSoftwareKeyboard = true,
+                inlineInputActive = true,
+            ),
+        )
+        assertFalse(
+            shouldDismissKeyboardOnDownwardSwipe(
+                imeVisible = false,
+                showSoftwareKeyboard = false,
+                inlineInputActive = false,
+            ),
+        )
+
+        val bridge = mock(TerminalBridge::class.java)
+        val emulator = TerminalEmulatorFactory.create(initialRows = 24, initialCols = 80)
+        `when`(bridge.terminalEmulator).thenReturn(emulator)
+        `when`(bridge.host).thenReturn(Host(id = UUID(0, 1), nickname = "scrollable", scrollbackLines = 140))
+        assertTrue(isNonTmuxTerminalScrollable(bridge, pgUpDnGestureEnabled = false))
+
+        `when`(bridge.host).thenReturn(Host(id = UUID(0, 1), nickname = "no-scrollback", scrollbackLines = 0))
+        assertFalse(isNonTmuxTerminalScrollable(bridge, pgUpDnGestureEnabled = false))
+        assertTrue(isNonTmuxTerminalScrollable(bridge, pgUpDnGestureEnabled = true))
+    }
+
+    @Test
+    fun tmuxTouch_downwardSwipeDismissesKeyboardOnce_upwardSwipeDoesNot() {
+        val session = mock(SshSession::class.java)
+        val control = TmuxControl(
+            session = session,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            onEnded = {},
+            exec = { null },
+        )
+        val stateField = TmuxControl::class.java.getDeclaredField("_state").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        val stateFlow = stateField.get(control) as MutableStateFlow<TmuxState>
+        stateFlow.value = TmuxState(
+            sessionId = "\$0",
+            panes = listOf(TmuxPane(id = "%0", left = 0, top = 0, width = 80, height = 24, active = true, inMode = false)),
+        )
+
+        var dismissCount = 0
+        composeTestRule.setContent {
+            ConnectBotTheme {
+                Box(
+                    modifier = Modifier
+                        .size(300.dp)
+                        .tmuxTouch(
+                            control = control,
+                            selectionActive = { false },
+                            dimensions = { TerminalDimensions(rows = 24, columns = 80) },
+                            onDismissKeyboard = { dismissCount++ },
+                        )
+                        .testTag("tmuxTouchBox"),
+                )
+            }
+        }
+
+        // Upward swipe (finger moving up, delta.y < 0) should NOT dismiss keyboard
+        composeTestRule.onNodeWithTag("tmuxTouchBox").performTouchInput {
+            swipe(start = Offset(150f, 220f), end = Offset(150f, 40f), durationMillis = 150)
+        }
+        composeTestRule.runOnIdle {
+            assertEquals(0, dismissCount)
+        }
+
+        // Downward swipe (finger moving down towards keyboard, delta.y > 0) SHOULD dismiss keyboard once
+        composeTestRule.onNodeWithTag("tmuxTouchBox").performTouchInput {
+            swipe(start = Offset(150f, 40f), end = Offset(150f, 220f), durationMillis = 150)
+        }
+        composeTestRule.runOnIdle {
+            assertEquals(1, dismissCount)
         }
     }
 }

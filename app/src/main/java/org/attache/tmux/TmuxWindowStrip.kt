@@ -152,9 +152,11 @@ fun Modifier.tmuxTouch(
     control: TmuxControl,
     selectionActive: () -> Boolean = { false },
     dimensions: () -> TerminalDimensions?,
+    onDismissKeyboard: (() -> Unit)? = null,
 ): Modifier =
     pointerInput(control) {
         val slop = viewConfiguration.touchSlop
+        val dismissThresholdPx = kotlin.math.max(slop * 2.5f, 24.dp.toPx())
         val longPress = viewConfiguration.longPressTimeoutMillis
         val scope = CoroutineScope(currentCoroutineContext())
         var fling: kotlinx.coroutines.Job? = null
@@ -173,6 +175,7 @@ fun Modifier.tmuxTouch(
             val lineHeight = size.height.toFloat() / rows
             val cellWidth = size.width.toFloat() / columns
             var scrolling = false
+            var keyboardDismissedInGesture = false
             var target: TmuxPane? = null
             var moved = false
             var pending = 0f
@@ -235,8 +238,18 @@ fun Modifier.tmuxTouch(
                 }
                 velocity.addPosition(change.uptimeMillis, change.position)
                 if (scrolling) {
+                    val deltaY = change.position.y - change.previousPosition.y
+                    if (
+                        !keyboardDismissedInGesture &&
+                        deltaY > 0f &&
+                        total.y > dismissThresholdPx &&
+                        abs(total.y) > abs(total.x) * 1.5f
+                    ) {
+                        keyboardDismissedInGesture = true
+                        onDismissKeyboard?.invoke()
+                    }
                     // Finger down is older text, which is tmux's scroll-up.
-                    pending += change.position.y - change.previousPosition.y
+                    pending += deltaY
                     val lines = (pending / lineHeight).toInt()
                     if (lines != 0) {
                         val pane = target ?: return@awaitEachGesture
