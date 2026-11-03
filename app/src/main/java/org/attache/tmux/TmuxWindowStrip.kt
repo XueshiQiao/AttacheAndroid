@@ -290,10 +290,13 @@ fun Modifier.tmuxTouch(
     selectionActive: () -> Boolean = { false },
     dimensions: () -> TerminalDimensions?,
     onDismissKeyboard: (() -> Unit)? = null,
+    onBackSwipe: (() -> Unit)? = null,
 ): Modifier =
     pointerInput(control) {
         val slop = viewConfiguration.touchSlop
         val dismissThresholdPx = kotlin.math.max(slop * 2.5f, 24.dp.toPx())
+        val leftEdgeZonePx = 44.dp.toPx()
+        val backSwipeTriggerPx = 64.dp.toPx()
         val longPress = viewConfiguration.longPressTimeoutMillis
         val scope = CoroutineScope(currentCoroutineContext())
         var fling: kotlinx.coroutines.Job? = null
@@ -305,6 +308,7 @@ fun Modifier.tmuxTouch(
             // While text selection is active, let all handle drags and taps
             // reach the terminal without recreating the pointerInput modifier.
             if (selectionActive()) return@awaitEachGesture
+            val startedNearLeftEdge = down.position.x <= leftEdgeZonePx && onBackSwipe != null
             val velocity = androidx.compose.ui.input.pointer.util.VelocityTracker()
             val dims = dimensions()
             val rows = dims?.rows?.takeIf { it > 0 } ?: return@awaitEachGesture
@@ -312,6 +316,8 @@ fun Modifier.tmuxTouch(
             val lineHeight = (size.height.toFloat() / rows).coerceAtLeast(1f)
             val cellWidth = size.width.toFloat() / columns
             var scrolling = false
+            var backSwiping = false
+            var backSwipeTriggered = false
             var keyboardDismissedInGesture = false
             var target: TmuxPane? = null
             var moved = false
@@ -358,21 +364,23 @@ fun Modifier.tmuxTouch(
                             }
                         }
                     }
-                    if (!moved && !scrolling && change.uptimeMillis - down.uptimeMillis < longPress) {
+                    if (!moved && !scrolling && !backSwiping && change.uptimeMillis - down.uptimeMillis < longPress) {
                         val column = (down.position.x / cellWidth).toInt()
                         val row = (down.position.y / lineHeight).toInt()
                         scope.tmuxAction("select-pane") { control.selectPaneAt(column, row) }
                     }
                     return@awaitEachGesture
                 }
-                if (!scrolling) {
+                if (!scrolling && !backSwiping) {
                     // Held still past the long-press timeout: the terminal
                     // has started a selection. Checked before this event's
                     // movement counts, or a first move past the slop would
                     // hide that the finger had been still until then.
                     if (!moved && change.uptimeMillis - down.uptimeMillis >= longPress) return@awaitEachGesture
                     if (abs(total.x) > slop || abs(total.y) > slop) moved = true
-                    if (abs(total.y) > slop && abs(total.y) > abs(total.x)) {
+                    if (startedNearLeftEdge && total.x > slop && total.x > abs(total.y) * 1.25f) {
+                        backSwiping = true
+                    } else if (abs(total.y) > slop && abs(total.y) > abs(total.x)) {
                         // The pane under the finger, as a wheel would scroll.
                         target = control.paneAt(
                             (down.position.x / cellWidth).toInt(),
@@ -382,6 +390,15 @@ fun Modifier.tmuxTouch(
                     } else if (moved) {
                         return@awaitEachGesture
                     }
+                }
+                if (backSwiping) {
+                    change.consume()
+                    if (!backSwipeTriggered && total.x >= backSwipeTriggerPx) {
+                        backSwipeTriggered = true
+                        onBackSwipe?.invoke()
+                        return@awaitEachGesture
+                    }
+                    continue
                 }
                 velocity.addPosition(change.uptimeMillis, change.position)
                 if (scrolling) {

@@ -118,7 +118,14 @@ fun ConnectBotNavHost(
                 ),
             ) {
                 ConsoleScreen(
-                    onNavigateBack = { navController.safePopBackStack() },
+                    onNavigateBack = {
+                        if (!navController.safePopBackStack()) {
+                            navController.navigate(NavDestinations.HOST_LIST) {
+                                popUpTo(0) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
+                    },
                     onNavigateToPortForwards = { hostIdForPortForwards ->
                         navController.navigateSafely("${NavDestinations.PORT_FORWARD_LIST}/$hostIdForPortForwards")
                     },

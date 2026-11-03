@@ -67,8 +67,15 @@ object TmuxTrial {
     // tmux 3.6a replaces control bytes in replies with `_` — measured over
     // this exact channel: the \u0001 field separators came back as `_` and
     // the window list parsed to nothing.
+    // Reap only true orphan `tmux -C` processes whose parent `sshd-session` has
+    // died and been reparented to PID 1 (`PPID == 1`). Live `tmux -C` clients
+    // from other connected devices (e.g. Phone + Pad simultaneously) have
+    // `PPID > 1` (`sshd-session`) and are never touched.
+    private const val ORPHAN_REAP =
+        "ps -eo pid=,ppid=,command= 2>/dev/null | awk '\$2 == 1 && /tmux.*-C/ && !/attache-mobile-test/ { print \$1 }' | xargs kill -9 2>/dev/null || true"
+
     fun controlCommand(t: Target) =
-        "export $PATH_SETUP; pkill -f '[t]mux -u ${t.socketArg}-C new-session -A -s' 2>/dev/null || true; exec tmux -u ${t.socketArg}-C new-session -A -s '${t.session}'"
+        "export $PATH_SETUP; $ORPHAN_REAP; exec tmux -u ${t.socketArg}-C new-session -A -s '${t.session}'"
 
     fun attachCommand(t: Target) = "export $PATH_SETUP; exec tmux ${t.socketArg}new-session -A -s '${t.session}'"
 }
@@ -255,6 +262,7 @@ class TmuxControl(
     @Volatile private var currentDownloadJob: Job? = null
     private val downloadQueue = Channel<String>(Channel.UNLIMITED)
     private val activeOrQueuedPaths = java.util.Collections.synchronizedSet( linkedSetOf<String>() )
+    private val pendingPushTokensByPath = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile private var lastHandledPushToken: String =
         appContext?.let { AttacheFileStorage.getLastHandledPushToken(it) }.orEmpty()
     private val handledPushTokens = java.util.Collections.synchronizedSet(
@@ -303,6 +311,9 @@ class TmuxControl(
                 // command replies and layout/window notifications intact.
                 try {
                     send("refresh-client -f no-output,ignore-size")
+                    send(
+                        "set-hook -g client-attached \"run-shell -b 'ps -eo pid=,ppid=,command= 2>/dev/null | awk \\\"\\\\\\\$2 == 1 && /tmux.*-C/ && !/attache-mobile-test/ { print \\\\\\\$1 }\\\" | xargs kill -9 2>/dev/null || true'\"",
+                    )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -337,8 +348,26 @@ class TmuxControl(
                                     remotePath = remotePath,
                                     onProgress = { progress -> _activeDownload.value = progress },
                                 )
+                                val token = pendingPushTokensByPath.remove(remotePath)
                                 if (received != null) {
+                                    if (!token.isNullOrEmpty()) {
+                                        lastHandledPushToken = token
+                                        handledPushTokens.add(token)
+                                        AttacheFileStorage.markPushTokenHandled(ctx, token)
+                                    }
                                     _completedDownloads.tryEmit(received)
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        android.widget.Toast.makeText(
+                                            ctx,
+                                            "📥 Attaché 已收到文件: ${received.name}",
+                                            android.widget.Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                } else if (!token.isNullOrEmpty()) {
+                                    handledPushTokens.remove(token)
+                                    if (lastHandledPushToken == token) {
+                                        lastHandledPushToken = ""
+                                    }
                                 }
                             } finally {
                                 activeOrQueuedPaths.remove(remotePath)
@@ -491,12 +520,20 @@ class TmuxControl(
         }
     }
 
-    private fun enqueueAutoPushDownload(remotePath: String) {
+    private fun enqueueAutoPushDownload(remotePath: String, pushToken: String? = null) {
         val trimmed = remotePath.trim()
         if (trimmed.isEmpty()) return
         if (AttacheFileStorage.isAlreadyInstalledOrOlderAttacheApk(trimmed)) {
             Timber.i("Skipping auto-download of already-installed Attaché APK: %s", trimmed)
+            if (!pushToken.isNullOrEmpty()) {
+                lastHandledPushToken = pushToken
+                handledPushTokens.add(pushToken)
+                appContext?.let { AttacheFileStorage.markPushTokenHandled(it, pushToken) }
+            }
             return
+        }
+        if (!pushToken.isNullOrEmpty()) {
+            pendingPushTokensByPath[trimmed] = pushToken
         }
         enqueueDownload(trimmed)
     }
@@ -705,7 +742,7 @@ class TmuxControl(
      * Atomically drains `~/.local/share/attache/outbox.queue` on the remote host and
      * enqueues each file path for background download into `Download/Attache/`.
      */
-    private suspend fun drainRemotePushQueue(): List<String> {
+    private suspend fun drainRemotePushQueue(pushToken: String? = null): List<String> {
         val d = "$"
         val out = try {
             exec(
@@ -724,7 +761,7 @@ class TmuxControl(
             .filter { it.startsWith("/") }
             .distinct()
             .toList()
-        paths.forEach { enqueueAutoPushDownload(it) }
+        paths.forEach { enqueueAutoPushDownload(it, pushToken) }
         return paths
     }
 
@@ -736,27 +773,29 @@ class TmuxControl(
                 return@withLock
             }
             val alreadyHandled = pushValue == lastHandledPushToken ||
-                !handledPushTokens.add(pushValue) ||
+                handledPushTokens.contains(pushValue) ||
                 (appContext != null && AttacheFileStorage.isPushTokenHandled(appContext, pushValue))
             if (alreadyHandled) {
                 lastHandledPushToken = pushValue
                 return@withLock
             }
             val isFirstObservation = lastHandledPushToken.isEmpty()
-            lastHandledPushToken = pushValue
-            appContext?.let { AttacheFileStorage.markPushTokenHandled(it, pushValue) }
             val tokenEpoch = pushValue.substringBefore('-').toLongOrNull()
             val isStaleOnConnect = isFirstObservation &&
                 tokenEpoch != null &&
                 tokenEpoch >= 1_700_000_000L &&
-                (System.currentTimeMillis() / 1000L - tokenEpoch) > 120L
-            val drained = drainRemotePushQueue()
-            if (drained.isEmpty() && !isStaleOnConnect) {
+                (System.currentTimeMillis() / 1000L - tokenEpoch) > 600L
+            val drained = drainRemotePushQueue(pushValue)
+            if (!isStaleOnConnect) {
                 val colonIdx = pushValue.indexOf(':')
                 val remotePath = if (colonIdx >= 0) pushValue.substring(colonIdx + 1).trim() else pushValue
-                if (remotePath.startsWith("/")) {
-                    enqueueAutoPushDownload(remotePath)
+                if (remotePath.startsWith("/") && remotePath !in drained) {
+                    enqueueAutoPushDownload(remotePath, pushValue)
                 }
+            } else {
+                lastHandledPushToken = pushValue
+                handledPushTokens.add(pushValue)
+                appContext?.let { AttacheFileStorage.markPushTokenHandled(it, pushValue) }
             }
         }
     }

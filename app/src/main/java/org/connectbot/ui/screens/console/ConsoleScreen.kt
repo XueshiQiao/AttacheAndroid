@@ -1092,6 +1092,10 @@ fun ConsoleScreen(
         termFocusRequester.requestFocus()
     }
 
+    BackHandler(enabled = !anyModalActive && !showTextInputDialog) {
+        navigateBack()
+    }
+
     // Resume title bar auto-hide when the overflow menu closes.
     LaunchedEffect(showMenu) {
         if (!showMenu) {
@@ -1611,6 +1615,7 @@ fun ConsoleScreen(
                                     selectionActive = { selectionController?.isSelectionActive == true },
                                     dimensions = { bridge.terminalEmulator.dimensions },
                                     onDismissKeyboard = { dismissSoftKeyboardOnSwipe() },
+                                    onBackSwipe = { navigateBack() },
                                 )
                             } ?: Modifier.dismissKeyboardOnDownwardScroll(
                                 key = bridge,
