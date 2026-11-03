@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attaché Android · 顶栏 × 侧栏统一方案对比（A–E）</title>
+<style>
+:root{
+  --ui:"Roboto","Google Sans",-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+  --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,"PingFang SC",monospace;
+  --e:cubic-bezier(.2,.8,.2,1);
+  --dur:.36s;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--ui);background:#E6E2D9;color:#24262a;overflow:hidden;transition:background .3s}
+body.pg-dark{background:#111316;color:#D7DAE0}
+button{font:inherit;color:inherit;border:0;background:none;padding:0;cursor:pointer}
+
+/* ───────── page toolbar ───────── */
+.ptb{height:60px;display:flex;align-items:center;gap:14px;padding:0 22px;border-bottom:1px solid rgba(0,0,0,.08);background:rgba(255,255,255,.55);backdrop-filter:blur(10px)}
+.pg-dark .ptb{background:rgba(255,255,255,.03);border-color:rgba(255,255,255,.07)}
+.ptb h1{font-size:15px;font-weight:650;margin:0 10px 0 0;white-space:nowrap}
+.ptb h1 small{font-weight:400;opacity:.55;margin-left:6px;font-size:12px}
+.seg{display:flex;background:rgba(0,0,0,.06);border-radius:10px;padding:3px;gap:2px}
+.pg-dark .seg{background:rgba(255,255,255,.06)}
+.seg button{height:30px;padding:0 12px;border-radius:7px;font-size:13px;white-space:nowrap;opacity:.72}
+.seg button:hover{opacity:1}
+.seg button.on{background:#fff;opacity:1;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.pg-dark .seg button.on{background:#2c3139}
+.seg button.before{font-style:normal}
+.ptb .hint{margin-left:auto;font-size:12px;opacity:.5;white-space:nowrap}
+
+/* ───────── stage ───────── */
+.stage{position:absolute;top:60px;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;gap:28px;padding:20px 24px}
+.devbox{flex:none;position:relative}
+.bezel{position:absolute;left:0;top:0;transform-origin:0 0;padding:14px;border-radius:38px;background:#121214;box-shadow:0 0 0 1.5px #3a3a3e inset,0 30px 70px rgba(0,0,0,.28),0 6px 18px rgba(0,0,0,.18)}
+.card{flex:none;width:372px;max-height:100%;overflow:auto;background:rgba(255,255,255,.72);border-radius:18px;padding:20px 22px;box-shadow:0 1px 0 rgba(0,0,0,.04),0 10px 30px rgba(60,40,10,.08);font-size:13px;line-height:1.62;scrollbar-width:none}
+.pg-dark .bezel{box-shadow:0 0 0 1.5px #4a4c52 inset,0 30px 70px rgba(0,0,0,.6)}
+.pg-dark .card{background:#1a1d22;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.card .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;padding:2px 8px;border-radius:6px;background:rgba(59,110,168,.12);color:#3B6EA8;margin-bottom:8px}
+.pg-dark .card .tag{background:rgba(97,175,239,.14);color:#61AFEF}
+.card h2{font-size:19px;margin:0 0 2px;font-weight:700;letter-spacing:-.01em}
+.card .en{font-size:12.5px;opacity:.55;margin-bottom:12px}
+.card h3{font-size:12px;letter-spacing:.06em;margin:14px 0 4px;opacity:.55;font-weight:700}
+.card ul{margin:0;padding-left:18px}
+.card li{margin:2px 0}
+.card p{margin:0}
+.card code{font-family:var(--mono);font-size:11.5px;background:rgba(0,0,0,.06);padding:1px 5px;border-radius:4px}
+.pg-dark .card code{background:rgba(255,255,255,.08)}
+.card .cost{display:flex;align-items:center;gap:8px;margin-top:4px;font-weight:600}
+.card .stars{color:#C98A1B;letter-spacing:1px}
+
+/* ───────── screen & themes ───────── */
+.screen{position:relative;width:var(--W);height:var(--H);overflow:hidden;border-radius:22px;font-family:var(--ui);color:var(--ink);background:var(--paper);
+  transition:background .3s,color .3s;-webkit-font-smoothing:antialiased}
+.screen.light{
+  --paper:#F7F3EA;--ink:#1F2328;--muted:#6F6A61;--faint:#9C978C;--line:rgba(70,55,30,.12);--line2:rgba(70,55,30,.07);
+  --accent:#3B6EA8;--tint:#DEE6F0;--tint2:rgba(59,110,168,.07);--green:#3C9A5F;--btn:rgba(70,55,30,.065);--btnh:rgba(70,55,30,.11);
+  --a-side:#F1ECE1;--b-side:#EEE8DB;--chrome:#E9E2D3;--sel-paper:#FBF8F2;
+  --glass:rgba(251,248,241,.66);--glass-b:rgba(255,255,255,.75);--glass-s:0 10px 32px rgba(70,50,20,.16),0 1px 3px rgba(70,50,20,.10);
+  --e-rail:#EFE8DA;--e-draw:#F3EDE2;--e-ind:#DAE3F1;--e-ind-t:#173A64;--e-fab:#D3E1F5;--e-fab-t:#12355E;
+  --o-side:#F3F2EE;--o-head:#EBE9E3;--o-line:#DEDBD3;--o-chip:#EDE7DA;--o-chipb:#D8D0C1;--o-sel:#4A6EA5;--o-host:#E9E6DF;--o-moon:#F6EDD3;
+  --scrim:rgba(20,18,14,.40);
+  --k:#FFFFFF;--kb:#DDD6C8;--ky:#FBF1CF;--kyb:#E7D38F;--kyt:#5c4a10;--kbl:#DEE8F6;--kblb:#AEC5E7;--kblt:#2D5D9B;--kg:#E5F3E3;--kgb:#AAD5A6;--kgt:#2E7D32;--kr:#FBE6E4;--krb:#ECB0AC;--krt:#C0392B;--kesc:#EFC56E;--kesct:#B0601A;
+  --tblue:#2F64A8;--tgreen:#2E8B57;--tred:#C0392B;--tcyan:#2B8A99;--tyel:#8A6A12;--tpur:#7A4FB3;
+  --tmux1:#3B6EA8;--tmux2:#D9D2C3;--tmux3:#C9D7EA;
+}
+.screen.dark{
+  --paper:#21252B;--ink:#D7DAE0;--muted:#9AA1AD;--faint:#6C737F;--line:rgba(255,255,255,.085);--line2:rgba(255,255,255,.05);
+  --accent:#61AFEF;--tint:#2A3A4E;--tint2:rgba(97,175,239,.08);--green:#98C379;--btn:rgba(255,255,255,.065);--btnh:rgba(255,255,255,.11);
+  --a-side:#1D2025;--b-side:#1A1D21;--chrome:#17191D;--sel-paper:#2A2F37;
+  --glass:rgba(40,44,52,.62);--glass-b:rgba(255,255,255,.08);--glass-s:0 12px 34px rgba(0,0,0,.45),0 1px 3px rgba(0,0,0,.3);
+  --e-rail:#1A1D22;--e-draw:#1C1F25;--e-ind:#2B3A4F;--e-ind-t:#CFE3FA;--e-fab:#2A4566;--e-fab-t:#D3E4FF;
+  --o-side:#1E1F22;--o-head:#18191B;--o-line:#2B2D30;--o-chip:#1C212B;--o-chipb:#2B323C;--o-sel:#3B6EA8;--o-host:#2A2C30;--o-moon:#2a2a22;
+  --scrim:rgba(0,0,0,.52);
+  --k:#2A2F37;--kb:#363C46;--ky:#3A3423;--kyb:#5A4E2B;--kyt:#E5C07B;--kbl:#24324A;--kblb:#34496A;--kblt:#8CC0F2;--kg:#23362A;--kgb:#355A3E;--kgt:#98C379;--kr:#3E2629;--krb:#64383C;--krt:#E06C75;--kesc:#7a5a28;--kesct:#E5A55B;
+  --tblue:#61AFEF;--tgreen:#98C379;--tred:#E06C75;--tcyan:#56B6C2;--tyel:#E5C07B;--tpur:#C678DD;
+  --tmux1:#61AFEF;--tmux2:#2F343D;--tmux3:#2B3A4F;
+}
+.screen svg{display:block}
+.ico{width:18px;height:18px}
+
+/* status bar */
+.status{position:absolute;left:0;right:0;top:0;height:40px;z-index:60;display:flex;align-items:center;padding:0 24px 0 22px;pointer-events:none;color:var(--ink);font-size:14.5px}
+.clock{font-weight:500;letter-spacing:.01em;margin-right:8px}
+.apps{display:flex;gap:4px}
+.apps i{width:12px;height:12px;border-radius:3px;display:block}
+.status .mid{position:absolute;left:50%;transform:translateX(-50%);display:flex;gap:5px}
+.status .mid i{width:5px;height:5px;border-radius:50%;background:var(--ink);opacity:.45}
+.status .sp{flex:1}
+.net{font-size:7px;line-height:8px;font-weight:700;text-align:center;margin-right:6px}
+.bat{display:flex;align-items:center;gap:5px;margin-left:5px;font-weight:500}
+.gesture{position:absolute;left:50%;bottom:5px;width:150px;height:4px;margin-left:-75px;border-radius:3px;background:var(--ink);opacity:.28;z-index:60;pointer-events:none}
+
+/* layers */
+.topbar{position:absolute;top:0;left:0;right:0;height:78px;z-index:20;background:var(--paper);transition:left var(--dur) var(--e),background .3s}
+.term{position:absolute;left:0;top:78px;right:0;bottom:0;z-index:10;display:flex;flex-direction:column;background:var(--paper);overflow:hidden;
+  transition:left var(--dur) var(--e),padding var(--dur) var(--e),border-radius var(--dur) var(--e),background .3s}
+.scrim{position:absolute;inset:0;z-index:40;background:var(--scrim);opacity:0;pointer-events:none;transition:opacity .3s}
+.port.open .scrim{opacity:1;pointer-events:auto}
+.side{position:absolute;left:0;top:78px;bottom:0;width:244px;z-index:25;overflow:hidden;display:flex;flex-direction:column;
+  transition:width var(--dur) var(--e),transform var(--dur) var(--e),opacity .28s,box-shadow .3s,background .3s}
+.side-in{width:244px;flex:1;min-height:0;display:flex;flex-direction:column}
+.port .side-in{width:288px}
+.port .side{width:288px;z-index:45;transform:translateX(-102%)}
+.port.open .side{transform:none;box-shadow:8px 0 30px rgba(0,0,0,.18)}
+.land:not(.open) .side{width:0}
+
+.fl{position:absolute;top:40px;height:38px;display:flex;align-items:center;z-index:30;
+  transition:left var(--dur) var(--e),opacity .25s,color .3s}
+.fl-back{left:8px;width:34px;justify-content:center}
+.fl-back .ico{width:20px;height:20px}
+.fl-tog,.fl-menu{left:42px;width:34px;justify-content:center}
+.fl-brand{left:80px;font-size:15px;font-weight:650;letter-spacing:.01em;opacity:0;pointer-events:none;white-space:nowrap}
+.fl-title{left:80px;font-size:15px;white-space:nowrap;gap:6px;cursor:default}
+.fl-title .ts{color:var(--accent);font-weight:600}
+.fl-title .tc{font-style:normal;font-size:10px;color:var(--muted);margin:0 2px 0 -2px}
+.fl-title .tw{color:var(--ink);opacity:.72}
+.fl-actions{right:10px;gap:6px;left:auto}
+.ibtn{width:34px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--ink);transition:background .15s}
+.ibtn:hover{background:var(--btnh)}
+.btn{height:28px;min-width:32px;padding:0 8px;border-radius:8px;background:var(--btn);display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:600;color:var(--ink);transition:background .15s}
+.btn:hover{background:var(--btnh)}
+.btn .ico{width:16px;height:16px}
+.btn.plain{background:none;min-width:24px;padding:0 4px}
+.btn.plain:hover{background:var(--btnh)}
+.screen .moon-i{display:block}.screen .sun-i{display:none}
+.screen.dark .moon-i{display:none}.screen.dark .sun-i{display:block}
+
+/* sidebar content (new schemes) */
+.scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;padding-bottom:8px}
+.scroll::-webkit-scrollbar{display:none}
+.sec{display:flex;align-items:center;justify-content:space-between;padding:14px 12px 6px 18px;font-size:11px;font-weight:650;letter-spacing:.08em;color:var(--muted)}
+.sec .btn{height:24px;font-size:11.5px;letter-spacing:0;font-weight:600;color:var(--accent);padding:0 9px}
+.host{position:relative;margin:1px 8px;padding:7px 10px 8px 30px;border-radius:10px;cursor:pointer}
+.host:hover{background:var(--btn)}
+.host .dot{position:absolute;left:13px;top:15px;width:7px;height:7px;border-radius:50%;background:var(--faint)}
+.host.on .dot{background:var(--green);box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 22%,transparent)}
+.host .hn{font-size:14.5px;font-weight:500}
+.host.on .hn{font-weight:650}
+.host .hs{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess{display:flex;align-items:center;height:32px;padding:0 16px 0 14px;margin-top:4px;font-size:12.5px;font-weight:650;letter-spacing:.04em;color:var(--ink);cursor:pointer}
+.sess .car{width:14px;font-size:9px;color:var(--faint)}
+.sess .cnt{margin-left:auto;font-size:11.5px;font-weight:500;color:var(--faint);letter-spacing:0}
+.win{position:relative;display:flex;align-items:center;height:33px;margin:1px 8px;padding:0 10px 0 12px;border-radius:9px;font-size:14px;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+.win:hover{background:var(--btn)}
+.win .n{width:22px;font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.win .wn{overflow:hidden;text-overflow:ellipsis}
+.win.on{background:var(--tint);color:var(--accent);font-weight:600}
+.win.on .n{color:var(--accent);opacity:.75}
+.foot{flex:none;padding:6px 8px 10px;border-top:1px solid var(--line2)}
+.frow{display:flex;align-items:center;gap:9px;height:34px;padding:0 10px;border-radius:9px;font-size:13px;cursor:pointer;white-space:nowrap}
+.frow:hover{background:var(--btn)}
+.frow .ico{width:16px;height:16px;color:var(--muted)}
+.frow .m{color:var(--muted);font-size:11.5px}
+.frow .chev{margin-left:auto;color:var(--faint);font-size:12px}
+.frow .gd{width:7px;height:7px;border-radius:50%;background:var(--green)}
+.frow .mono{font-family:var(--mono);font-size:12px}
+.frow .gear{margin-left:auto}
+.dhead{flex:none;height:38px;display:none;align-items:center;padding:0 6px 0 18px;font-size:15px;font-weight:650}
+.dhead .sp{flex:1}
+.port .dhead{display:flex}
+
+/* ───────── terminal ───────── */
+.tcontent{flex:1;min-height:0;overflow:hidden;padding:8px 16px 0 14px;font-family:var(--mono);font-size:14px;line-height:18.5px;color:var(--ink)}
+.tl{white-space:pre-wrap;word-break:break-all;min-height:18.5px}
+.tl.b{font-weight:700}
+.tl.ind{padding-left:66px;text-indent:-18px}
+.tl.ind2{padding-left:72px}
+.cjk{letter-spacing:.2em}
+.c-b{color:var(--tblue)}.c-g{color:var(--tgreen)}.c-r{color:var(--tred)}.c-c{color:var(--tcyan)}.c-y{color:var(--tyel)}.c-p{color:var(--tpur)}.c-m{color:var(--muted)}
+.trule{border-top:1px solid var(--muted);opacity:.55;margin:9px -16px 9px -14px}
+.cursor{display:inline-block;width:9px;height:17px;background:var(--ink);vertical-align:-3px}
+.cli{flex:none;font-family:var(--mono);font-size:14px;line-height:20px;padding:0 0 0 2px;white-space:nowrap;overflow:hidden}
+.tmuxbar{flex:none;display:flex;font-family:var(--mono);font-size:12.5px;line-height:18px;white-space:nowrap;overflow:hidden;background:var(--tmux2)}
+.tmuxbar span{padding:0 7px}
+.tmuxbar .s1{background:var(--tmux1);color:var(--paper);font-weight:700}
+.tmuxbar .cur{color:var(--accent);font-weight:700}
+.tmuxbar .sp{flex:1}
+.tmuxbar .r1{background:var(--tmux3)}
+.tmuxbar .r2{background:var(--tmux1);color:var(--paper)}
+.keys{flex:none;padding:5px 6px 6px;display:flex;flex-direction:column;gap:5px;font-family:var(--mono)}
+.krow{display:flex;gap:6px;overflow:hidden}
+.k{flex:1 0 0;min-width:40px;height:33px;border-radius:7px;border:1px solid var(--kb);background:var(--k);display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--ink);white-space:nowrap}
+.krow.r2 .k{font-size:12.5px}
+.k.y{background:var(--ky);border-color:var(--kyb);color:var(--kyt)}
+.k.bl{background:var(--kbl);border-color:var(--kblb);color:var(--kblt)}
+.k.g{background:var(--kg);border-color:var(--kgb);color:var(--kgt)}
+.k.r{background:var(--kr);border-color:var(--krb);color:var(--krt)}
+.k.esc{border-color:var(--kesc);color:var(--kesct)}
+.k.gap{margin-left:10px}
+
+/* ═════════ 现状 Before ═════════ */
+.sch-before .side{background:var(--o-side);box-shadow:inset -1px 0 var(--o-line)}
+.sch-before.port.open .side{box-shadow:inset -1px 0 var(--o-line)}
+.sch-before .scrim{top:78px}
+.sch-before.land.open .term{left:244px}
+.sch-before .fl-title{left:44px;cursor:pointer;font-size:15px}
+.sch-before .fl-title .ts{color:#3D6EAF;font-weight:500}
+.sch-before.dark .fl-title .ts{color:#61AFEF}
+.sch-before .fl-title .tw{color:#5F86B9;opacity:1}
+.sch-before.dark .fl-title .tw{color:#8BB3DA}
+.sch-before .fl-title .ob{width:14px;height:14px;color:#3D6EAF;margin-right:-1px}
+.sch-before .fl-tog,.sch-before .fl-brand{display:none}
+.obtn{height:28px;min-width:30px;padding:0 7px;border-radius:7px;border:1px solid var(--o-chipb);background:var(--o-chip);display:flex;align-items:center;justify-content:center;font-size:12.5px;color:var(--ink)}
+.obtn.moon{background:var(--o-moon)}
+.ohead{flex:none;height:40px;display:flex;align-items:center;gap:6px;padding:0 8px 0 11px;background:var(--o-head);border-bottom:1px solid var(--o-line)}
+.ohead .t{font-size:12.5px;font-weight:600;letter-spacing:.04em;color:var(--muted);flex:1}
+.sch-before .sec{font-size:11px;letter-spacing:.05em;padding:16px 12px 7px 15px}
+.sch-before .host.on{background:var(--o-host)}
+.sch-before .host.on .dot{box-shadow:none}
+.sch-before .win{margin:2px 10px;height:36px;border-radius:7px;font-size:14.5px;padding-left:20px}
+.sch-before .win.on{background:var(--o-sel);color:#fff;font-weight:600}
+.sch-before .win.on .n{color:#fff;opacity:.85}
+.sch-before .sess{font-weight:500;font-size:13px;padding-left:18px}
+.sch-before .foot{border-top:1px solid var(--o-line);padding:0}
+.sch-before .frow{border-radius:0;height:42px;padding:0 12px}
+.sch-before .frow+.frow{border-top:1px solid var(--o-line)}
+.sch-before .divl{height:1px;background:var(--o-line);margin:8px 10px 0}
+
+/* ═════════ A 同色同缝 ═════════ */
+.sch-A .topbar{box-shadow:inset 0 -1px var(--line)}
+.sch-A .vline{position:absolute;top:0;bottom:0;left:244px;width:1px;background:var(--line);z-index:31;transition:opacity .25s,left var(--dur) var(--e)}
+.sch-A.port .vline,.sch-A.land:not(.open) .vline{opacity:0}
+.sch-A .side{top:78px;background:var(--a-side)}
+.sch-A .term{top:78px}
+.sch-A.land.open .term{left:244px}
+.sch-A.land.open .fl-brand{opacity:1}
+.sch-A .fl-brand{left:84px;font-size:14px;color:var(--muted);font-weight:600}
+.sch-A.land.open .fl-title{left:258px}
+.sch-A .win.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--accent)}
+.sch-A.port .side{top:40px}
+.sch-A.port .dhead{box-shadow:inset 0 -1px var(--line)}
+.sch-A .foot{border-top-color:var(--line)}
+
+/* ═════════ B 全高侧栏 ═════════ */
+.sch-B .side{top:0;padding-top:40px;background:var(--b-side);box-shadow:inset -1px 0 var(--line2)}
+.sch-B .side-spacer{flex:none;height:38px}
+.sch-B.port .side-spacer{display:none}
+.sch-B .topbar{left:0}
+.sch-B.land.open .topbar{left:244px}
+.sch-B .term{top:78px}
+.sch-B.land.open .term{left:244px}
+.sch-B .fl-brand{left:46px}
+.sch-B.land.open .fl-brand{opacity:1}
+.sch-B.land.open .fl-tog{left:204px}
+.sch-B.land.open .fl-title{left:258px}
+.sch-B.port .fl-tog{z-index:50}
+.sch-B.port.open .fl-tog{left:248px}
+.sch-B .win{border-radius:8px}
+.sch-B .foot{border-top:0}
+
+/* ═════════ C L 形底盘 ═════════ */
+.sch-C{background:var(--chrome)}
+.sch-C .topbar{background:transparent}
+.sch-C .side{top:78px;background:transparent}
+.sch-C .term{top:78px;border-radius:0}
+.sch-C.land.open .term{left:244px;border-top-left-radius:14px}
+.sch-C.port .term{border-radius:14px 14px 0 0}
+.sch-C .fl-brand{left:46px}
+.sch-C.land.open .fl-brand{opacity:1}
+.sch-C.land.open .fl-tog{left:204px}
+.sch-C.land.open .fl-title{left:258px}
+.sch-C.port .side{top:0;padding-top:40px;background:var(--chrome)}
+.sch-C.port .fl-tog{z-index:50}
+.sch-C.port.open .fl-tog{left:248px}
+.sch-C .win.on{background:var(--sel-paper);color:var(--accent);box-shadow:0 1px 2px rgba(60,40,10,.08)}
+.sch-C.dark .win.on{box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.sch-C .host.on{background:color-mix(in srgb,var(--sel-paper) 55%,transparent)}
+.sch-C .foot{border-top:0}
+.sch-C .btn{background:color-mix(in srgb,var(--paper) 70%,transparent)}
+.sch-C .btn:hover{background:var(--paper)}
+.sch-C .btn.plain{background:none}
+
+/* ═════════ D 浮动玻璃 ═════════ */
+.sch-D .topbar,.sch-D .fl{display:none}
+.sch-D .term{top:0}
+.sch-D .tcontent{padding-top:98px}
+.sch-D.land.open .term{padding-left:272px}
+.glass{background:var(--glass);-webkit-backdrop-filter:blur(22px) saturate(1.6);backdrop-filter:blur(22px) saturate(1.6);box-shadow:var(--glass-s),inset 0 0 0 .5px var(--glass-b)}
+.sch-D .side{left:8px;top:42px;bottom:8px;width:256px;border-radius:22px;opacity:0;transform:translateX(-18px) scale(.985);transform-origin:left center;pointer-events:none;
+  background:var(--glass);-webkit-backdrop-filter:blur(22px) saturate(1.6);backdrop-filter:blur(22px) saturate(1.6);box-shadow:var(--glass-s),inset 0 0 0 .5px var(--glass-b)}
+.sch-D.open .side{opacity:1;transform:none;pointer-events:auto}
+.sch-D.land:not(.open) .side{width:256px}
+.sch-D.port.open .side{box-shadow:var(--glass-s),inset 0 0 0 .5px var(--glass-b)}
+.sch-D .side-in{width:256px}
+.sch-D.port .side{width:300px;z-index:45;background:color-mix(in srgb,var(--paper) 88%,transparent)}
+.sch-D.port .side-in{width:300px}
+.sch-D .side-spacer{flex:none;height:46px;box-shadow:inset 0 -1px var(--line2);margin:0 14px}
+.sch-D .scrim{background:rgba(20,18,14,.24)}
+.sch-D.dark .scrim{background:rgba(0,0,0,.38)}
+.cap{position:absolute;top:44px;height:40px;border-radius:20px;display:flex;align-items:center;padding:0 3px;z-index:30;
+  transition:left var(--dur) var(--e),top var(--dur) var(--e),width var(--dur) var(--e),background .3s,box-shadow .3s}
+.capL{left:10px;width:244px;z-index:50}
+.capL .tt{flex:1;min-width:0;display:flex;align-items:center;gap:6px;font-size:14.5px;white-space:nowrap;overflow:hidden;padding-left:2px}
+.capL .tt .ts{color:var(--accent);font-weight:600}
+.capL .tt .tc{font-style:normal;font-size:10px;color:var(--muted);margin:0 1px 0 -3px}
+.capL .tt .tw{opacity:.75}
+.cap .ibtn{border-radius:17px;width:36px;height:34px}
+.capR{right:10px;gap:0;padding:0 4px}
+.capR .btn{background:none;border-radius:16px;height:32px;min-width:36px}
+.capR .btn:hover{background:var(--btnh)}
+.sch-D.open .capL{left:14px;top:46px;width:248px;background:transparent;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+.sch-D.port.open .capL{width:292px}
+.sch-D .win{border-radius:11px}
+.sch-D .win.on{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.sch-D .foot{border-top:1px solid var(--line2);margin:0 6px}
+.sch-D .keys{background:transparent}
+
+/* ═════════ E 导航轨 ═════════ */
+.sch-E .side{top:0;width:72px;background:var(--e-rail)}
+.sch-E.land.open .side{width:256px}
+.sch-E.land:not(.open) .side{width:72px}
+.sch-E .side-in{display:none}
+.rail-c,.rail-x{position:absolute;top:0;left:0;bottom:0;display:flex;flex-direction:column;padding-top:40px;transition:opacity .22s}
+.rail-c{width:72px;align-items:center}
+.rail-x{width:256px;opacity:0;pointer-events:none}
+.sch-E.land.open .rail-c{opacity:0;pointer-events:none}
+.sch-E.land.open .rail-x,.sch-E.port .rail-x{opacity:1;pointer-events:auto;transition-delay:.06s}
+.sch-E.port .rail-c{display:none}
+.sch-E.port .side{width:300px;background:var(--e-draw);border-radius:0 22px 22px 0}
+.sch-E.port .rail-x{width:300px}
+.sch-E .topbar{left:0}
+.sch-E.land .topbar{left:72px}
+.sch-E.land.open .topbar{left:256px}
+.sch-E .term{top:78px}
+.sch-E.land .term{left:72px}
+.sch-E.land.open .term{left:256px}
+.sch-E .fl-menu{left:16px;z-index:50;width:40px;height:38px}
+.sch-E .fl-menu .ibtn{width:40px;height:34px;border-radius:17px}
+.sch-E.port .fl-menu{left:8px}
+.sch-E .fl-tog,.sch-E .fl-brand{display:none}
+.sch-E.land .fl-back{left:80px}
+.sch-E.land.open .fl-back{left:264px}
+.sch-E.land .fl-title{left:118px}
+.sch-E.land.open .fl-title{left:302px}
+.sch-E.port .fl-back{left:48px}
+.sch-E.port .fl-title{left:88px}
+.sch-E .ibtn{border-radius:16px}
+.sch-E .btn{border-radius:16px;background:none;min-width:34px;height:32px}
+.sch-E .btn:hover{background:var(--btnh)}
+.sch-E .fl-actions{gap:2px}
+.e-head{flex:none;height:38px;display:flex;align-items:center;padding-left:62px;font-size:15px;font-weight:650;white-space:nowrap}
+.fab{flex:none;height:46px;border-radius:15px;background:var(--e-fab);color:var(--e-fab-t);display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px;font-weight:600;margin-top:8px;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.rail-c .fab{width:46px}
+.rail-x .fab{align-self:flex-start;margin-left:14px;padding:0 18px 0 14px}
+.fab .ico{width:20px;height:20px}
+.dest{margin-top:16px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;width:72px}
+.dest .ind{position:relative;width:54px;height:30px;border-radius:15px;display:flex;align-items:center;justify-content:center;transition:background .2s}
+.dest.on .ind{background:var(--e-ind)}
+.dest .av{width:22px;height:22px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff}
+.dest .bd{position:absolute;right:2px;top:-4px;min-width:17px;height:15px;padding:0 4px;border-radius:8px;background:var(--accent);color:var(--paper);font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.dest .lb{font-size:11.5px;font-weight:600;color:var(--muted)}
+.dest.on .lb{color:var(--ink)}
+.rail-c .grow{flex:1}
+.rail-c .rb{margin-bottom:4px}
+.rail-c .ts-mini{display:flex;flex-direction:column;align-items:center;font-size:10px;font-family:var(--mono);color:var(--muted);gap:3px;margin:6px 0 12px}
+.rail-c .ts-mini i{width:7px;height:7px;border-radius:50%;background:var(--green)}
+.sch-E .rail-x .scroll{margin-top:6px}
+.sch-E .win{height:36px;border-radius:18px;padding-left:14px;margin:1px 10px}
+.sch-E .win.on{background:var(--e-ind);color:var(--e-ind-t)}
+.sch-E .win.on .n{color:var(--e-ind-t)}
+.sch-E .host{border-radius:18px;margin:1px 10px}
+.sch-E .foot{border-top:1px solid var(--line2)}
+.sch-E .frow{border-radius:17px}
+</style>
+</head>
+<body>
+<div class="ptb">
+  <h1>顶栏 × 侧栏 统一方案<small>Attaché Android · 平板</small></h1>
+  <div class="seg" id="segS"></div>
+  <div class="seg" id="segO"><button data-o="land">横屏</button><button data-o="port">竖屏</button></div>
+  <div class="seg" id="segT"><button data-t="light">浅色</button><button data-t="dark">深色</button></div>
+  <div class="hint">点击 ◧ / ☰ 开合侧栏 · 竖屏点遮罩关闭 · 点窗口行切换标题 · 键盘 ← → 切方案</div>
+</div>
+<div class="stage">
+  <div class="devbox" id="devbox"><div class="bezel" id="bezel"></div></div>
+  <div class="card" id="card"></div>
+</div>
+
+<script>
+const IC={
+ back:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H5M11 5l-7 7 7 7"/></svg>',
+ side:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="3.2"/><path d="M9.5 4.8v14.4"/><path d="M5.6 8.3h1.8M5.6 11h1.8" stroke-linecap="round" stroke-width="1.5"/></svg>',
+ menu:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+ close:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+ more:'<svg class="ico" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5.5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="18.5" r="1.9"/></svg>',
+ grid:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/></svg>',
+ moon:'<svg class="ico moon-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
+ sun:'<svg class="ico sun-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>',
+ plus:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+ gear:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+ inbox:'<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 13.5l2.6-7.2A2 2 0 0 1 8 5h8a2 2 0 0 1 1.9 1.3l2.6 7.2V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/><path d="M3.5 13.5h4.5l1.5 2.3h5l1.5-2.3h4.5"/></svg>',
+ wifi:'<svg width="17" height="13" viewBox="0 0 24 18" fill="currentColor"><path d="M12 17.5l3.2-3.9a5 5 0 0 0-6.4 0z"/><path d="M12 7.5c3.3 0 6.3 1.2 8.6 3.2l2-2.4A16 16 0 0 0 12 4.3 16 16 0 0 0 1.4 8.3l2 2.4A13 13 0 0 1 12 7.5z" opacity=".95"/><path d="M12 11.2a9 9 0 0 1 5.8 2.1l1.6-2a11.6 11.6 0 0 0-14.8 0l1.6 2a9 9 0 0 1 5.8-2.1z"/></svg>',
+ bat:'<svg width="25" height="13" viewBox="0 0 25 13"><rect x=".7" y=".7" width="21" height="11.6" rx="3" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".45"/><rect x="2.3" y="2.3" width="14.4" height="8.4" rx="1.6" fill="currentColor"/><rect x="22.6" y="4.2" width="1.8" height="4.6" rx=".9" fill="currentColor" opacity=".45"/></svg>'
+};
+const DATA={
+ hosts:[{n:'tmux Daily',s:'xueshis-macbook-pro.taildff16…',on:1},{n:'tmux Dev',s:'192.168.8.88 · 点击连接',on:0}],
+ sess:[{id:'DAILY',n:'Daily',c:'#3C9A5F',w:['maintenance','video-shotcraft','anydrag->homebrew','grok-1.0.67-mac']},
+       {id:'DEV',n:'Dev',c:'#4F6FB8',w:['QDuo','AnyDrag','Attache','HyperCapslock','PastePawX','Flowy','CCSwitcher','微信输入法','product-videos','grok-cli','Recall','ScreenPin','KeyCast','notes','dotfiles','blog','infra','scratch']}]
+};
+const SCHEMES=['before','A','B','C','D','E'];
+const SNAME={before:'现状',A:'A 同色同缝',B:'B 全高侧栏',C:'C L 形底盘',D:'D 浮动玻璃',E:'E 导航轨'};
+const q=new URLSearchParams(location.search);
+const S={scheme:q.get('s')||'A',orient:q.get('o')||'land',theme:q.get('t')||'light',open:q.get('open')!=='0',sel:{s:0,i:0}};
+
+const cjk=t=>t.replace(/([\u3000-\u303f\u4e00-\u9fff\uff00-\uffef“”]+)/g,'<span class="cjk">$1</span>');
+function titleHTML(sc){
+  const s=DATA.sess[S.sel.s], w=`${S.sel.i+1}: ${s.w[S.sel.i]}`;
+  if(sc==='before') return (S.orient==='land'?`<span class="ob">${IC.side}</span>`:'')+`<span class="ts">${s.n}</span>`+(S.orient==='port'?'<i class="tc" style="color:#3D6EAF;margin:0 3px 0 -1px"><svg width="8" height="6" viewBox="0 0 8 6"><path d="M0.5 0.8h7L4 5.4z" fill="currentColor"/></svg></i>':'')+`<span class="tw">${w}</span>`;
+  return `<span class="ts">${s.n}</span><i class="tc"><svg width="8" height="6" viewBox="0 0 8 6"><path d="M0.5 0.8h7L4 5.4z" fill="currentColor"/></svg></i><span class="tw">${w}</span>`;
+}
+function status(o){
+  const apps=['#F06BA0','#111','#8A63E6','#3D7BF2','#F06A4A'].map(c=>`<i style="background:${c}"></i>`).join('');
+  return `<div class="status"><span class="clock">13:43</span><span class="apps">${apps}</span>${o==='land'?'<span class="mid"><i></i><i></i><i></i></span>':''}<span class="sp"></span><span class="net">${o==='land'?'36.3':'18.6'}<br>KB/s</span>${IC.wifi}<span class="bat">78%${IC.bat}</span></div>`;
+}
+function actions(sc){
+  if(sc==='before') return `<div class="obtn">A-</div><div class="obtn">A+</div><button class="obtn moon" data-act="theme">${S.theme==='light'?'🌙':'☀️'}</button><div class="obtn">🎛️</div><button class="ibtn" style="width:26px">${IC.more}</button>`;
+  return `<button class="btn">A-</button><button class="btn">A+</button><button class="btn" data-act="theme" title="切换主题">${IC.moon}${IC.sun}</button><button class="btn">${IC.grid}</button><button class="btn plain">${IC.more}</button>`;
+}
+function hosts(){return DATA.hosts.map(h=>`<div class="host ${h.on?'on':''}"><i class="dot"></i><div class="hn">${h.n}</div><div class="hs">${h.s}</div></div>`).join('')}
+function sessions(){
+  return DATA.sess.map((s,si)=>`<div class="sess"><span class="car">▾</span>${s.id}<span class="cnt">${s.w.length}</span></div>`+
+    s.w.map((w,i)=>`<div class="win ${S.sel.s===si&&S.sel.i===i?'on':''}" data-s="${si}" data-i="${i}"><span class="n">${i+1}</span><span class="wn">${w}</span></div>`).join('')).join('');
+}
+function foot(sc){
+  if(sc==='before') return `<div class="foot"><div class="frow"><span>📥</span><span>文件收件箱 (Download/Attache)</span><span class="chev">▸</span></div><div class="frow"><i class="gd"></i><span class="mono">TS&nbsp; 100.70.32.90</span><span class="chev" style="font-size:15px">⚙</span></div></div>`;
+  return `<div class="foot"><div class="frow">${IC.inbox}<span>文件收件箱</span><span class="m">Download/Attache</span><span class="chev">›</span></div><div class="frow"><i class="gd"></i><span class="mono">TS 100.70.32.90</span><button class="btn plain gear">${IC.gear}</button></div></div>`;
+}
+function sideList(sc){
+  const addBtn=sc==='E'?'':`<button class="btn">＋ 窗口</button>`;
+  if(sc==='before') return `<div class="scroll"><div class="sec">HOSTS (主机)</div>${hosts()}<div class="divl"></div><div class="sec">SESSIONS &amp; WINDOWS</div>${sessions()}</div>${foot(sc)}`;
+  return `<div class="scroll"><div class="sec"><span>主机</span></div>${hosts()}<div class="sec" style="padding-top:12px"><span>会话 · 窗口</span>${addBtn}</div>${sessions()}</div>${foot(sc)}`;
+}
+function side(sc,o){
+  if(sc==='before') return `<div class="side-in"><div class="ohead"><span class="t">ATTACHÉ</span><button class="obtn moon" data-act="theme">${S.theme==='light'?'🌙':'☀️'}</button><div class="obtn">+ Window</div>${o==='port'?`<button class="obtn" data-act="close" style="width:30px">${IC.close.replace('class="ico"','class="ico" style="width:14px;height:14px"')}</button>`:''}</div>${sideList(sc)}</div>`;
+  if(sc==='E'){
+    const dests=DATA.sess.map((s,si)=>`<div class="dest ${S.sel.s===si?'on':''}" data-act="open"><div class="ind"><div class="av" style="background:${s.c}">${s.n[0]}</div><span class="bd">${s.w.length}</span></div><div class="lb">${s.n}</div></div>`).join('');
+    return `<div class="side-in"></div>
+    <div class="rail-c"><div style="height:38px;flex:none"></div><button class="fab" title="新窗口">${IC.plus}</button>${dests}<div class="grow"></div><button class="ibtn rb">${IC.inbox}</button><button class="ibtn rb">${IC.gear}</button><div class="ts-mini"><i></i>TS</div></div>
+    <div class="rail-x"><div class="e-head">Attaché</div><button class="fab">${IC.plus}新窗口</button>${sideList(sc)}</div>`;
+  }
+  const dh = `<div class="dhead"><span>Attaché</span><span class="sp"></span>${sc==='A'?`<button class="ibtn" data-act="close">${IC.close}</button>`:''}</div>`;
+  const spacer = (sc==='B'||sc==='D')?'<div class="side-spacer"></div>':'';
+  return `<div class="side-in">${sc==='D'?'':dh}${spacer}${sideList(sc)}</div>`;
+}
+function term(){
+  const L=[
+   ['','<span class="c-m">▸</span> Thought for 4s'],['',''],
+   ['b','收到，方向定了：Android 版 · 平板为主（横屏常驻侧栏 + 竖屏抽屉）· 4-5 套方案，从保守到大胆。'],['',''],
+   ['b','### 🔄 [实时进度 20% · 阶段 1/4] 分析现有界面'],['',''],
+   ['b','• 整体进度清单：'],
+   ['ind','• <span class="c-b">[x]</span> 跟你确认好方向'],
+   ['ind','• <span class="c-b">[/]</span> <b>当前正在执行</b>：子代理在读 AttacheAndroid 的顶栏、侧栏/抽屉、主题色和现有截图'],
+   ['ind','• <span class="c-b">[ ]</span> <b>下一步</b>：结合你的截图找出“违和”的具体原因，参考 macOS / iPadOS / Android 的做法定 4-5 套方案'],
+   ['ind','• <span class="c-b">[ ]</span> 输出一个 HTML 高保真对比页（横屏 + 竖屏抽屉都能切换着看）'],['',''],
+   ['','你方便的时候把截图路径发我就行（最好横屏一张、竖屏打开抽屉一张）。拿到截图和代码分析结果后，我就开始出方案。'],
+  ];
+  const body=L.map(([c,t])=>`<div class="tl ${c}">${cjk(t)}</div>`).join('');
+  return `<div class="tcontent"><div style="height:100%;display:flex;flex-direction:column"><div style="flex:1;min-height:0;overflow:hidden">${body}</div>
+   <div class="trule"></div><div class="tl"><span class="c-b">&gt;</span> /tmp/attache-img-1793684604666-8714.jpg <span class="cursor"></span></div><div class="trule"></div>
+   <div class="tl" style="white-space:nowrap;overflow:hidden"><span class="c-y">●</span> Agent(research: Android UI chrome researcher)  <span class="c-m">The scrolled container… · 38s</span></div></div></div>
+   <div class="cli"><span class="c-c">[Claude Opus 5.5·</span><b class="c-y">Medium</b><span class="c-c">]</span> <span class="c-m">|</span> Ctx: <b class="c-g">1.9%</b> <span class="c-m">|</span> <b class="c-b">Gemini:</b> 5h <b class="c-g">68.5%</b> Wk <b class="c-r">0%</b><span class="c-m">(99%)</span> <span class="c-m">|</span> <b class="c-p">Claude:</b> 5h <b class="c-g">98%</b></div>
+   <div class="tmuxbar"><span class="s1">DAILY</span><span class="cur">1:maintenance*</span><span>2:video-shotcraft</span><span>3:anydrag…</span><span class="sp"></span><span class="r1">CPU 8.0%</span><span class="r1">13:43</span><span class="r2">2026-11-03</span></div>
+   <div class="keys"><div class="krow"><div class="k y">🎤说</div><div class="k bl">/cmd</div><div class="k bl">tmux</div><div class="k">+img</div><div class="k">inbox</div><div class="k">copy</div><div class="k g">paste</div><div class="k r">^U</div></div>
+   <div class="krow r2">${['CTRL','ALT','<ESC','TAB','▲','▼','◀','▶','HOME','END','PGUP','PGDN','F1'].map(k=>k[0]==='<'?`<div class="k esc">${k.slice(1)}</div>`:`<div class="k">${k}</div>`).join('')}<div class="k gap">IME</div><div class="k"><svg width="20" height="14" viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="1" width="18" height="12" rx="2.2"/><path d="M4.5 4.5h1M8 4.5h1M11.5 4.5h1M15 4.5h.5M4.5 7.5h1M8 7.5h1M11.5 7.5h1M15 7.5h.5M6 10.3h8" stroke-linecap="round"/></svg></div></div></div>`;
+}
+function screen(){
+  const sc=S.scheme,o=S.orient;
+  let h=status(o)+`<div class="term">${term()}</div><div class="topbar"></div>`;
+  if(sc==='A') h+='<div class="vline"></div>';
+  if(sc==='D'){
+    h+=`<div class="cap capL glass"><button class="ibtn">${IC.back}</button><div class="tt js-title">${titleHTML(sc)}</div><button class="ibtn" data-act="toggle" title="侧栏">${IC.side}</button></div>`;
+    h+=`<div class="cap capR glass">${actions(sc)}</div>`;
+  }
+  h+=`<div class="fl fl-back"><button class="ibtn">${IC.back}</button></div>`;
+  if(sc==='E') h+=`<div class="fl fl-menu"><button class="ibtn" data-act="toggle" title="导航">${IC.menu}</button></div>`;
+  h+=`<div class="fl fl-tog"><button class="ibtn" data-act="toggle" title="侧栏">${IC.side}</button></div><div class="fl fl-brand">Attaché</div>`;
+  h+=`<div class="fl fl-title js-title" ${sc==='before'?'data-act="toggle"':''}>${titleHTML(sc)}</div><div class="fl fl-actions">${actions(sc)}</div>`;
+  h+=`<div class="scrim" data-act="close"></div><div class="side">${side(sc,o)}</div><div class="gesture"></div>`;
+  return h;
+}
+let scr;
+function render(){
+  const o=S.orient,W=o==='land'?1000:625,H=o==='land'?625:1000;
+  bezel.innerHTML=`<div class="screen sch-${S.scheme} ${o} ${S.theme} ${S.open?'open':''}" style="--W:${W}px;--H:${H}px">${screen()}</div>`;
+  scr=bezel.firstChild;
+  document.body.classList.toggle('pg-dark',S.theme==='dark');
+  segS.innerHTML=SCHEMES.map(s=>`<button data-s="${s}" class="${s===S.scheme?'on':''}">${SNAME[s]}</button>`).join('');
+  segO.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.o===o));
+  segT.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===S.theme));
+  card.innerHTML=CARDS[S.scheme];
+  fit();
+}
+function fit(){
+  const o=S.orient,W=(o==='land'?1000:625)+28,H=(o==='land'?625:1000)+28;
+  const st=document.querySelector('.stage'),cw=card.offsetWidth+28;
+  const s=Math.min((st.clientWidth-48-cw)/W,(st.clientHeight-40)/H,1.35);
+  bezel.style.transform=`scale(${s})`;devbox.style.width=W*s+'px';devbox.style.height=H*s+'px';
+}
+function setTheme(t){S.theme=t;scr.classList.remove('light','dark');scr.classList.add(t);document.body.classList.toggle('pg-dark',t==='dark');
+  segT.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  scr.querySelectorAll('.obtn.moon').forEach(b=>b.textContent=t==='light'?'🌙':'☀️');}
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-s]:not(.win)');if(b&&b.closest('#segS')){S.scheme=b.dataset.s;S.open=true;return render();}
+  const ob=e.target.closest('#segO [data-o]');if(ob){S.orient=ob.dataset.o;S.open=true;return render();}
+  const tb=e.target.closest('#segT [data-t]');if(tb){return setTheme(tb.dataset.t);}
+  const w=e.target.closest('.win');
+  if(w){S.sel={s:+w.dataset.s,i:+w.dataset.i};scr.querySelectorAll('.win.on').forEach(x=>x.classList.remove('on'));
+    scr.querySelectorAll(`.win[data-s="${w.dataset.s}"][data-i="${w.dataset.i}"]`).forEach(x=>x.classList.add('on'));
+    scr.querySelectorAll('.dest').forEach((d,i)=>d.classList.toggle('on',i===S.sel.s));
+    scr.querySelectorAll('.js-title').forEach(t=>t.innerHTML=titleHTML(S.scheme));
+    if(S.orient==='port') setTimeout(()=>{S.open=false;scr.classList.remove('open')},180);
+    return;}
+  const a=e.target.closest('[data-act]');if(!a)return;
+  const act=a.dataset.act;
+  if(act==='toggle'){S.open=!S.open;scr.classList.toggle('open',S.open)}
+  else if(act==='close'){S.open=false;scr.classList.remove('open')}
+  else if(act==='open'){S.open=true;scr.classList.add('open')}
+  else if(act==='theme'){setTheme(S.theme==='light'?'dark':'light')}
+});
+document.addEventListener('keydown',e=>{const i=SCHEMES.indexOf(S.scheme);
+  if(e.key==='ArrowRight'){S.scheme=SCHEMES[(i+1)%6];S.open=true;render()}
+  if(e.key==='ArrowLeft'){S.scheme=SCHEMES[(i+5)%6];S.open=true;render()}});
+addEventListener('resize',fit);
+
+const C=(tag,name,en,ref,chg,pro,con,cost,stars)=>`<span class="tag">${tag}</span><h2>${name}</h2><div class="en">${en}</div>
+<h3>参考</h3><p>${ref}</p><h3>改动点</h3><ul>${chg.map(x=>`<li>${x}</li>`).join('')}</ul>
+<h3>优点</h3><ul>${pro.map(x=>`<li>${x}</li>`).join('')}</ul><h3>代价</h3><ul>${con.map(x=>`<li>${x}</li>`).join('')}</ul>
+<h3>Compose 实现成本</h3><p>${cost}</p><div class="cost"><span class="stars">${stars}</span></div>`;
+const CARDS={
+ before:`<span class="tag">BEFORE</span><h2>现状 · 两块拼接</h2><div class="en">当前 Build（ConsoleScreen.kt + TmuxWindowStrip.kt）</div>
+<h3>违和来源</h3><ul>
+<li>全宽 <code>TopAppBar</code> 在上，<code>AttacheSidebar</code> 从顶栏<b>下方</b>开始 → 左上角两条头部带（顶栏 + <code>ATTACHÉ</code> 头）叠在一起</li>
+<li>三套色系：终端/顶栏奶油 <code>#F7F3EA</code>、侧栏 JetBrains 灰 <code>#F3F2EE</code>/<code>#EBE9E3</code>、顶栏 chip <code>#EDE7DA</code></li>
+<li>侧栏右边 1dp 线止于顶栏底 → T 字接缝；顶栏下无分隔线</li>
+<li>🌙 主题按钮出现两次（顶栏 + 侧栏头）；按钮样式各不相同</li>
+<li>竖屏：遮罩与抽屉都从顶栏下开始，顶栏不被压暗，抽屉像“插”在中间</li>
+<li>选中窗口行实心蓝 <code>#4E7FB8</code>，与纸感主题冲突</li></ul>
+<h3>说明</h3><p>此页尽量忠实复刻截图，作为 A–E 的对照基线。</p>`,
+ A:C('A · 最保守','同色同缝','Quiet Merge',
+   'Pixel Tablet / Android 设置双栏、Gmail 平板旧版、macOS 系统设置的贯穿分隔线',
+   ['侧栏背景换成终端同色系（纸色明度 −2%），废弃 JetBrains 灰','删除 <code>ATTACHÉ 🌙 +Window</code> 头部；<code>＋ 窗口</code> 移入“会话 · 窗口”标题行右侧','侧栏右边线向上贯穿顶栏直到状态栏，顶栏底加同色 1dp 线 → 干净的“┤”网格','顶栏左段（侧栏宽度之上）放 ← ◧ 和弱化的 Attaché 字标，标题对齐终端左缘','选中行 = 淡 tint + 3dp 左强调条 + 强调色文字；🌙 只留顶栏；按钮统一无边框 tonal 方钮','竖屏：抽屉从状态栏下沿起盖住顶栏，抽屉头与顶栏等高、底线对齐，遮罩盖全屏'],
+   ['改动最小、风险最低，用户肌肉记忆完全不变','网格线对齐后“拼接感”基本消失'],
+   ['本质仍是两块，只是缝对齐了；不够“原生平板”','顶栏左段信息密度低，略空'],
+   '<code>TmuxWindowStrip.kt</code>：删 header Row、颜色常量改为主题 token（约 80 行）；<code>ConsoleScreen.kt</code>：TopAppBar 用 <code>Modifier.drawBehind</code> 按 sidebarWidth 画竖线 + 底线，标题加 <code>animateDpAsState</code> 左偏移；竖屏 <code>ModalNavigationDrawer</code> 提到 Scaffold 外层。约 0.5 天。','★☆☆☆☆'),
+ B:C('B · 推荐候选','全高侧栏','Split View',
+   'macOS Finder / 备忘录（NavigationSplitView）、iPadOS 设置与备忘录侧栏、Android Files 平板',
+   ['侧栏全高，edge-to-edge 延伸到状态栏下；顶栏只覆盖终端列','侧栏头（← Attaché ◧）与顶栏同高同基线，连成一条视觉头部线','◧ 打开时在侧栏头右侧，收起时平滑滑到顶栏 ← 旁（同 Notes / Finder）','不画横向分隔线，仅靠侧栏色差 + 1dp 竖向 hairline','选中行 = 圆角 tint 胶囊 + 强调色文字','竖屏：抽屉全高从屏幕顶起，◧ 跟随移到抽屉头右侧，遮罩盖住顶栏'],
+   ['最像原生平板：侧栏 = 导航，右侧 = 内容，层级一眼清楚','标题与终端左对齐；收起时只剩 ← ◧，过渡自然'],
+   ['顶栏不再全宽，A- A+ 等动作全挤在右列（横屏仍宽裕）','需要处理 <code>WindowInsets</code>，状态栏图标颜色要随侧栏色'],
+   '<code>ConsoleScreen.kt</code>：布局由 <code>Column(TopAppBar, Row(sidebar, terminal))</code> 翻转为 <code>Row(sidebar, Column(TopAppBar, terminal))</code>；TopAppBar navigationIcon 按 sidebarOpen 条件显示 ◧；侧栏 <code>windowInsetsPadding(statusBars)</code>；宽度与按钮位移用 <code>animateDpAsState</code>（可选 SharedTransitionLayout）。<code>TmuxWindowStrip.kt</code> 头部改为 ← 标题 ◧ 行。约 1 天。','★★☆☆☆'),
+ C:C('C · 统一感最强','L 形统一底盘','Unified Chrome',
+   'macOS Tahoe Safari / Xcode 窗口、Arc 浏览器、Chrome 垂直标签、Zed',
+   ['状态栏 + 顶栏 + 侧栏 = 同一块 chrome 色（纸色明度 −5%），构成 L 形外框','终端区是嵌入的“纸面”：左上角 14dp 圆角、无任何边线，只靠明度差','侧栏头部消失，顶栏左段即标题区（← Attaché ◧）','选中行 = 纸色胶囊（与终端同一张纸，像 Arc 的当前标签）','竖屏：顶部 chrome 带 + 纸面两上角圆角；抽屉全高、chrome 色'],
+   ['零分割线，视觉最整、最“高级”','选中行与内容区同色，形成“这一行就是右边这张纸”的呼应'],
+   ['圆角处损失几像素终端面积；收起侧栏时圆角需过渡为 0','深色下 chrome 与终端明度差要细调（太近糊、太远像边框）'],
+   '根 <code>Box(Modifier.background(chrome))</code>；终端容器 <code>Modifier.clip(RoundedCornerShape(topStart = r))</code>，<code>r</code> 随侧栏开合 <code>animateDpAsState</code>；TopAppBar <code>containerColor = chrome</code> 去阴影；<code>TmuxWindowStrip.kt</code> 背景透明、删头部、选中态改 paper 色 Surface。约 1 天。','★★☆☆☆'),
+ D:C('D · 最大胆','浮动玻璃面板','Floating Glass',
+   'iPadOS 26 Liquid Glass 侧栏、visionOS 窗口装饰、macOS Tahoe 浮动侧栏',
+   ['终端全出血铺满屏幕（含状态栏下）','顶栏拆为两组浮动玻璃胶囊：左「← 标题 ◧」，右「A- A+ 🌙 ▦ ⋮」','侧栏 = 内缩 8dp、22dp 圆角的浮动面板（毛玻璃 + 柔和阴影）','打开时左胶囊“吸附”成面板顶栏（背景淡出、并入面板）','横屏面板推开终端内容；竖屏悬浮在轻遮罩之上'],
+   ['终端可视面积最大，结构上彻底不存在拼缝','观感最新，和 iPadOS 26 / Android 16 趋势一致'],
+   ['实时模糊需 API 31+ <code>RenderEffect</code>，终端高频重绘下有 GPU 开销；低版本需降级为半透明','胶囊会压住终端首行，需动态 top padding；玻璃上文字对比度要保证'],
+   '移除 TopAppBar，改为 <code>Box</code> 叠加两个 <code>Surface(shape = CircleShape)</code>；模糊用 <code>graphicsLayer { renderEffect = BlurEffect(…) }</code>（或 haze 库，属外部依赖）；侧栏改 <code>AnimatedVisibility(slideIn + fadeIn)</code>；终端 <code>contentPadding</code> 动态计算。<code>ConsoleScreen.kt</code> 改动最大。约 2.5 天。','★★★★☆'),
+ E:C('E · Material 原生','导航轨 + 展开','Rail Expand',
+   'Material 3 Expressive（Android 16）可展开 NavigationRail、Gmail / Google Drive 平板、Play 商店',
+   ['横屏常驻 72dp 导航轨：☰、＋ FAB、会话头像 + 窗口数徽标、底部收件箱 / 设置 / TS','☰ 与顶栏同一行；点击后轨道原地变宽为完整侧栏（推开终端）','选中 = M3 活动指示胶囊（secondaryContainer 色调）','竖屏无轨道：抽屉全高、右侧 22dp 大圆角，头部沿用轨道样式'],
+   ['收起时仍能一键切会话、看窗口数，终端更宽','完全符合 Android 平板设计规范，未来跟随系统主题（动态取色）最省心'],
+   ['会话首字母易重复（Daily / Dev 都是 D，只能靠颜色区分）','轨道状态下看不到窗口名；需 material3 1.4+ 的 <code>WideNavigationRail</code>'],
+   '用 <code>WideNavigationRail(state = rememberWideNavigationRailState())</code> 替换 <code>AttacheSidebar</code> 外壳，列表内容复用 <code>TmuxWindowStrip.kt</code>；竖屏 <code>ModalWideNavigationRail</code>；<code>ConsoleScreen.kt</code> 顶栏 navigationIcon 改为 ←，Row 布局随 rail 宽度。约 1.5 天。','★★★☆☆')
+};
+const bezel=document.getElementById('bezel'),devbox=document.getElementById('devbox'),card=document.getElementById('card');
+render();
+// 自测钩子：?win=1-2 先选中 Dev 第 3 个窗口；?click=toggle 加载后点一次开合按钮
+if(q.get('win')){const [s,i]=q.get('win').split('-');scr.querySelector(`.win[data-s="${s}"][data-i="${i}"]`)?.click();}
+if(q.get('click')==='toggle'){setTimeout(()=>scr.querySelector('[data-act="toggle"]').click(),300);}
+</script>
+</body>
+</html>

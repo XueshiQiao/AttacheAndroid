@@ -47,6 +47,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -78,6 +81,9 @@ import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -1531,21 +1537,14 @@ fun ConsoleScreen(
                                 enter = expandHorizontally(expandFrom = Alignment.Start, animationSpec = tween(durationMillis = 180)),
                                 exit = shrinkHorizontally(shrinkTowards = Alignment.Start, animationSpec = tween(durationMillis = 180)),
                             ) {
-                                pageTmuxControl?.let { control ->
-                                    AttacheSidebar(
-                                        control = control,
-                                        hosts = hostEntries,
-                                        onSelectHost = ::selectHostFromSidebar,
-                                        isDark = isDarkTheme,
-                                        onToggleTheme = ::toggleTheme,
-                                        onOpenFileInbox = {
-                                            menuImeWasVisible = imeVisible
-                                            resizeSuspended = true
-                                            showFileInboxDialog = true
-                                        },
-                                        modifier = Modifier.fillMaxHeight(),
-                                    )
-                                }
+                                // Attaché (chrome-unify D): the docked sidebar is a
+                                // floating panel drawn by AttacheFloatingChrome above
+                                // this layout; the terminal only leaves room for it.
+                                Spacer(
+                                    modifier = Modifier
+                                        .width(org.attache.tmux.AttacheChrome.LandscapePanelSlot)
+                                        .fillMaxHeight(),
+                                )
                             }
 
                             Box(
@@ -1904,52 +1903,9 @@ fun ConsoleScreen(
                             }
                         }
 
-                        // Portrait / Phone slide-out sidebar drawer from the left edge
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = !isLandscape && portraitDrawerOpen && pageTmuxControl != null,
-                            enter = fadeIn(animationSpec = tween(durationMillis = 180)),
-                            exit = fadeOut(animationSpec = tween(durationMillis = 180)),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.52f))
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null,
-                                    ) {
-                                        portraitDrawerOpen = false
-                                        termFocusRequester.requestFocus()
-                                    }
-                                    .testTag("attacheDrawerScrim"),
-                            )
-                        }
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = !isLandscape && portraitDrawerOpen && pageTmuxControl != null,
-                            enter = slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(durationMillis = 200)),
-                            exit = slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(durationMillis = 200)),
-                            modifier = Modifier.align(Alignment.CenterStart),
-                        ) {
-                            pageTmuxControl?.let { control ->
-                                AttacheSidebar(
-                                    control = control,
-                                    hosts = hostEntries,
-                                    onSelectHost = ::selectHostFromSidebar,
-                                    isDark = isDarkTheme,
-                                    onToggleTheme = ::toggleTheme,
-                                    onOpenFileInbox = {
-                                        menuImeWasVisible = imeVisible
-                                        resizeSuspended = true
-                                        showFileInboxDialog = true
-                                    },
-                                    onDismiss = {
-                                        portraitDrawerOpen = false
-                                        termFocusRequester.requestFocus()
-                                    },
-                                    modifier = Modifier.fillMaxHeight(),
-                                )
-                            }
-                        }
+                        // Portrait drawer: drawn full-screen (scrim over the
+                        // capsules too) by AttacheFloatingChrome at the end of
+                        // the Scaffold content.
                     }
                 }
             }
@@ -2092,406 +2048,415 @@ fun ConsoleScreen(
             termFocusRequester.requestFocus()
         }
 
-        // Overlay TopAppBar - always visible when titleBarHide is false,
-        // or temporarily visible when titleBarHide is true and showTitleBar is true
-        if (!titleBarHide || showTitleBar) {
-            val density = LocalDensity.current
-            val tmuxControl by (currentBridge?.tmuxControl ?: noTmuxControl).collectAsState()
-            TopAppBar(
-                title = {
-                    // Attaché: a tmux host's session and current window are
-                    // the title; in landscape tapping toggles the docked left
-                    // sidebar, and in portrait it slides the same sidebar out
-                    // from the left edge.
-                    tmuxControl?.let {
-                        org.attache.tmux.TmuxSessionsButton(
-                            control = it,
-                            isLandscape = isLandscape,
+        // Attaché (chrome-unify scheme D): on a tmux host the top bar is two
+        // floating glass capsules plus the floating sidebar panel; other hosts
+        // keep the overlay TopAppBar below.
+        val chromeTmuxControl by (currentBridge?.tmuxControl ?: noTmuxControl).collectAsState()
+        val titleBarVisible = !titleBarHide || showTitleBar
+        // Attaché: in landscape the title capsule toggles the docked left
+        // panel, and in portrait it floats the same panel over the terminal.
+        val toggleAttacheSidebar: () -> Unit = {
+            if (isLandscape) {
+                val opening = !landscapeSidebarOpen
+                landscapeSidebarOpen = opening
+                if (opening) {
+                    showSoftwareKeyboard = false
+                    keyboardController?.hide()
+                }
+            } else {
+                if (!portraitDrawerOpen) {
+                    showSoftwareKeyboard = false
+                    keyboardController?.hide()
+                    autoHideJobRef.titleBarJob?.cancel()
+                    portraitDrawerOpen = true
+                } else {
+                    portraitDrawerOpen = false
+                    termFocusRequester.requestFocus()
+                }
+            }
+        }
+        val topBarActions: @Composable RowScope.() -> Unit = {
+            val tmuxControl = chromeTmuxControl
+            if (tmuxControl != null) {
+                // Right glass capsule: A- A+ theme ▦ (⋮ follows below). The
+                // only theme toggle — the sidebar no longer has its own.
+                val chipText = org.attache.tmux.attacheGlassPalette(isDarkTheme).ink
+                org.attache.tmux.CapsuleActionButton(
+                    onClick = { changeFontSize(-2f) },
+                    modifier = Modifier.testTag("title_bar_font_decrease"),
+                ) {
+                    Text("A-", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = chipText)
+                }
+                org.attache.tmux.CapsuleActionButton(
+                    onClick = { changeFontSize(2f) },
+                    modifier = Modifier.testTag("title_bar_font_increase"),
+                ) {
+                    Text("A+", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = chipText)
+                }
+                org.attache.tmux.CapsuleActionButton(
+                    onClick = { toggleTheme() },
+                    modifier = Modifier.testTag("title_bar_theme_toggle"),
+                ) {
+                    Icon(
+                        if (isDarkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                        contentDescription = null,
+                        tint = chipText,
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+                org.attache.tmux.CapsuleActionButton(
+                    onClick = {
+                        menuImeWasVisible = imeVisible
+                        resizeSuspended = true
+                        autoHideJobRef.titleBarJob?.cancel()
+                        showToolbarStyleDialog = true
+                    },
+                    modifier = Modifier.testTag("title_bar_toolbar_style"),
+                ) {
+                    Icon(
+                        Icons.Outlined.GridView,
+                        contentDescription = null,
+                        tint = chipText,
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+            }
+
+            if (hasMultipleSessions) {
+                IconButton(
+                    onClick = { showSessionPickerDialog = true },
+                    modifier = if (tmuxControl != null) Modifier.size(width = 38.dp, height = 32.dp) else Modifier,
+                ) {
+                    Icon(
+                        Icons.Default.SwapHoriz,
+                        contentDescription = stringResource(R.string.console_switch_session),
+                    )
+                }
+            }
+
+            // Text Input button — on a tmux host it is in the row
+            // above the keys instead.
+            if (tmuxControl == null) IconButton(
+                onClick = { showTextInputDialog = true },
+                enabled = currentBridge != null,
+                modifier = Modifier.testTag("title_bar_text_input"),
+            ) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = stringResource(R.string.console_menu_text_input),
+                )
+            }
+
+            // Paste button - always visible, except on a tmux host,
+            // where the chips need the width more; the text input
+            // dialog still takes a paste.
+            if (tmuxControl == null) IconButton(
+                onClick = {
+                    pasteClipboardContents()
+                },
+                enabled = currentBridge != null,
+            ) {
+                Icon(
+                    Icons.Default.ContentPaste,
+                    contentDescription = stringResource(R.string.console_menu_paste),
+                )
+            }
+
+            // More menu
+            Box {
+                IconButton(
+                    onClick = {
+                        // Refresh menu state to update enabled/disabled items
+                        viewModel.refreshMenuState()
+                        menuImeWasVisible = imeVisible
+                        resizeSuspended = true
+                        autoHideJobRef.titleBarJob?.cancel()
+                        showMenu = true
+                    },
+                    modifier = if (tmuxControl != null) Modifier.size(width = 38.dp, height = 32.dp) else Modifier,
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = stringResource(R.string.button_more_options),
+                        modifier = if (tmuxControl != null) Modifier.size(19.dp) else Modifier,
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = {
+                        showMenu = false
+                        termFocusRequester.requestFocus()
+                    },
+                ) {
+                    // Reconnect (shown only when disconnected)
+                    if (disconnected) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.console_menu_reconnect)) },
                             onClick = {
-                                if (isLandscape) {
-                                    val opening = !landscapeSidebarOpen
-                                    landscapeSidebarOpen = opening
-                                    if (opening) {
-                                        showSoftwareKeyboard = false
-                                        keyboardController?.hide()
-                                    }
-                                } else {
-                                    if (!portraitDrawerOpen) {
-                                        showSoftwareKeyboard = false
-                                        keyboardController?.hide()
-                                        autoHideJobRef.titleBarJob?.cancel()
-                                        portraitDrawerOpen = true
-                                    } else {
-                                        portraitDrawerOpen = false
-                                        termFocusRequester.requestFocus()
-                                    }
-                                }
+                                showMenu = false
+                                viewModel.reconnect(currentBridge)
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
                             },
                         )
-                    } ?: Text(
-                        currentBridge?.host?.nickname
-                            ?: stringResource(R.string.console_default_title),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                expandedHeight = if (tmuxControl != null) 34.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
-                modifier = Modifier
-                    .testTag("top_app_bar")
-                    .onSizeChanged {
-                        titleBarHeight = with(density) { it.height.toDp() }
-                    },
-                navigationIcon = {
-                    IconButton(
-                        onClick = navigateBack,
-                        modifier = if (tmuxControl != null) Modifier.size(34.dp) else Modifier,
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            stringResource(R.string.button_back),
-                            modifier = if (tmuxControl != null) Modifier.size(19.dp) else Modifier,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = if (titleBarHide) {
-                        unifiedConsoleBg.copy(alpha = 0.85f)
-                    } else {
-                        unifiedConsoleBg
-                    },
-                    titleContentColor = unifiedConsoleFg,
-                    navigationIconContentColor = unifiedConsoleFg,
-                    actionIconContentColor = unifiedConsoleFg,
-                ),
-                actions = {
-                    if (tmuxControl != null) {
-                        val chipBorder = if (isDarkTheme) {
-                            androidx.compose.ui.graphics.Color(0xFF2B323C)
-                        } else {
-                            androidx.compose.ui.graphics.Color(0xFFD8D0C1)
-                        }
-                        val chipBg = if (isDarkTheme) {
-                            androidx.compose.ui.graphics.Color(0xFF1C212B)
-                        } else {
-                            androidx.compose.ui.graphics.Color(0xFFEDE7DA)
-                        }
-                        val chipText = unifiedConsoleFg
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
-                            modifier = Modifier.padding(end = 2.dp),
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .height(24.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(chipBg)
-                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
-                                    .clickable { changeFontSize(-2f) }
-                                    .padding(horizontal = 6.dp)
-                                    .testTag("title_bar_font_decrease"),
-                            ) {
-                                Text("A-", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = chipText)
-                            }
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .height(24.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(chipBg)
-                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
-                                    .clickable { changeFontSize(2f) }
-                                    .padding(horizontal = 6.dp)
-                                    .testTag("title_bar_font_increase"),
-                            ) {
-                                Text("A+", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = chipText)
-                            }
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .height(24.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(chipBg)
-                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
-                                    .clickable { toggleTheme() }
-                                    .padding(horizontal = 6.dp)
-                                    .testTag("title_bar_theme_toggle"),
-                            ) {
-                                Text(if (isDarkTheme) "☀️" else "🌙", fontSize = 11.5.sp)
-                            }
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .height(24.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(chipBg)
-                                    .border(1.dp, chipBorder, RoundedCornerShape(6.dp))
-                                    .clickable {
-                                        menuImeWasVisible = imeVisible
-                                        resizeSuspended = true
-                                        autoHideJobRef.titleBarJob?.cancel()
-                                        showToolbarStyleDialog = true
-                                    }
-                                    .padding(horizontal = 6.dp)
-                                    .testTag("title_bar_toolbar_style"),
-                            ) {
-                                Text("🎛️", fontSize = 11.5.sp)
-                            }
-                        }
                     }
 
                     if (hasMultipleSessions) {
-                        IconButton(onClick = { showSessionPickerDialog = true }) {
-                            Icon(
-                                Icons.Default.SwapHoriz,
-                                contentDescription = stringResource(R.string.console_switch_session),
-                            )
-                        }
-                    }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.console_previous_session)) },
+                            onClick = {
+                                showMenu = false
+                                selectBridgePreservingKeyboard(uiState.currentBridgeIndex - 1)
+                            },
+                            enabled = uiState.currentBridgeIndex > 0,
+                        )
 
-                    // Text Input button — on a tmux host it is in the row
-                    // above the keys instead.
-                    if (tmuxControl == null) IconButton(
-                        onClick = { showTextInputDialog = true },
-                        enabled = currentBridge != null,
-                        modifier = Modifier.testTag("title_bar_text_input"),
-                    ) {
-                        Icon(
-                            Icons.Default.Edit,
-                            contentDescription = stringResource(R.string.console_menu_text_input),
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.console_next_session)) },
+                            onClick = {
+                                showMenu = false
+                                selectBridgePreservingKeyboard(uiState.currentBridgeIndex + 1)
+                            },
+                            enabled = uiState.currentBridgeIndex < uiState.bridges.lastIndex,
                         )
                     }
 
-                    // Paste button - always visible, except on a tmux host,
-                    // where the chips need the width more; the text input
-                    // dialog still takes a paste.
-                    if (tmuxControl == null) IconButton(
+                    // Disconnect/Close
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (!sessionOpen && disconnected) {
+                                    stringResource(R.string.console_menu_close)
+                                } else {
+                                    stringResource(R.string.list_host_disconnect)
+                                },
+                            )
+                        },
                         onClick = {
-                            pasteClipboardContents()
+                            showMenu = false
+                            showDisconnectDialog = true
                         },
                         enabled = currentBridge != null,
-                    ) {
-                        Icon(
-                            Icons.Default.ContentPaste,
-                            contentDescription = stringResource(R.string.console_menu_paste),
+                        leadingIcon = {
+                            Icon(Icons.Default.LinkOff, null)
+                        },
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.console_menu_connection_info)) },
+                        onClick = {
+                            showMenu = false
+                            showConnectionInfoDialog = true
+                        },
+                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                        enabled = currentBridge != null,
+                    )
+
+                    // URL Scan
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.console_menu_urlscan)) },
+                        onClick = {
+                            showMenu = false
+                            currentBridge?.let { bridge ->
+                                scannedUrls = bridge.scanForURLs()
+                                showUrlScanDialog = true
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.Link, contentDescription = null)
+                        },
+                        enabled = currentBridge != null,
+                    )
+
+                    // Resize
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.console_menu_resize)) },
+                        onClick = {
+                            showMenu = false
+                            showResizeDialog = true
+                        },
+                        enabled = sessionOpen,
+                    )
+
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("底部快捷栏风格")
+                                Text(
+                                    text = currentToolbarStyle.title,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        onClick = {
+                            showMenu = false
+                            showToolbarStyleDialog = true
+                        },
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.keyboard_settings_title)) },
+                        onClick = {
+                            showMenu = false
+                            showKeyboardSettings = true
+                        },
+                        enabled = currentBridge != null,
+                    )
+
+                    // Compose mode (IME) toggle — persistent entry so users can always
+                    // enable multi-byte IME composition (Japanese, Chinese, Korean, etc.)
+                    // even when the optional IME key on the special-keys row is hidden.
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.console_menu_compose_mode)) },
+                        onClick = {
+                            showMenu = false
+                            composeController?.toggleComposeMode()
+                        },
+                        enabled = composeController != null,
+                        leadingIcon = {
+                            Icon(Icons.Default.Language, contentDescription = null)
+                        },
+                        trailingIcon = {
+                            Checkbox(
+                                checked = composeController?.isComposeModeActive == true,
+                                onCheckedChange = null,
+                            )
+                        },
+                    )
+
+                    // Port Forwards (if available)
+                    if (canForwardPorts) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.console_menu_portforwards)) },
+                            onClick = {
+                                showMenu = false
+                                currentBridge.host.id.let {
+                                    onNavigateToPortForwards(
+                                        it,
+                                    )
+                                }
+                            },
+                            enabled = sessionOpen,
                         )
                     }
 
-                    // More menu
-                    Box {
-                        IconButton(
-                            onClick = {
-                                // Refresh menu state to update enabled/disabled items
-                                viewModel.refreshMenuState()
-                                menuImeWasVisible = imeVisible
-                                resizeSuspended = true
-                                autoHideJobRef.titleBarJob?.cancel()
-                                showMenu = true
-                            },
-                            modifier = if (tmuxControl != null) Modifier.size(34.dp) else Modifier,
-                        ) {
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = stringResource(R.string.button_more_options),
-                                modifier = if (tmuxControl != null) Modifier.size(19.dp) else Modifier,
+                    // Fullscreen toggle
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.pref_fullscreen_title)) },
+                        onClick = {
+                            fullscreen = !fullscreen
+                            prefs.edit { putBoolean("fullscreen", fullscreen) }
+                        },
+                        trailingIcon = {
+                            Checkbox(
+                                checked = fullscreen,
+                                onCheckedChange = null,
                             )
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = {
-                                showMenu = false
-                                termFocusRequester.requestFocus()
-                            },
-                        ) {
-                            // Reconnect (shown only when disconnected)
-                            if (disconnected) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.console_menu_reconnect)) },
-                                    onClick = {
-                                        showMenu = false
-                                        viewModel.reconnect(currentBridge)
-                                    },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Refresh, contentDescription = null)
-                                    },
-                                )
+                        },
+                    )
+
+                    // Title bar auto-hide toggle
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.pref_titlebarhide_title)) },
+                        onClick = {
+                            titleBarHide = !titleBarHide
+                            prefs.edit { putBoolean("titlebarhide", titleBarHide) }
+                            handleTerminalInteraction(isTerminalTap = true)
+                        },
+                        trailingIcon = {
+                            Checkbox(
+                                checked = titleBarHide,
+                                onCheckedChange = null,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        chromeTmuxControl?.let { control ->
+            org.attache.tmux.AttacheFloatingChrome(
+                control = control,
+                isDark = isDarkTheme,
+                isLandscape = isLandscape,
+                barVisible = titleBarVisible,
+                sidebarOpen = if (isLandscape) landscapeSidebarOpen else portraitDrawerOpen,
+                onBack = navigateBack,
+                onToggleSidebar = toggleAttacheSidebar,
+                onCloseSidebar = {
+                    portraitDrawerOpen = false
+                    termFocusRequester.requestFocus()
+                },
+                onBarHeightChanged = { titleBarHeight = it },
+                actions = topBarActions,
+                backContentDescription = stringResource(R.string.button_back),
+                sidebar = { sidebarModifier ->
+                    AttacheSidebar(
+                        control = control,
+                        hosts = hostEntries,
+                        onSelectHost = ::selectHostFromSidebar,
+                        isDark = isDarkTheme,
+                        // Portrait: let the tapped row's highlight land, then
+                        // close the drawer (~180ms, per the D mockup).
+                        onDismiss = if (isLandscape) {
+                            null
+                        } else {
+                            {
+                                coroutineScope.launch {
+                                    delay(180)
+                                    portraitDrawerOpen = false
+                                    termFocusRequester.requestFocus()
+                                }
                             }
-
-                            if (hasMultipleSessions) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.console_previous_session)) },
-                                    onClick = {
-                                        showMenu = false
-                                        selectBridgePreservingKeyboard(uiState.currentBridgeIndex - 1)
-                                    },
-                                    enabled = uiState.currentBridgeIndex > 0,
-                                )
-
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.console_next_session)) },
-                                    onClick = {
-                                        showMenu = false
-                                        selectBridgePreservingKeyboard(uiState.currentBridgeIndex + 1)
-                                    },
-                                    enabled = uiState.currentBridgeIndex < uiState.bridges.lastIndex,
-                                )
-                            }
-
-                            // Disconnect/Close
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (!sessionOpen && disconnected) {
-                                            stringResource(R.string.console_menu_close)
-                                        } else {
-                                            stringResource(R.string.list_host_disconnect)
-                                        },
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    showDisconnectDialog = true
-                                },
-                                enabled = currentBridge != null,
-                                leadingIcon = {
-                                    Icon(Icons.Default.LinkOff, null)
-                                },
-                            )
-
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.console_menu_connection_info)) },
-                                onClick = {
-                                    showMenu = false
-                                    showConnectionInfoDialog = true
-                                },
-                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
-                                enabled = currentBridge != null,
-                            )
-
-                            // URL Scan
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.console_menu_urlscan)) },
-                                onClick = {
-                                    showMenu = false
-                                    currentBridge?.let { bridge ->
-                                        scannedUrls = bridge.scanForURLs()
-                                        showUrlScanDialog = true
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Link, contentDescription = null)
-                                },
-                                enabled = currentBridge != null,
-                            )
-
-                            // Resize
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.console_menu_resize)) },
-                                onClick = {
-                                    showMenu = false
-                                    showResizeDialog = true
-                                },
-                                enabled = sessionOpen,
-                            )
-
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text("底部快捷栏风格")
-                                        Text(
-                                            text = currentToolbarStyle.title,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    showToolbarStyleDialog = true
-                                },
-                            )
-
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.keyboard_settings_title)) },
-                                onClick = {
-                                    showMenu = false
-                                    showKeyboardSettings = true
-                                },
-                                enabled = currentBridge != null,
-                            )
-
-                            // Compose mode (IME) toggle — persistent entry so users can always
-                            // enable multi-byte IME composition (Japanese, Chinese, Korean, etc.)
-                            // even when the optional IME key on the special-keys row is hidden.
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.console_menu_compose_mode)) },
-                                onClick = {
-                                    showMenu = false
-                                    composeController?.toggleComposeMode()
-                                },
-                                enabled = composeController != null,
-                                leadingIcon = {
-                                    Icon(Icons.Default.Language, contentDescription = null)
-                                },
-                                trailingIcon = {
-                                    Checkbox(
-                                        checked = composeController?.isComposeModeActive == true,
-                                        onCheckedChange = null,
-                                    )
-                                },
-                            )
-
-                            // Port Forwards (if available)
-                            if (canForwardPorts) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.console_menu_portforwards)) },
-                                    onClick = {
-                                        showMenu = false
-                                        currentBridge.host.id.let {
-                                            onNavigateToPortForwards(
-                                                it,
-                                            )
-                                        }
-                                    },
-                                    enabled = sessionOpen,
-                                )
-                            }
-
-                            // Fullscreen toggle
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.pref_fullscreen_title)) },
-                                onClick = {
-                                    fullscreen = !fullscreen
-                                    prefs.edit { putBoolean("fullscreen", fullscreen) }
-                                },
-                                trailingIcon = {
-                                    Checkbox(
-                                        checked = fullscreen,
-                                        onCheckedChange = null,
-                                    )
-                                },
-                            )
-
-                            // Title bar auto-hide toggle
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.pref_titlebarhide_title)) },
-                                onClick = {
-                                    titleBarHide = !titleBarHide
-                                    prefs.edit { putBoolean("titlebarhide", titleBarHide) }
-                                    handleTerminalInteraction(isTerminalTap = true)
-                                },
-                                trailingIcon = {
-                                    Checkbox(
-                                        checked = titleBarHide,
-                                        onCheckedChange = null,
-                                    )
-                                },
-                            )
-                        }
-                    }
+                        },
+                        modifier = sidebarModifier,
+                    )
                 },
             )
+        }
+
+
+        // Overlay TopAppBar - always visible when titleBarHide is false,
+        // or temporarily visible when titleBarHide is true and showTitleBar is true
+        if (titleBarVisible) {
+            val tmuxControl = chromeTmuxControl
+            if (tmuxControl == null) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            currentBridge?.host?.nickname
+                                ?: stringResource(R.string.console_default_title),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    modifier = Modifier
+                        .testTag("top_app_bar")
+                        .onSizeChanged {
+                            titleBarHeight = with(density) { it.height.toDp() }
+                        },
+                    navigationIcon = {
+                        IconButton(onClick = navigateBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                stringResource(R.string.button_back),
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = if (titleBarHide) {
+                            unifiedConsoleBg.copy(alpha = 0.85f)
+                        } else {
+                            unifiedConsoleBg
+                        },
+                        titleContentColor = unifiedConsoleFg,
+                        navigationIconContentColor = unifiedConsoleFg,
+                        actionIconContentColor = unifiedConsoleFg,
+                    ),
+                    actions = topBarActions,
+                )
+            }
 
             // Progress indicator for OSC 9;4 progress reporting
             val progressState = uiState.progressState

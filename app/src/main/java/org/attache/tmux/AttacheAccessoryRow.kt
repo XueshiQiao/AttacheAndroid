@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -288,15 +289,26 @@ fun AttacheToolbarContainer(
 
     when (style) {
         AttacheToolbarStyle.TERMINAL_DECK -> {
-            val containerBg = if (isDark) Color(0xFF181A1F) else Color(0xFFEDE7DA)
-            val containerBorder = if (isDark) Color(0xFF2C313A) else Color(0xFFD8D0C1)
+            // Floats like the top capsules in AttacheFloatingChrome: same glass,
+            // border and shadow, 10dp in from the screen edges. The gaps are
+            // inside [modifier], so the measured height pads the terminal for them.
+            val palette = attacheGlassPalette(isDark)
+            val shape = RoundedCornerShape(20.dp)
             Column(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = modifier
                     .fillMaxWidth()
-                    .background(containerBg)
-                    .border(width = 0.5.dp, color = containerBorder)
-                    .padding(horizontal = 5.dp, vertical = 4.dp),
+                    .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+                    .shadow(
+                        elevation = 10.dp,
+                        shape = shape,
+                        ambientColor = palette.shadow.copy(alpha = 0.30f),
+                        spotColor = palette.shadow.copy(alpha = 0.40f),
+                    )
+                    .clip(shape)
+                    .background(palette.glass)
+                    .border(0.5.dp, palette.glassBorder, shape)
+                    .padding(horizontal = 8.dp, vertical = 7.dp),
             ) {
                 if (inlineInputActive) {
                     InlineVoiceTextInputBar(

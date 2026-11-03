@@ -1,7 +1,6 @@
 package org.attache.tmux
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -11,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,10 +23,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,7 +49,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -294,53 +295,14 @@ data class AttacheHostEntry(
     val current: Boolean,
 )
 
-private data class RailPalette(
-    val bg: Color,
-    val headerBg: Color,
-    val edge: Color,
-    val divider: Color,
-    val activeHostBg: Color,
-    val accentBlue: Color,
-    val text: Color,
-    val muted: Color,
-    val faint: Color,
-    val goodGreen: Color,
-    val buttonBorder: Color,
-)
-
-private val DarkRailPalette = RailPalette(
-    bg = Color(0xFF1E1F22),
-    headerBg = Color(0xFF18191B),
-    edge = Color(0xFF2C2E33),
-    divider = Color(0xFF27292E),
-    activeHostBg = Color(0xFF282B31),
-    accentBlue = Color(0xFF4E7FB8),
-    text = Color(0xFFE3E3E6),
-    muted = Color(0xFF9A9CA3),
-    faint = Color(0xFF686A70),
-    goodGreen = Color(0xFF5FBF7F),
-    buttonBorder = Color(0xFF32353C),
-)
-
-private val LightRailPalette = RailPalette(
-    bg = Color(0xFFF3F2EE),
-    headerBg = Color(0xFFEBE9E3),
-    edge = Color(0xFFDDDAD0),
-    divider = Color(0xFFE2DFD5),
-    activeHostBg = Color(0xFFE5E2D8),
-    accentBlue = Color(0xFF3B6EA8),
-    text = Color(0xFF1F1E1C),
-    muted = Color(0xFF52504B),
-    faint = Color(0xFF7D7971),
-    goodGreen = Color(0xFF2E7D47),
-    buttonBorder = Color(0xFFD0CCC0),
-)
-
 /**
- * Unified Attaché sidebar component used in both orientations:
- * - In landscape mode, docked on the left side of the terminal (`224.dp` wide).
- * - In portrait mode, slides out from the left edge as a drawer when the top bar
- *   session/window button is tapped.
+ * Unified Attaché sidebar content used in both orientations. It renders inside
+ * the floating glass panel of [AttacheFloatingChrome] (docs/chrome-unify scheme
+ * D), which owns the panel surface, its header (the merged title capsule) and
+ * the single theme toggle:
+ * - In landscape mode, the panel floats docked on the left of the terminal.
+ * - In portrait mode, the panel floats over the terminal above a scrim when the
+ *   title capsule is tapped.
  *
  * Displays a three-tier hierarchy: Hosts -> Sessions -> Windows.
  */
@@ -351,8 +313,6 @@ fun AttacheSidebar(
     onSelectHost: (UUID) -> Unit,
     modifier: Modifier = Modifier,
     isDark: Boolean = true,
-    onToggleTheme: (() -> Unit)? = null,
-    onOpenFileInbox: (() -> Unit)? = null,
     onDismiss: (() -> Unit)? = null,
 ) {
     val state by control.state.collectAsState()
@@ -362,7 +322,7 @@ fun AttacheSidebar(
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
     var hasScrolledToActiveOnOpen by remember { mutableStateOf(false) }
     var showTailscaleDialog by remember { mutableStateOf(false) }
-    val palette = if (isDark) DarkRailPalette else LightRailPalette
+    val palette = attacheGlassPalette(isDark)
 
     LaunchedEffect(state.sessionId, state.sessions.size, hosts.size) {
         val sid = state.sessionId ?: return@LaunchedEffect
@@ -384,354 +344,281 @@ fun AttacheSidebar(
         TailscaleDialog(onDismiss = { showTailscaleDialog = false })
     }
 
-    Row(modifier = modifier.fillMaxHeight().testTag("attacheSidebar")) {
-        Column(
+    Column(modifier = modifier.fillMaxHeight().testTag("attacheSidebar")) {
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(top = 2.dp, bottom = 8.dp),
             modifier = Modifier
-                .width(if (onDismiss != null) 256.dp else 224.dp)
-                .fillMaxHeight()
-                .background(palette.bg),
+                .weight(1f)
+                .fillMaxWidth()
+                .testTag("tmuxSessionList"),
         ) {
-            // Top bar of the sidebar
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(36.dp)
-                    .background(palette.headerBg)
-                    .padding(horizontal = 10.dp),
-            ) {
-                Text(
-                    text = "ATTACHÉ",
-                    color = palette.muted,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.6.sp,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (onToggleTheme != null) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(5.dp))
-                                .border(1.dp, palette.buttonBorder, RoundedCornerShape(5.dp))
-                                .clickable { onToggleTheme() }
-                                .padding(horizontal = 7.dp, vertical = 2.dp)
-                                .testTag("tmuxSidebarThemeToggle"),
-                        ) {
-                            Text(
-                                text = if (isDark) "☀️" else "🌙",
-                                color = palette.text,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-                    Box(
+            if (hosts.isNotEmpty()) {
+                // Index layout must stay in sync with computeActiveWindowScrollIndex:
+                // header, hosts…, spacer, then the sessions header.
+                item(key = "header-hosts") {
+                    SidebarSectionHeader(text = "主机", palette = palette)
+                }
+                items(hosts, key = { "host-${it.id}" }) { host ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(5.dp))
-                            .border(1.dp, palette.buttonBorder, RoundedCornerShape(5.dp))
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 1.dp)
+                            .clip(RoundedCornerShape(10.dp))
                             .clickable {
                                 onDismiss?.invoke()
-                                scope.tmuxAction("new-window") { control.newWindow() }
+                                onSelectHost(host.id)
                             }
-                            .padding(horizontal = 7.dp, vertical = 2.dp)
-                            .testTag("tmuxSidebarNewWindow"),
+                            .padding(start = 6.dp, end = 10.dp, top = 7.dp, bottom = 8.dp)
+                            .testTag("attacheHost-${host.id}"),
                     ) {
-                        Text(
-                            text = "+ Window",
-                            color = palette.text,
-                            fontSize = 11.sp,
-                        )
-                    }
-                    if (onDismiss != null) {
                         Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(5.dp))
-                                .border(1.dp, palette.buttonBorder, RoundedCornerShape(5.dp))
-                                .clickable { onDismiss() }
-                                .padding(horizontal = 7.dp, vertical = 2.dp)
-                                .testTag("tmuxSidebarClose"),
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.size(14.dp),
                         ) {
-                            Text(
-                                text = "✕",
-                                color = palette.muted,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-                }
-            }
-            HorizontalDivider(thickness = 1.dp, color = palette.divider)
-
-            LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .testTag("tmuxSessionList"),
-            ) {
-                if (hosts.isNotEmpty()) {
-                    item(key = "header-hosts") {
-                        Text(
-                            text = "HOSTS (主机)",
-                            color = palette.faint,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            letterSpacing = 0.6.sp,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        )
-                    }
-                    items(hosts, key = { "host-${it.id}" }) { host ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 1.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (host.current) palette.activeHostBg else Color.Transparent)
-                                .clickable {
-                                    onDismiss?.invoke()
-                                    onSelectHost(host.id)
-                                }
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                                .testTag("attacheHost-${host.id}"),
-                        ) {
+                            if (host.connected) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(13.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.green.copy(alpha = 0.22f)),
+                                )
+                            }
                             Box(
                                 modifier = Modifier
                                     .size(7.dp)
                                     .clip(CircleShape)
-                                    .background(if (host.connected) palette.goodGreen else palette.faint),
+                                    .background(if (host.connected) palette.green else palette.faint),
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = host.name,
+                                color = palette.ink,
+                                fontSize = 14.sp,
+                                fontWeight = if (host.current) FontWeight.SemiBold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (host.subtitle.isNotBlank()) {
                                 Text(
-                                    text = host.name,
-                                    color = if (host.current) palette.text else palette.muted,
-                                    fontSize = 13.5.sp,
-                                    fontWeight = if (host.current) FontWeight.SemiBold else FontWeight.Normal,
+                                    text = host.subtitle,
+                                    color = palette.muted,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                if (host.subtitle.isNotBlank()) {
-                                    Text(
-                                        text = host.subtitle,
-                                        color = palette.faint,
-                                        fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
                             }
                         }
                     }
-                    item(key = "divider-hosts") {
-                        HorizontalDivider(
-                            thickness = 1.dp,
-                            color = palette.divider,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                }
+                item(key = "divider-hosts") {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+            }
+
+            item(key = "header-sessions") {
+                SidebarSectionHeader(text = "会话 · 窗口", palette = palette) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(26.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(palette.button)
+                            .clickable {
+                                onDismiss?.invoke()
+                                scope.tmuxAction("new-window") { control.newWindow() }
+                            }
+                            .padding(horizontal = 10.dp)
+                            .testTag("tmuxSidebarNewWindow"),
+                    ) {
+                        Text(
+                            text = "＋ 窗口",
+                            color = palette.accent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+
+            state.sessions.forEach { session ->
+                val isCurrentSession = session.id == state.sessionId
+                val isCollapsed = collapsedSessions[session.id] == true
+                item(key = "session-${session.id}") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 4.dp, end = 8.dp, top = 4.dp)
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .clickable {
+                                collapsedSessions[session.id] = false
+                                onDismiss?.invoke()
+                                scope.tmuxAction("switch-client") { control.switchTo(session.id) }
+                            }
+                            .padding(end = 8.dp)
+                            .testTag("tmuxSession-${session.id}"),
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(width = 26.dp, height = 30.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable {
+                                    collapsedSessions[session.id] = !isCollapsed
+                                }
+                                .testTag("tmuxSessionToggle-${session.id}"),
+                        ) {
+                            Text(
+                                text = if (isCollapsed) "▸" else "▾",
+                                color = palette.faint,
+                                fontSize = 10.sp,
+                            )
+                        }
+                        Text(
+                            text = session.name.uppercase(),
+                            color = if (isCurrentSession) palette.ink else palette.muted,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "${session.windows.size}",
+                            color = palette.faint,
+                            fontSize = 11.5.sp,
                         )
                     }
                 }
 
-                item(key = "header-sessions") {
-                    Text(
-                        text = "SESSIONS & WINDOWS",
-                        color = palette.faint,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.6.sp,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-
-                state.sessions.forEach { session ->
-                    val isCurrentSession = session.id == state.sessionId
-                    val isCollapsed = collapsedSessions[session.id] == true
-                    item(key = "session-${session.id}") {
+                if (!isCollapsed) {
+                    items(session.windows, key = { "win-${session.id}-${it.id}" }) { window ->
+                        val here = isCurrentSession && window.active
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 4.dp, bottom = 1.dp)
-                                .clip(RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 1.dp)
+                                .height(36.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(if (here) palette.selectedBg else Color.Transparent)
                                 .clickable {
-                                    collapsedSessions[session.id] = false
                                     onDismiss?.invoke()
-                                    scope.tmuxAction("switch-client") { control.switchTo(session.id) }
+                                    scope.tmuxAction("switch-client") { control.switchTo(window.id) }
                                 }
-                                .padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
-                                .testTag("tmuxSession-${session.id}"),
+                                .padding(start = 12.dp, end = 10.dp)
+                                .testTag("tmuxSessionWindow-${window.id}"),
                         ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(20.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .clickable {
-                                        collapsedSessions[session.id] = !isCollapsed
-                                    }
-                                    .testTag("tmuxSessionToggle-${session.id}"),
-                            ) {
-                                Text(
-                                    text = if (isCollapsed) "▸" else "▾",
-                                    color = palette.faint,
-                                    fontSize = 10.5.sp,
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = session.name.uppercase(),
-                                color = if (isCurrentSession) palette.text else palette.muted,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
+                                text = "${window.index}",
+                                color = if (here) palette.accent.copy(alpha = 0.75f) else palette.faint,
+                                fontSize = 11.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.width(24.dp),
+                            )
+                            Text(
+                                text = window.name,
+                                color = if (here) palette.accent else palette.ink,
+                                fontSize = 14.sp,
+                                fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                            Text(
-                                text = "${session.windows.size}",
-                                color = palette.faint,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                            )
-                        }
-                    }
-
-                    if (!isCollapsed) {
-                        items(session.windows, key = { "win-${session.id}-${it.id}" }) { window ->
-                            val here = isCurrentSession && window.active
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 4.dp, top = 1.dp, bottom = 1.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (here) palette.accentBlue else Color.Transparent)
-                                    .clickable {
-                                        onDismiss?.invoke()
-                                        scope.tmuxAction("switch-client") { control.switchTo(window.id) }
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                                    .testTag("tmuxSessionWindow-${window.id}"),
-                            ) {
-                                Text(
-                                    text = "${window.index}",
-                                    color = if (here) Color.White.copy(alpha = 0.85f) else palette.faint,
-                                    fontSize = 11.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    textAlign = TextAlign.End,
-                                    modifier = Modifier.width(18.dp),
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = window.name,
-                                    color = if (here) Color.White else palette.muted,
-                                    fontSize = 13.5.sp,
-                                    fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
                         }
                     }
                 }
             }
+        }
 
-            if (onOpenFileInbox != null) {
-                HorizontalDivider(thickness = 1.dp, color = palette.divider)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(palette.headerBg)
-                        .clickable {
-                            onDismiss?.invoke()
-                            onOpenFileInbox()
-                        }
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                        .testTag("tmuxSidebarFileInbox"),
-                ) {
-                    Text(
-                        text = "📥 文件收件箱 (Download/Attache)",
-                        color = palette.text,
-                        fontSize = 11.5.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = "▸",
-                        color = palette.muted,
-                        fontSize = 12.sp,
-                    )
-                }
-            }
-
-            HorizontalDivider(thickness = 1.dp, color = palette.divider)
+        // Footer: Tailscale.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .height(1.dp)
+                .background(palette.line),
+        )
+        Column(modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 10.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(palette.headerBg)
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(9.dp))
                     .clickable { showTailscaleDialog = true }
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .padding(start = 14.dp, end = 4.dp)
                     .testTag("tmuxSidebarTailscale"),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    val tsDotColor = when {
-                        !tsState.enabled -> palette.faint
-                        tsState.status.running -> palette.goodGreen
-                        else -> palette.accentBlue
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(tsDotColor),
-                    )
-                    val tsSubtitle = when {
-                        !tsState.enabled -> "Tailscale: Off"
-                        tsState.status.running && tsState.status.selfIpv4.isNotEmpty() ->
-                            "TS ${tsState.status.selfIpv4}"
-                        tsState.status.running -> "Tailscale: Online"
-                        tsState.status.backendState == "NeedsLogin" -> "Tailscale: Needs Login"
-                        else -> "Tailscale: ${tsState.status.backendState}"
-                    }
-                    Text(
-                        text = tsSubtitle,
-                        color = palette.text,
-                        fontSize = 11.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                val tsDotColor = when {
+                    !tsState.enabled -> palette.faint
+                    tsState.status.running -> palette.green
+                    else -> palette.accent
+                }
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(tsDotColor),
+                )
+                val tsSubtitle = when {
+                    !tsState.enabled -> "Tailscale: Off"
+                    tsState.status.running && tsState.status.selfIpv4.isNotEmpty() ->
+                        "TS ${tsState.status.selfIpv4}"
+                    tsState.status.running -> "Tailscale: Online"
+                    tsState.status.backendState == "NeedsLogin" -> "Tailscale: Needs Login"
+                    else -> "Tailscale: ${tsState.status.backendState}"
                 }
                 Text(
-                    text = "⚙",
-                    color = palette.muted,
+                    text = tsSubtitle,
+                    color = palette.ink,
                     fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = null,
+                    tint = palette.muted,
+                    modifier = Modifier.size(28.dp).padding(5.dp),
                 )
             }
         }
-        // Right border line
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .fillMaxHeight()
-                .background(palette.edge),
+    }
+}
+
+@Composable
+private fun SidebarSectionHeader(
+    text: String,
+    palette: AttacheGlassPalette,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 6.dp)
+            .defaultMinSize(minHeight = 26.dp),
+    ) {
+        Text(
+            text = text,
+            color = palette.muted,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.8.sp,
+            modifier = Modifier.weight(1f),
         )
+        trailing?.invoke()
     }
 }
 
