@@ -218,6 +218,7 @@ fun Modifier.tmuxTouch(
                     }
                     return@awaitEachGesture
                 }
+                var justStartedScrolling = false
                 if (!scrolling) {
                     // Held still past the long-press timeout: the terminal
                     // has started a selection. Checked before this event's
@@ -232,6 +233,7 @@ fun Modifier.tmuxTouch(
                             (down.position.y / lineHeight).toInt(),
                         ) ?: return@awaitEachGesture
                         scrolling = true
+                        justStartedScrolling = true
                     } else if (moved) {
                         return@awaitEachGesture
                     }
@@ -249,7 +251,13 @@ fun Modifier.tmuxTouch(
                         onDismissKeyboard?.invoke()
                     }
                     // Finger down is older text, which is tmux's scroll-up.
-                    pending += deltaY
+                    // Seed with total.y on the frame that crosses touchSlop so
+                    // initial travel is not lost as a dead zone.
+                    if (justStartedScrolling) {
+                        pending = total.y
+                    } else {
+                        pending += deltaY
+                    }
                     val lines = (pending / lineHeight).toInt()
                     if (lines != 0) {
                         val pane = target ?: return@awaitEachGesture

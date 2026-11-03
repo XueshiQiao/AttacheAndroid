@@ -151,6 +151,9 @@ class TmuxControl(
      * fast swipe becomes a few commands rather than one per frame. */
     private data class ScrollRequest(val pane: String, val lines: Int, val column: Int, val row: Int)
     private val scrollRequests = Channel<ScrollRequest>(Channel.UNLIMITED)
+    private val startNanos = System.nanoTime()
+    private fun nowMs(): Long = (System.nanoTime() - startNanos) / 1_000_000L
+    @Volatile private var lastScrollActivityAtMs = -SCROLL_REFRESH_DEBOUNCE_MS
 
     private val sendLock = Mutex()
 
@@ -187,7 +190,14 @@ class TmuxControl(
                 } catch (e: Exception) {
                     Timber.w("no-output failed: %s", e.message)
                 }
-                for (request in refreshRequests) refresh()
+                for (request in refreshRequests) {
+                    while (true) {
+                        val sinceScrollMs = nowMs() - lastScrollActivityAtMs
+                        if (sinceScrollMs >= SCROLL_REFRESH_DEBOUNCE_MS) break
+                        delay(SCROLL_REFRESH_DEBOUNCE_MS - sinceScrollMs)
+                    }
+                    refresh()
+                }
             }
             jobs += scope.launch {
                 val binDir = appContext?.let { AttacheFileStorage.getRemoteBinDir(it) } ?: "~/.local/bin"
@@ -227,12 +237,17 @@ class TmuxControl(
                 }
             }
             jobs += scope.launch {
-                // Every 50ms what piled up is merged per pane and sent
-                // without waiting for tmux's reply: over a relayed link one
-                // round trip measured 580-780ms, and waiting for each made
-                // a swipe advance in jerks of that size.
+                // Leading-edge + in-flight coalescing: the first scroll after
+                // idle goes out immediately (0ms delay); while sendScroll awaits
+                // tmux's reply (or within MIN_SCROLL_INTERVAL_MS on fast LAN),
+                // subsequent requests pile up in scrollRequests and merge per
+                // pane into a single `-N $n` command on the next iteration.
+                var lastScrollStartedAtMs = -MIN_SCROLL_INTERVAL_MS
                 for (first in scrollRequests) {
-                    delay(SCROLL_BATCH_MS)
+                    val elapsed = nowMs() - lastScrollStartedAtMs
+                    if (elapsed < MIN_SCROLL_INTERVAL_MS) {
+                        delay(MIN_SCROLL_INTERVAL_MS - elapsed)
+                    }
                     val merged = LinkedHashMap<String, ScrollRequest>()
                     var next: ScrollRequest? = first
                     while (next != null) {
@@ -240,7 +255,14 @@ class TmuxControl(
                         merged[r.pane] = merged[r.pane]?.let { r.copy(lines = it.lines + r.lines) } ?: r
                         next = scrollRequests.tryReceive().getOrNull()
                     }
-                    merged.values.forEach { r -> scope.launch { sendScroll(r) } }
+                    lastScrollStartedAtMs = nowMs()
+                    lastScrollActivityAtMs = lastScrollStartedAtMs
+                    for (r in merged.values) {
+                        if (r.lines != 0) {
+                            sendScroll(r)
+                        }
+                    }
+                    lastScrollActivityAtMs = nowMs()
                 }
             }
         }
@@ -583,7 +605,10 @@ class TmuxControl(
      * a gesture. */
     fun scroll(paneId: String, lines: Int, column: Int, row: Int) {
         require(PANE_ID.matches(paneId)) { "not a pane id: $paneId" }
-        if (lines != 0) scrollRequests.trySend(ScrollRequest(paneId, lines, column.coerceAtLeast(1), row.coerceAtLeast(1)))
+        if (lines != 0) {
+            lastScrollActivityAtMs = nowMs()
+            scrollRequests.trySend(ScrollRequest(paneId, lines, column.coerceAtLeast(1), row.coerceAtLeast(1)))
+        }
     }
 
     /**
@@ -852,7 +877,8 @@ class TmuxControl(
 
     private companion object {
         const val SEP = "\u0001"
-        const val SCROLL_BATCH_MS = 50L
+        const val MIN_SCROLL_INTERVAL_MS = 12L
+        const val SCROLL_REFRESH_DEBOUNCE_MS = 180L
         val SESSION_ID = Regex("^\\$\\d+$")
         val WINDOW_ID = Regex("^@\\d+$")
         val PANE_ID = Regex("^%\\d+$")
