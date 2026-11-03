@@ -119,11 +119,19 @@ enum class AttacheToolbarStyle(
 object AttacheToolbarPrefs {
     const val PREF_KEY = "attache_toolbar_style"
     const val PREF_ICON_ONLY_KEY = "attache_toolbar_icon_only"
+    const val PREF_SCROLL_SENSITIVITY_KEY = "attache_scroll_sensitivity"
     private val _styleFlow = MutableStateFlow(AttacheToolbarStyle.COPILOT_DOCK)
     val styleFlow: StateFlow<AttacheToolbarStyle> = _styleFlow.asStateFlow()
 
     private val _iconOnlyFlow = MutableStateFlow(false)
     val iconOnlyFlow: StateFlow<Boolean> = _iconOnlyFlow.asStateFlow()
+
+    /**
+     * Scroll sensitivity multiplier where `1.0f` = exact 1:1 physical finger distance
+     * to terminal row movement. Range: `0.2f` .. `2.5f`.
+     */
+    private val _scrollSensitivityFlow = MutableStateFlow(1.0f)
+    val scrollSensitivityFlow: StateFlow<Float> = _scrollSensitivityFlow.asStateFlow()
 
     private val _isDarkFlow = MutableStateFlow(true)
     val isDarkFlow: StateFlow<Boolean> = _isDarkFlow.asStateFlow()
@@ -135,6 +143,7 @@ object AttacheToolbarPrefs {
         val style = AttacheToolbarStyle.fromId(prefs.getString(PREF_KEY, AttacheToolbarStyle.COPILOT_DOCK.id))
         _styleFlow.value = style
         _iconOnlyFlow.value = prefs.getBoolean(PREF_ICON_ONLY_KEY, false)
+        _scrollSensitivityFlow.value = prefs.getFloat(PREF_SCROLL_SENSITIVITY_KEY, 1.0f).coerceIn(0.2f, 2.5f)
         initialized = true
         return style
     }
@@ -161,6 +170,15 @@ object AttacheToolbarPrefs {
         initialized = true
     }
 
+    fun setScrollSensitivity(context: Context, sensitivity: Float) {
+        val clamped = ( kotlin.math.round(sensitivity.coerceIn(0.2f, 2.5f) * 10f) / 10f )
+        PreferenceManager.getDefaultSharedPreferences(context).edit {
+            putFloat(PREF_SCROLL_SENSITIVITY_KEY, clamped)
+        }
+        _scrollSensitivityFlow.value = clamped
+        initialized = true
+    }
+
     fun updateDarkTheme(isDark: Boolean) {
         _isDarkFlow.value = isDark
     }
@@ -181,6 +199,7 @@ fun AttacheToolbarStyleDialog(
 ) {
     val context = LocalContext.current
     val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
+    val scrollSensitivity by AttacheToolbarPrefs.scrollSensitivityFlow.collectAsState()
     LaunchedEffect(Unit) {
         org.attache.tailscale.TailscaleManager.init(context)
     }
@@ -266,11 +285,116 @@ fun AttacheToolbarStyleDialog(
                 }
 
                 Text(
-                    text = "第一排按钮显示",
+                    text = "屏幕滚动灵敏度 (1.0x = 1:1 物理跟手)",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(top = if (onChangeFontSize != null) 4.dp else 0.dp),
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                AttacheToolbarPrefs.setScrollSensitivity(context, scrollSensitivity - 0.1f)
+                            }
+                            .testTag("settings_scroll_decrease"),
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 9.dp),
+                        ) {
+                            Text(
+                                text = "－  调慢",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                    Text(
+                        text = String.format(java.util.Locale.US, "%.1fx", scrollSensitivity),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 6.dp),
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                AttacheToolbarPrefs.setScrollSensitivity(context, scrollSensitivity + 0.1f)
+                            }
+                            .testTag("settings_scroll_increase"),
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 9.dp),
+                        ) {
+                            Text(
+                                text = "＋  调快",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    listOf(
+                        0.5f to "0.5x 慢",
+                        0.8f to "0.8x 稳",
+                        1.0f to "1.0x 跟手",
+                        1.5f to "1.5x 快",
+                    ).forEach { (preset, label) ->
+                        val selected = abs(scrollSensitivity - preset) < 0.05f
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            border = BorderStroke(
+                                width = if (selected) 1.5.dp else 1.dp,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { AttacheToolbarPrefs.setScrollSensitivity(context, preset) },
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(vertical = 7.dp),
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    text = "第一排按钮显示",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1503,6 +1627,7 @@ internal fun formatRecentVisitedTime(nowMs: Long, visitedMs: Long): String {
  * displaying up to 5 most-recently visited windows across all tmux sessions
  * for effortless one-thumb switching.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TmuxRecentWindowsPopover(
     control: TmuxControl,
@@ -1513,6 +1638,20 @@ fun TmuxRecentWindowsPopover(
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
     val nowMs = remember(state.recentWindows) { System.currentTimeMillis() }
+    var renamingWindow by remember { mutableStateOf<TmuxWindow?>(null) }
+
+    renamingWindow?.let { target ->
+        TmuxRenameWindowDialog(
+            window = target,
+            onDismiss = { renamingWindow = null },
+            onConfirm = { newName ->
+                renamingWindow = null
+                scope.launch {
+                    runCatching { control.renameWindow(target.id, newName) }
+                }
+            },
+        )
+    }
 
     val items = remember(state.recentWindows, state.sessions, state.sessionId, state.windows) {
         if (state.recentWindows.isNotEmpty()) {
@@ -1634,7 +1773,17 @@ fun TmuxRecentWindowsPopover(
                             .clip(RoundedCornerShape(12.dp))
                             .background(rowBg)
                             .border(1.dp, rowBorder, RoundedCornerShape(12.dp))
-                            .clickable { selectItem(item) }
+                            .combinedClickable(
+                                onClick = { selectItem(item) },
+                                onLongClick = {
+                                    renamingWindow = TmuxWindow(
+                                        id = item.windowId,
+                                        index = item.windowIndex,
+                                        name = item.windowName,
+                                        active = isCurrent,
+                                    )
+                                },
+                            )
                             .padding(horizontal = 13.dp, vertical = 10.dp)
                             .testTag("tmuxRecentItem-$index"),
                     ) {

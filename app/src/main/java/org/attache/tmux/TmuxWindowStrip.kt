@@ -1,7 +1,9 @@
 package org.attache.tmux
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -22,9 +24,12 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,12 +44,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,6 +61,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.connectbot.terminal.TerminalDimensions
 import timber.log.Timber
 import java.util.UUID
@@ -72,13 +82,89 @@ private fun CoroutineScope.tmuxAction(name: String, action: suspend () -> Unit) 
     }
 }
 
+@Composable
+fun TmuxRenameWindowDialog(
+    window: TmuxWindow,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var fieldValue by remember(window.id, window.name) {
+        mutableStateOf(
+            TextFieldValue(
+                text = window.name,
+                selection = TextRange(0, window.name.length),
+            ),
+        )
+    }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(window.id) {
+        runCatching { focusRequester.requestFocus() }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "重命名窗口 #${window.index}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        text = {
+            OutlinedTextField(
+                value = fieldValue,
+                onValueChange = { fieldValue = it },
+                singleLine = true,
+                label = { Text("窗口名称") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .testTag("tmuxRenameWindowField"),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                enabled = fieldValue.text.trim().isNotEmpty(),
+                onClick = {
+                    val trimmed = fieldValue.text.trim()
+                    if (trimmed.isNotEmpty()) {
+                        onConfirm(trimmed)
+                    }
+                },
+                modifier = Modifier.testTag("tmuxRenameWindowConfirm"),
+            ) {
+                Text("保存", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
 /** One chip per tmux window, sized to sit in the title bar. A tap sends
  * `select-window` and changes nothing locally: the chip moves when tmux
- * says the active window moved. */
+ * says the active window moved. Long-pressing a chip opens a dialog to rename
+ * that window. */
 @Composable
 fun TmuxWindowChips(control: TmuxControl, modifier: Modifier = Modifier) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
+    var renamingWindow by remember { mutableStateOf<TmuxWindow?>(null) }
+
+    renamingWindow?.let { target ->
+        TmuxRenameWindowDialog(
+            window = target,
+            onDismiss = { renamingWindow = null },
+            onConfirm = { newName ->
+                renamingWindow = null
+                scope.tmuxAction("rename-window") { control.renameWindow(target.id, newName) }
+            },
+        )
+    }
+
     LazyRow(
         contentPadding = PaddingValues(end = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -89,7 +175,38 @@ fun TmuxWindowChips(control: TmuxControl, modifier: Modifier = Modifier) {
                 selected = window.active,
                 onClick = { scope.tmuxAction("select-window") { control.selectWindow(window.id) } },
                 label = { Text("${window.index}: ${window.name}", maxLines = 1) },
-                modifier = Modifier.height(32.dp).testTag("tmuxWindow-${window.id}"),
+                modifier = Modifier
+                    .height(32.dp)
+                    .pointerInput(window.id, window.name) {
+                        val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            val releasedOrMovedBeforeTimeout = withTimeoutOrNull(longPressTimeout) {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                    if (
+                                        change == null ||
+                                        !change.pressed ||
+                                        (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                                    ) {
+                                        return@withTimeoutOrNull true
+                                    }
+                                }
+                                @Suppress("UNREACHABLE_CODE")
+                                true
+                            }
+                            if (releasedOrMovedBeforeTimeout == null) {
+                                renamingWindow = window
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    event.changes.forEach { it.consume() }
+                                    if (event.changes.none { it.pressed }) break
+                                }
+                            }
+                        }
+                    }
+                    .testTag("tmuxWindow-${window.id}"),
             )
         }
     }
@@ -110,6 +227,20 @@ fun TmuxActionsButton(
 ) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
+    val activeWindow = state.windows.firstOrNull { it.active }
+    var renamingWindow by remember { mutableStateOf<TmuxWindow?>(null) }
+
+    renamingWindow?.let { target ->
+        TmuxRenameWindowDialog(
+            window = target,
+            onDismiss = { renamingWindow = null },
+            onConfirm = { newName ->
+                renamingWindow = null
+                scope.tmuxAction("rename-window") { control.renameWindow(target.id, newName) }
+            },
+        )
+    }
+
     fun run(name: String, action: suspend () -> Unit) {
         onDismiss()
         scope.tmuxAction(name, action)
@@ -118,6 +249,15 @@ fun TmuxActionsButton(
         trigger(onOpen)
         DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             DropdownMenuItem(text = { Text("New window") }, onClick = { run("new-window") { control.newWindow() } })
+            if (activeWindow != null) {
+                DropdownMenuItem(
+                    text = { Text("Rename window…") },
+                    onClick = {
+                        onDismiss()
+                        renamingWindow = activeWindow
+                    },
+                )
+            }
             DropdownMenuItem(text = { Text("Split side by side") }, onClick = { run("split") { control.split(sideBySide = true) } })
             DropdownMenuItem(text = { Text("Split top and bottom") }, onClick = { run("split") { control.split(sideBySide = false) } })
             if (state.panes.size > 1) {
@@ -169,14 +309,23 @@ fun Modifier.tmuxTouch(
             val dims = dimensions()
             val rows = dims?.rows?.takeIf { it > 0 } ?: return@awaitEachGesture
             val columns = dims.columns.takeIf { it > 0 } ?: return@awaitEachGesture
-            val lineHeight = size.height.toFloat() / rows
-            val scrollStepPx = (lineHeight * 0.55f).coerceAtLeast(18f)
+            val lineHeight = (size.height.toFloat() / rows).coerceAtLeast(1f)
             val cellWidth = size.width.toFloat() / columns
             var scrolling = false
             var keyboardDismissedInGesture = false
             var target: TmuxPane? = null
             var moved = false
             var pending = 0f
+            fun computeScrollStepPx(pane: TmuxPane): Float {
+                val livePane = control.state.value.panes.firstOrNull { it.id == pane.id } ?: pane
+                // In mouse-aware TUIs (like gemini / claude / less --mouse), 1 SGR mouse wheel tick
+                // scrolls ~3 terminal rows, whereas in normal tmux copy-mode (`send-keys -X -N`)
+                // 1 unit scrolls 1 exact terminal row. Scaling by `rowsPerUnit` guarantees 1:1
+                // physical finger-to-text distance tracking in both modes at 1.0x sensitivity.
+                val rowsPerUnit = if (livePane.mouseAnyFlag && !livePane.inMode) 3f else 1f
+                val sensitivity = AttacheToolbarPrefs.scrollSensitivityFlow.value.coerceIn(0.2f, 2.5f)
+                return ((lineHeight * rowsPerUnit) / sensitivity).coerceAtLeast(8f)
+            }
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 if (selectionActive()) return@awaitEachGesture
@@ -189,20 +338,20 @@ fun Modifier.tmuxTouch(
                         val v = velocity.calculateVelocity().y
                         val column = (down.position.x / cellWidth).toInt() - pane.left + 1
                         val row = (down.position.y / lineHeight).toInt() - pane.top + 1
-                        // Momentum: keep scrolling at the release speed and
-                        // let it decay, so a flick travels like it does in
-                        // any native list.
+                        // Momentum: only trigger on a deliberate fast flick so normal
+                        // 1:1 dragging stops right where the finger stops.
                         if (abs(v) > FLING_MIN_VELOCITY) {
                             fling = scope.launch {
                                 var speed = v
                                 var carry = pending
                                 while (abs(speed) > FLING_STOP_VELOCITY) {
                                     kotlinx.coroutines.delay(FLING_FRAME_MS)
+                                    val stepPx = computeScrollStepPx(pane)
                                     carry += speed * FLING_FRAME_MS / 1000f
-                                    val lines = (carry / scrollStepPx).toInt()
+                                    val lines = (carry / stepPx).toInt()
                                     if (lines != 0) {
                                         control.scroll(pane.id, lines, column, row)
-                                        carry -= lines * scrollStepPx
+                                        carry -= lines * stepPx
                                     }
                                     speed *= FLING_DECAY
                                 }
@@ -216,7 +365,6 @@ fun Modifier.tmuxTouch(
                     }
                     return@awaitEachGesture
                 }
-                var justStartedScrolling = false
                 if (!scrolling) {
                     // Held still past the long-press timeout: the terminal
                     // has started a selection. Checked before this event's
@@ -231,7 +379,6 @@ fun Modifier.tmuxTouch(
                             (down.position.y / lineHeight).toInt(),
                         ) ?: return@awaitEachGesture
                         scrolling = true
-                        justStartedScrolling = true
                     } else if (moved) {
                         return@awaitEachGesture
                     }
@@ -248,17 +395,11 @@ fun Modifier.tmuxTouch(
                         keyboardDismissedInGesture = true
                         onDismissKeyboard?.invoke()
                     }
-                    // Finger down is older text, which is tmux's scroll-up.
-                    // Seed with total.y on the frame that crosses touchSlop so
-                    // initial travel is not lost as a dead zone.
-                    if (justStartedScrolling) {
-                        pending = total.y
-                    } else {
-                        pending += deltaY
-                    }
+                    val pane = target ?: return@awaitEachGesture
+                    val scrollStepPx = computeScrollStepPx(pane)
+                    pending += deltaY
                     val lines = (pending / scrollStepPx).toInt()
                     if (lines != 0) {
-                        val pane = target ?: return@awaitEachGesture
                         control.scroll(
                             pane.id,
                             lines,
@@ -274,9 +415,9 @@ fun Modifier.tmuxTouch(
     }
 
 private const val FLING_FRAME_MS = 16L
-private const val FLING_DECAY = 0.95f
-private const val FLING_MIN_VELOCITY = 400f
-private const val FLING_STOP_VELOCITY = 60f
+private const val FLING_DECAY = 0.86f
+private const val FLING_MIN_VELOCITY = 1100f
+private const val FLING_STOP_VELOCITY = 80f
 
 /**
  * Host entry shown in the first tier of [AttacheSidebar].
@@ -300,6 +441,7 @@ data class AttacheHostEntry(
  *
  * Displays a three-tier hierarchy: Hosts -> Sessions -> Windows.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AttacheSidebar(
     control: TmuxControl,
@@ -314,7 +456,19 @@ fun AttacheSidebar(
     val listState = rememberLazyListState()
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
     var hasScrolledToActiveOnOpen by remember { mutableStateOf(false) }
+    var renamingWindow by remember { mutableStateOf<TmuxWindow?>(null) }
     val palette = attacheGlassPalette(isDark)
+
+    renamingWindow?.let { target ->
+        TmuxRenameWindowDialog(
+            window = target,
+            onDismiss = { renamingWindow = null },
+            onConfirm = { newName ->
+                renamingWindow = null
+                scope.tmuxAction("rename-window") { control.renameWindow(target.id, newName) }
+            },
+        )
+    }
 
     LaunchedEffect(state.sessionId, state.sessions.size) {
         val sid = state.sessionId ?: return@LaunchedEffect
@@ -430,10 +584,15 @@ fun AttacheSidebar(
                                 .height(36.dp)
                                 .clip(RoundedCornerShape(11.dp))
                                 .background(if (here) palette.selectedBg else Color.Transparent)
-                                .clickable {
-                                    onDismiss?.invoke()
-                                    scope.tmuxAction("switch-client") { control.switchTo(window.id) }
-                                }
+                                .combinedClickable(
+                                    onClick = {
+                                        onDismiss?.invoke()
+                                        scope.tmuxAction("switch-client") { control.switchTo(window.id) }
+                                    },
+                                    onLongClick = {
+                                        renamingWindow = window
+                                    },
+                                )
                                 .padding(start = 12.dp, end = 10.dp)
                                 .testTag("tmuxSessionWindow-${window.id}"),
                         ) {

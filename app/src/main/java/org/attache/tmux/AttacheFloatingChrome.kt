@@ -12,9 +12,11 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -53,7 +55,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -449,7 +453,9 @@ fun CapsuleActionButton(
     }
 }
 
-/** Shows only the active `window` name when collapsed (fallback to session name if blank). */
+/** Shows only the active `window` name when collapsed (fallback to session name if blank).
+ * Long-pressing the active window title opens the rename dialog. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CapsuleTitle(
     control: TmuxControl,
@@ -458,15 +464,38 @@ private fun CapsuleTitle(
     modifier: Modifier = Modifier,
 ) {
     val state by control.state.collectAsState()
+    val scope = rememberCoroutineScope()
     val current = state.sessions.firstOrNull { it.id == state.sessionId }
     val window = state.windows.firstOrNull { it.active }
+    var renamingWindow by remember { mutableStateOf<TmuxWindow?>(null) }
+
+    renamingWindow?.let { target ->
+        TmuxRenameWindowDialog(
+            window = target,
+            onDismiss = { renamingWindow = null },
+            onConfirm = { newName ->
+                renamingWindow = null
+                scope.launch {
+                    runCatching { control.renameWindow(target.id, newName) }
+                }
+            },
+        )
+    }
+
     val displayTitle = window?.name?.takeIf { it.isNotBlank() } ?: current?.name ?: "tmux"
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .height(34.dp)
             .clip(RoundedCornerShape(17.dp))
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = {
+                    if (window != null) {
+                        renamingWindow = window
+                    }
+                },
+            )
             .padding(start = 10.dp, end = 4.dp)
             .testTag("tmuxSessions"),
     ) {

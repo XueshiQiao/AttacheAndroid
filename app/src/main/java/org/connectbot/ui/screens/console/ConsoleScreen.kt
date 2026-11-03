@@ -975,11 +975,12 @@ fun ConsoleScreen(
     val currentAuthBanner = authBanners.firstOrNull()
     var wasBiometricPromptActive by remember { mutableStateOf(false) }
     val isBiometricPromptActive = promptState is PromptRequest.BiometricPrompt
+    val pendingShare by org.attache.tmux.AttacheShareManager.pendingShare.collectAsState()
 
     // Check if any modal (menu or dialog) is currently active
     val anyModalActive = showKeyboardSettings || showToolbarStyleDialog || showMenu || showTmuxMenu || showSlashMenu || showCopyTextDialog || showFileInboxDialog || showImagePicker || showUrlScanDialog || showResizeDialog ||
         showDisconnectDialog || showSessionPickerDialog || showConnectionInfoDialog ||
-        portraitDrawerOpen || isBiometricPromptActive || currentAuthBanner != null
+        portraitDrawerOpen || isBiometricPromptActive || currentAuthBanner != null || pendingShare != null
 
     fun restartTitleBarTimer() {
         autoHideJobRef.titleBarJob?.cancel()
@@ -1126,8 +1127,8 @@ fun ConsoleScreen(
     // Observing lifecycle state also retries a background disconnect on resume.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateAsState()
-    LaunchedEffect(uiState.bridges.isEmpty(), uiState.isLoading, lifecycleState) {
-        if (uiState.bridges.isEmpty() && !uiState.isLoading &&
+    LaunchedEffect(uiState.bridges.isEmpty(), uiState.isLoading, lifecycleState, pendingShare != null) {
+        if (uiState.bridges.isEmpty() && !uiState.isLoading && pendingShare == null &&
             lifecycle.currentState == Lifecycle.State.RESUMED
         ) {
             currentOnNavigateBack()
@@ -2075,6 +2076,17 @@ fun ConsoleScreen(
                     coroutineScope.launch {
                         snackbarHostState.showSnackbar(msg)
                     }
+                },
+            )
+        }
+
+        pendingShare?.let { sharePayload ->
+            org.attache.tmux.AttacheShareBottomSheet(
+                payload = sharePayload,
+                control = currentTmuxControl,
+                onDismiss = {
+                    org.attache.tmux.AttacheShareManager.clearPendingShare()
+                    termFocusRequester.requestFocus()
                 },
             )
         }

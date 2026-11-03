@@ -1,5 +1,14 @@
 package org.attache.tmux
 
+import android.content.ComponentName
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import androidx.core.app.Person
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -396,6 +405,57 @@ class TmuxControl(
         require(WINDOW_ID.matches(id)) { "not a window id: $id" }
         send("select-window -t $id")
     }
+
+    suspend fun renameWindow(windowId: String, newName: String) {
+        require(WINDOW_ID.matches(windowId)) { "not a window id: $windowId" }
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        send("rename-window -t ${shSingleQuote(windowId)} ${shSingleQuote(trimmed)}")
+        refresh()
+    }
+
+    /**
+     * Sends [text] to any tmux [windowId] (even in a background session) using a
+     * named tmux paste buffer (`attache_share`) so multi-line text and special
+     * characters arrive intact in `gemini` / `claude` / shell prompts.
+     */
+    suspend fun sendPromptToWindow(
+        windowId: String,
+        text: String,
+        switchToTarget: Boolean = false,
+        submitWithEnter: Boolean = true,
+    ) {
+        require(WINDOW_ID.matches(windowId)) { "not a window id: $windowId" }
+        if (switchToTarget) {
+            switchTo(windowId)
+            delay(80)
+        }
+        val inMode = try {
+            send("display-message -p -t ${shSingleQuote(windowId)} '#{pane_in_mode}'")
+                .firstOrNull()?.trim() == "1"
+        } catch (_: Exception) {
+            false
+        }
+        if (inMode) {
+            try {
+                send("send-keys -X -t ${shSingleQuote(windowId)} cancel")
+            } catch (_: Exception) {
+            }
+        }
+        val singleLineText = text.replace(Regex("[\\r\\n]+"), " ").trim()
+        if (singleLineText.isNotEmpty()) {
+            send("set-buffer -b attache_share -- ${shSingleQuote(singleLineText)}")
+            send("paste-buffer -d -p -b attache_share -t ${shSingleQuote(windowId)}")
+        }
+        if (submitWithEnter) {
+            delay(180)
+            send("send-keys -t ${shSingleQuote(windowId)} Enter")
+        }
+        refresh()
+    }
+
+    private fun shSingleQuote(value: String): String =
+        "'" + value.replace("'", "'\\''") + "'"
 
     suspend fun newWindow() {
         val session = _state.value.sessionId ?: return
@@ -832,6 +892,7 @@ class TmuxControl(
         lastScrollSentAtMs = now
         try {
             var pane = _state.value.panes.firstOrNull { it.id == paneId }
+            val wasMouseAny = pane?.mouseAnyFlag == true
             // Refresh live flags once at the start of a new gesture when not
             // already in copy-mode, in case a full-screen TUI (Claude Code /
             // Antigravity) was started or exited inside the shell pane since
@@ -852,7 +913,8 @@ class TmuxControl(
                     }
                 }
                 pane.mouseAnyFlag -> {
-                    send("send-keys -H -N $n -t $paneId ${wheelBytes(up, column, row, sgr = pane.mouseSgrFlag)}")
+                    val ticks = if (!wasMouseAny) (n / 3).coerceAtLeast(1) else n
+                    send("send-keys -H -N $ticks -t $paneId ${wheelBytes(up, column, row, sgr = pane.mouseSgrFlag)}")
                     if (isNewGesture) refreshRequests.trySend(Unit)
                 }
                 pane.alternateOn -> {
@@ -962,6 +1024,7 @@ class TmuxControl(
                 activePanePath = _state.value.activePanePath,
                 recentWindows = recentWindows,
             )
+            publishShareShortcuts(sessions, current)
             // Check if the computer queued a file via `attache-send <file>`
             handleRemotePushIfAny()
         } catch (e: CancellationException) {
@@ -969,6 +1032,91 @@ class TmuxControl(
         } catch (e: Exception) {
             Timber.w("refresh failed: %s", e.message)
         }
+    }
+
+    @Volatile private var lastPublishedShortcutsSignature: String = ""
+
+    private fun publishShareShortcuts(sessions: List<TmuxSession>, currentSessionId: String?) {
+        val ctx = appContext ?: return
+        if (sessions.isEmpty()) return
+        val targetSession = sessions.firstOrNull { it.name.equals("Share", ignoreCase = true) }
+            ?: sessions.firstOrNull { it.id == currentSessionId }
+            ?: sessions.firstOrNull()
+            ?: return
+        val topWindows = targetSession.windows.take(4)
+        if (topWindows.isEmpty()) return
+        val signature = "${targetSession.name}:" + topWindows.joinToString("|") { "${it.id}=${it.name}" }
+        if (signature == lastPublishedShortcutsSignature) return
+        lastPublishedShortcutsSignature = signature
+
+        runCatching {
+            val newIds = topWindows.mapTo(hashSetOf()) { "$SHORTCUT_ID_PREFIX${it.id}" }
+            val staleIds = ShortcutManagerCompat.getDynamicShortcuts(ctx)
+                .map { it.id }
+                .filter { it.startsWith(SHORTCUT_ID_PREFIX) && it !in newIds }
+            if (staleIds.isNotEmpty()) {
+                ShortcutManagerCompat.removeDynamicShortcuts(ctx, staleIds)
+            }
+            val shareActivityComponent = ComponentName(ctx.packageName, "org.connectbot.ui.AttacheQuickShareActivity")
+            val mainActivityComponent = ComponentName(ctx.packageName, "org.connectbot.ui.MainActivity")
+            topWindows.forEachIndexed { index, window ->
+                val displayName = window.name.ifBlank { "Window ${window.index}" }
+                val icon = createShareShortcutIcon(index, window.index, displayName)
+                val person = Person.Builder()
+                    .setName(displayName)
+                    .setKey(window.id)
+                    .setIcon(icon)
+                    .build()
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    component = shareActivityComponent
+                    type = "text/plain"
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(EXTRA_SHARE_WINDOW_ID, window.id)
+                    putExtra(EXTRA_SHARE_SESSION_NAME, targetSession.name)
+                }
+                val shortcut = ShortcutInfoCompat.Builder(ctx, "$SHORTCUT_ID_PREFIX${window.id}")
+                    .setActivity(mainActivityComponent)
+                    .setShortLabel(displayName)
+                    .setLongLabel("$displayName (${targetSession.name})")
+                    .setIcon(icon)
+                    .setPerson(person)
+                    .setIntent(shareIntent)
+                    .setCategories(setOf(SHARE_TARGET_CATEGORY))
+                    .setLongLived(true)
+                    .setRank(index)
+                    .build()
+                ShortcutManagerCompat.pushDynamicShortcut(ctx, shortcut)
+            }
+        }.onFailure { e ->
+            Timber.w(e, "Failed to publish Direct Share shortcuts")
+        }
+    }
+
+    private fun createShareShortcutIcon(orderIndex: Int, windowIndex: Int, windowName: String): IconCompat {
+        val sizePx = 108
+        val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val bgColors = intArrayOf(
+            0xFF0284C7.toInt(), // Sky blue
+            0xFF0D9488.toInt(), // Teal
+            0xFFD97706.toInt(), // Amber
+            0xFF7C3AED.toInt(), // Purple
+        )
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = bgColors[orderIndex % bgColors.size]
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f - 4f, bgPaint)
+        val glyph = windowName.trim().firstOrNull { !it.isWhitespace() }?.toString() ?: "$windowIndex"
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFFFFFF.toInt()
+            textSize = 48f
+            isFakeBoldText = true
+            textAlign = Paint.Align.CENTER
+        }
+        val textY = sizePx / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(glyph, sizePx / 2f, textY, textPaint)
+        return IconCompat.createWithBitmap(bmp)
     }
 
     /** The tmux client drawing this connection's terminal, as its tty. */
@@ -1051,7 +1199,10 @@ class TmuxControl(
                 // Not cancellable: a write abandoned halfway would leave
                 // tmux a partial command line and `pending` a reply that
                 // either is or is not coming, with no way to tell which.
-                withContext(NonCancellable) { session.write((command + "\n").toByteArray()) }
+                // Also sanitize any embedded CR/LF so a single `send()` never
+                // splits into multiple tmux -CC control commands.
+                val safeCommand = command.replace('\r', ' ').replace('\n', ' ')
+                withContext(NonCancellable) { session.write((safeCommand + "\n").toByteArray()) }
             } catch (e: Exception) {
                 // Nothing reached tmux, so nothing will answer this entry;
                 // left queued it would take the next command's reply.
@@ -1132,16 +1283,20 @@ class TmuxControl(
         }
     }
 
-    private companion object {
-        const val SEP = "\u0001"
-        const val MIN_SCROLL_INTERVAL_MS = 8L
-        const val SCROLL_REFRESH_DEBOUNCE_MS = 180L
-        val SESSION_ID = Regex("^\\$\\d+$")
-        val WINDOW_ID = Regex("^@\\d+$")
-        val PANE_ID = Regex("^%\\d+$")
-        val DIGITS = Regex("^\\d+$")
-        val CLIENT_TTY = Regex("^/dev/[A-Za-z0-9/]+$")
-        val REFRESH_ON = listOf(
+    companion object {
+        const val SHARE_TARGET_CATEGORY = "me.xueshi.attache.category.SHARE_TARGET"
+        const val SHORTCUT_ID_PREFIX = "attache_share_"
+        const val EXTRA_SHARE_WINDOW_ID = "attache_share_window_id"
+        const val EXTRA_SHARE_SESSION_NAME = "attache_share_session_name"
+        private const val SEP = "\u0001"
+        private const val MIN_SCROLL_INTERVAL_MS = 8L
+        private const val SCROLL_REFRESH_DEBOUNCE_MS = 180L
+        private val SESSION_ID = Regex("^\\$\\d+$")
+        private val WINDOW_ID = Regex("^@\\d+$")
+        private val PANE_ID = Regex("^%\\d+$")
+        private val DIGITS = Regex("^\\d+$")
+        private val CLIENT_TTY = Regex("^/dev/[A-Za-z0-9/]+$")
+        private val REFRESH_ON = listOf(
             "%window-add", "%window-close", "%window-renamed", "%unlinked-window-",
             "%session-window-changed", "%session-changed", "%sessions-changed",
             "%window-pane-changed", "%layout-change", "%pane-mode-changed", "%session-renamed",

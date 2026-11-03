@@ -96,7 +96,90 @@
 				<!-- format:  telnet://host:port/#nickname  -->
 				<!-- format:  local://  -->
 			</intent-filter>
+			<intent-filter>
+				<action android:name="android.intent.action.SEND" />
+				<category android:name="android.intent.category.DEFAULT" />
+				<data android:mimeType="text/plain" />
+				<data android:mimeType="image/*" />
+				<data android:mimeType="video/*" />
+				<data android:mimeType="*/*" />
+			</intent-filter>
+			<meta-data
+				android:name="android.app.shortcuts"
+				android:resource="@xml/shortcuts" />
 		</activity>
+
+		<activity
+			android:name=".ui.AttacheQuickShareActivity"
+			android:excludeFromRecents="true"
+			android:exported="true"
+			android:noHistory="true"
+			android:taskAffinity=""
+			android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+		<activity-alias
+			android:name=".ui.ShareWindow1Alias"
+			android:exported="true"
+			android:icon="@mipmap/icon"
+			android:label="Attaché · 视频下载"
+			android:targetActivity=".ui.AttacheQuickShareActivity">
+			<intent-filter>
+				<action android:name="android.intent.action.SEND" />
+				<category android:name="android.intent.category.DEFAULT" />
+				<data android:mimeType="text/plain" />
+				<data android:mimeType="image/*" />
+				<data android:mimeType="video/*" />
+				<data android:mimeType="*/*" />
+			</intent-filter>
+		</activity-alias>
+
+		<activity-alias
+			android:name=".ui.ShareWindow2Alias"
+			android:exported="true"
+			android:icon="@mipmap/icon"
+			android:label="Attaché · X推文分析"
+			android:targetActivity=".ui.AttacheQuickShareActivity">
+			<intent-filter>
+				<action android:name="android.intent.action.SEND" />
+				<category android:name="android.intent.category.DEFAULT" />
+				<data android:mimeType="text/plain" />
+				<data android:mimeType="image/*" />
+				<data android:mimeType="video/*" />
+				<data android:mimeType="*/*" />
+			</intent-filter>
+		</activity-alias>
+
+		<activity-alias
+			android:name=".ui.ShareWindow3Alias"
+			android:exported="true"
+			android:icon="@mipmap/icon"
+			android:label="Attaché · YouTube访谈"
+			android:targetActivity=".ui.AttacheQuickShareActivity">
+			<intent-filter>
+				<action android:name="android.intent.action.SEND" />
+				<category android:name="android.intent.category.DEFAULT" />
+				<data android:mimeType="text/plain" />
+				<data android:mimeType="image/*" />
+				<data android:mimeType="video/*" />
+				<data android:mimeType="*/*" />
+			</intent-filter>
+		</activity-alias>
+
+		<activity-alias
+			android:name=".ui.ShareWindow4Alias"
+			android:exported="true"
+			android:icon="@mipmap/icon"
+			android:label="Attaché · 选题灵感库"
+			android:targetActivity=".ui.AttacheQuickShareActivity">
+			<intent-filter>
+				<action android:name="android.intent.action.SEND" />
+				<category android:name="android.intent.category.DEFAULT" />
+				<data android:mimeType="text/plain" />
+				<data android:mimeType="image/*" />
+				<data android:mimeType="video/*" />
+				<data android:mimeType="*/*" />
+			</intent-filter>
+		</activity-alias>
 
 		<receiver
 			android:name=".service.NotificationActionReceiver"

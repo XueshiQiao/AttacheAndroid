@@ -137,7 +137,9 @@ class MainActivity : AppCompatActivity() {
 
         appViewModel = ViewModelProvider(this)[AppViewModel::class.java]
 
-        if (savedInstanceState == null) {
+        if (intent?.action == Intent.ACTION_SEND) {
+            handleIntent(intent)
+        } else if (savedInstanceState == null) {
             requestedUri = intent?.data
             makingShortcut = Intent.ACTION_CREATE_SHORTCUT == intent?.action ||
                 Intent.ACTION_PICK == intent?.action
@@ -256,6 +258,44 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            // Automatically navigate to the active/saved tmux host console when a system share arrives
+            val pendingShare by org.attache.tmux.AttacheShareManager.pendingShare.collectAsState()
+            LaunchedEffect(pendingShare?.id, appUiState, isAuthenticated) {
+                if (pendingShare == null) return@LaunchedEffect
+                if (appUiState is AppUiState.Ready && (!authOnLaunchEnabled || isAuthenticated)) {
+                    // Wait one frame so ConnectBotNavHost has composed and attached its NavGraph
+                    kotlinx.coroutines.delay(16L)
+                    val currentRoute = navController.currentBackStackEntry?.destination?.route.orEmpty()
+                    if (!currentRoute.startsWith(NavDestinations.CONSOLE)) {
+                        val manager = (appUiState as AppUiState.Ready).terminalManager
+                        val existingBridge = manager.bridgesFlow.value.firstOrNull {
+                            it.tmuxControl.value != null ||
+                                org.attache.tmux.TmuxTrial.targetFor(it.host.nickname) != null
+                        } ?: manager.bridgesFlow.value.firstOrNull()
+                        if (existingBridge != null) {
+                            runCatching { navController.navigateToConsole(existingBridge.host.id) }
+                                .onFailure { e -> Timber.e(e, "Failed to navigate to existing bridge for share") }
+                        } else {
+                            try {
+                                val hosts = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    manager.hostRepository.getHosts()
+                                }
+                                val targetHost = hosts.firstOrNull {
+                                    org.attache.tmux.TmuxTrial.targetFor(it.nickname) != null
+                                } ?: hosts.firstOrNull()
+                                if (targetHost != null) {
+                                    // Navigate directly to ConsoleScreen by hostId so ConsoleViewModel.ensureBridgeExists()
+                                    // opens the connection on Dispatchers.IO (avoiding Room main-thread exceptions).
+                                    navController.navigateToConsole(targetHost.id)
+                                }
+                            } catch (e: Exception) {
+                                Timber.e(e, "Failed to auto-open tmux host for share intent")
+                            }
+                        }
+                    }
+                }
+            }
+
             if (showPermissionRationale) {
                 ConnectBotTheme {
                     NotificationPermissionRationaleDialog(
@@ -326,6 +366,11 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
 
+        if (intent.action == Intent.ACTION_SEND) {
+            handleIntent(intent)
+            return
+        }
+
         handleIntent(intent)
 
         intent.data?.let { uri ->
@@ -334,6 +379,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_SEND) {
+            val payload = org.attache.tmux.AttacheShareManager.extractSharePayload(this, intent)
+            if (payload != null) {
+                if (payload.isQuickDirectTarget) {
+                    val preReadBytes = payload.streamUri?.let { uri ->
+                        runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                    }
+                    org.attache.tmux.AttacheShareManager.dispatchQuickShareInBackground(
+                        appContext = applicationContext,
+                        payload = payload,
+                        preReadStreamBytes = preReadBytes,
+                    )
+                    moveTaskToBack(true)
+                } else {
+                    org.attache.tmux.AttacheShareManager.consumeSharePayload(payload)
+                }
+            }
+            return
+        }
         notificationSessionId = intent?.getStringExtra(ConnectionNotifier.EXTRA_SESSION_ID)
         notificationReconnect = intent?.getBooleanExtra(ConnectionNotifier.EXTRA_RECONNECT, false) == true
         if (intent?.action == DISCONNECT_ACTION) {
