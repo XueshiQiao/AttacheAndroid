@@ -75,6 +75,9 @@ data class TmuxPane(
     val height: Int,
     val active: Boolean,
     val inMode: Boolean,
+    val mouseAnyFlag: Boolean = false,
+    val mouseSgrFlag: Boolean = true,
+    val alternateOn: Boolean = false,
 )
 
 /** Metadata of a file or directory discovered on the remote host for browsing and one-tap pull. */
@@ -582,7 +585,10 @@ class TmuxControl(
 
     suspend fun exitCopyMode() {
         val pane = _state.value.activePane ?: return
-        if (pane.inMode) send("send-keys -X -t ${pane.id} cancel")
+        if (pane.inMode) {
+            updatePaneFlags(pane.id, inMode = false)
+            send("send-keys -X -t ${pane.id} cancel")
+        }
     }
 
     /**
@@ -611,39 +617,104 @@ class TmuxControl(
         }
     }
 
+    private fun updatePaneFlags(
+        paneId: String,
+        inMode: Boolean? = null,
+        mouseAnyFlag: Boolean? = null,
+        mouseSgrFlag: Boolean? = null,
+        alternateOn: Boolean? = null,
+    ): TmuxPane? {
+        val current = _state.value
+        var updatedPane: TmuxPane? = null
+        val newPanes = current.panes.map { p ->
+            if (p.id != paneId) {
+                p
+            } else {
+                p.copy(
+                    inMode = inMode ?: p.inMode,
+                    mouseAnyFlag = mouseAnyFlag ?: p.mouseAnyFlag,
+                    mouseSgrFlag = mouseSgrFlag ?: p.mouseSgrFlag,
+                    alternateOn = alternateOn ?: p.alternateOn,
+                ).also { updatedPane = it }
+            }
+        }
+        if (updatedPane != null && newPanes != current.panes) {
+            _state.value = current.copy(panes = newPanes)
+        }
+        return updatedPane
+    }
+
+    private suspend fun queryPaneFlags(paneId: String): TmuxPane? {
+        val line = send(
+            "display-message -p -t $paneId '#{pane_in_mode}$SEP#{mouse_any_flag}$SEP#{mouse_sgr_flag}$SEP#{alternate_on}'",
+        ).firstOrNull() ?: return _state.value.panes.firstOrNull { it.id == paneId }
+        val f = line.split(SEP)
+        if (f.size < 4) return _state.value.panes.firstOrNull { it.id == paneId }
+        return updatePaneFlags(
+            paneId = paneId,
+            inMode = f[0] == "1",
+            mouseAnyFlag = f[1] == "1",
+            mouseSgrFlag = f[2] != "0",
+            alternateOn = f[3] == "1",
+        )
+    }
+
+    @Volatile private var lastScrollSentAtMs = -10_000L
+
     /**
-     * Decides what a scroll means the way tmux's own default `WheelUpPane`
-     * binding does, and inside one command so tmux decides it against its
-     * current state — never against [state], which is tmux's last report and
-     * can be behind a swipe that reverses.
+     * Dispatches a scroll using flat single-block tmux commands so each `send`
+     * produces exactly one `%begin ... %end` reply block on tmux 3.6a (nested
+     * `if-shell -F` and `;` chains emit 2-5 blocks per call, desynchronizing
+     * `pending`).
      *
-     *   in copy mode already       → scroll tmux's history
-     *   program reads the mouse    → send it wheel events (a full-screen
-     *                                agent like Antigravity scrolls itself)
-     *   on the alternate screen    → send it Up / Down keys
-     *   otherwise (going back)     → enter copy mode, which leaves by itself
-     *                                (`-e`) once scrolled back to the bottom
-     *
-     * Measured on the test server: Antigravity's pane reports
-     * alternate_on=1, mouse_any_flag=1, history_size=0, so entering copy
-     * mode there showed an empty history and froze its view.
+     *   in copy mode already       → scroll tmux's history (`send-keys -X`)
+     *   program reads the mouse    → send wheel events (`send-keys -H -N`)
+     *   on the alternate screen    → send Up / Down keys
+     *   otherwise (going back)     → enter `copy-mode -e` then `scroll-up`
      */
     private suspend fun sendScroll(request: ScrollRequest) {
-        val (pane, lines, column, row) = request
+        val (paneId, lines, column, row) = request
         if (lines == 0) return
         val n = abs(lines)
         val up = lines > 0
-        val history = "send-keys -X -N $n -t $pane ${if (up) "scroll-up" else "scroll-down"}"
-        val wheel = "if-shell -F -t $pane '#{mouse_sgr_flag}' " +
-            "{ send-keys -H -N $n -t $pane ${wheelBytes(up, column, row, sgr = true)} } " +
-            "{ send-keys -H -N $n -t $pane ${wheelBytes(up, column, row, sgr = false)} }"
-        val keys = "send-keys -N $n -t $pane ${if (up) "Up" else "Down"}"
-        val otherwise = if (up) "{ copy-mode -e -t $pane ; $history }" else "''"
-        val command = "if-shell -F -t $pane '#{pane_in_mode}' { $history } " +
-            "{ if-shell -F -t $pane '#{mouse_any_flag}' { $wheel } " +
-            "{ if-shell -F -t $pane '#{alternate_on}' { $keys } $otherwise } }"
+        val now = nowMs()
+        val isNewGesture = now - lastScrollSentAtMs > 400L
+        lastScrollSentAtMs = now
         try {
-            send(command)
+            var pane = _state.value.panes.firstOrNull { it.id == paneId }
+            // Refresh live flags once at the start of a new gesture when not
+            // already in copy-mode, in case a full-screen TUI (Claude Code /
+            // Antigravity) was started or exited inside the shell pane since
+            // the last window refresh.
+            if (pane == null || (!pane.inMode && !pane.mouseAnyFlag && isNewGesture)) {
+                pane = queryPaneFlags(paneId) ?: pane
+            }
+            if (pane == null) return
+            when {
+                pane.inMode -> {
+                    try {
+                        send("send-keys -X -N $n -t $paneId ${if (up) "scroll-up" else "scroll-down"}")
+                    } catch (e: TmuxCommandError) {
+                        // `copy-mode -e` exits automatically at the bottom of
+                        // history; clear cached `inMode` if a trailing swipe
+                        // arrives after it exited.
+                        updatePaneFlags(paneId, inMode = false)
+                    }
+                }
+                pane.mouseAnyFlag -> {
+                    send("send-keys -H -N $n -t $paneId ${wheelBytes(up, column, row, sgr = pane.mouseSgrFlag)}")
+                    if (isNewGesture) refreshRequests.trySend(Unit)
+                }
+                pane.alternateOn -> {
+                    send("send-keys -N $n -t $paneId ${if (up) "Up" else "Down"}")
+                    if (isNewGesture) refreshRequests.trySend(Unit)
+                }
+                up -> {
+                    updatePaneFlags(paneId, inMode = true)
+                    send("copy-mode -e -t $paneId")
+                    send("send-keys -X -N $n -t $paneId scroll-up")
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -695,12 +766,23 @@ class TmuxControl(
             } else {
                 send(
                     "list-panes -t ${active.id} -F '#{pane_id}$SEP#{pane_left}$SEP#{pane_top}$SEP#{pane_width}$SEP" +
-                        "#{pane_height}$SEP#{pane_active}$SEP#{pane_in_mode}'",
+                        "#{pane_height}$SEP#{pane_active}$SEP#{pane_in_mode}$SEP#{mouse_any_flag}$SEP#{mouse_sgr_flag}$SEP#{alternate_on}'",
                 ).mapNotNull { line ->
                     val f = line.split(SEP)
-                    if (f.size != 7 || !PANE_ID.matches(f[0])) return@mapNotNull null
+                    if (f.size < 7 || !PANE_ID.matches(f[0])) return@mapNotNull null
                     val n = f.subList(1, 5).map { it.toIntOrNull() ?: return@mapNotNull null }
-                    TmuxPane(f[0], n[0], n[1], n[2], n[3], active = f[5] == "1", inMode = f[6] == "1")
+                    TmuxPane(
+                        id = f[0],
+                        left = n[0],
+                        top = n[1],
+                        width = n[2],
+                        height = n[3],
+                        active = f[5] == "1",
+                        inMode = f[6] == "1",
+                        mouseAnyFlag = f.getOrNull(7) == "1",
+                        mouseSgrFlag = f.getOrNull(8) != "0",
+                        alternateOn = f.getOrNull(9) == "1",
+                    )
                 }
             }
             _state.value = TmuxState(
@@ -877,7 +959,7 @@ class TmuxControl(
 
     private companion object {
         const val SEP = "\u0001"
-        const val MIN_SCROLL_INTERVAL_MS = 12L
+        const val MIN_SCROLL_INTERVAL_MS = 8L
         const val SCROLL_REFRESH_DEBOUNCE_MS = 180L
         val SESSION_ID = Regex("^\\$\\d+$")
         val WINDOW_ID = Regex("^@\\d+$")

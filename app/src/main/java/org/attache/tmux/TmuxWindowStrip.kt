@@ -173,6 +173,7 @@ fun Modifier.tmuxTouch(
             val rows = dims?.rows?.takeIf { it > 0 } ?: return@awaitEachGesture
             val columns = dims.columns.takeIf { it > 0 } ?: return@awaitEachGesture
             val lineHeight = size.height.toFloat() / rows
+            val scrollStepPx = (lineHeight * 0.55f).coerceAtLeast(18f)
             val cellWidth = size.width.toFloat() / columns
             var scrolling = false
             var keyboardDismissedInGesture = false
@@ -201,10 +202,10 @@ fun Modifier.tmuxTouch(
                                 while (abs(speed) > FLING_STOP_VELOCITY) {
                                     kotlinx.coroutines.delay(FLING_FRAME_MS)
                                     carry += speed * FLING_FRAME_MS / 1000f
-                                    val lines = (carry / lineHeight).toInt()
+                                    val lines = (carry / scrollStepPx).toInt()
                                     if (lines != 0) {
                                         control.scroll(pane.id, lines, column, row)
-                                        carry -= lines * lineHeight
+                                        carry -= lines * scrollStepPx
                                     }
                                     speed *= FLING_DECAY
                                 }
@@ -258,7 +259,7 @@ fun Modifier.tmuxTouch(
                     } else {
                         pending += deltaY
                     }
-                    val lines = (pending / lineHeight).toInt()
+                    val lines = (pending / scrollStepPx).toInt()
                     if (lines != 0) {
                         val pane = target ?: return@awaitEachGesture
                         control.scroll(
@@ -267,7 +268,7 @@ fun Modifier.tmuxTouch(
                             column = (down.position.x / cellWidth).toInt() - pane.left + 1,
                             row = (down.position.y / lineHeight).toInt() - pane.top + 1,
                         )
-                        pending -= lines * lineHeight
+                        pending -= lines * scrollStepPx
                     }
                     change.consume()
                 }

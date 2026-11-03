@@ -199,7 +199,7 @@ class Relay private constructor(
 
     companion object {
         private const val TAG = "CB.Relay"
-        private const val BUFFER_SIZE = 4096
+        private const val BUFFER_SIZE = 32768
     }
 }
 
