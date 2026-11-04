@@ -383,13 +383,13 @@ class MainActivity : AppCompatActivity() {
             val payload = org.attache.tmux.AttacheShareManager.extractSharePayload(this, intent)
             if (payload != null) {
                 if (payload.isQuickDirectTarget) {
-                    val preReadBytes = payload.streamUri?.let { uri ->
-                        runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                    val preOpenedStream = payload.streamUri?.let { uri ->
+                        runCatching { contentResolver.openInputStream(uri) }.getOrNull()
                     }
                     org.attache.tmux.AttacheShareManager.dispatchQuickShareInBackground(
                         appContext = applicationContext,
                         payload = payload,
-                        preReadStreamBytes = preReadBytes,
+                        preOpenedStream = preOpenedStream,
                     )
                     moveTaskToBack(true)
                 } else {

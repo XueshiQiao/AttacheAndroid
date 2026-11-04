@@ -120,6 +120,10 @@ object AttacheFileStorage {
     private val IMAGE_EXTS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
     private val VIDEO_EXTS = setOf("mp4", "mov", "mkv", "webm", "avi", "m4v")
     private val ATTACHE_APK_BUILD_REGEX = Regex("""^Attache-v[^/]+-b(\d+)-.*\.apk$""", RegexOption.IGNORE_CASE)
+    private val apkVersionCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    @Volatile private var cachedLocalSubdir: String? = null
+    @Volatile private var cachedRemoteBinDir: String? = null
+    @Volatile private var cachedAutoSyncRules: Boolean? = null
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -156,7 +160,7 @@ object AttacheFileStorage {
         p.edit()
             .putString(KEY_LAST_HANDLED_PUSH_TOKEN, clean)
             .putString(KEY_HANDLED_PUSH_TOKENS, updated)
-            .commit()
+            .apply()
     }
 
     /**
@@ -171,32 +175,47 @@ object AttacheFileStorage {
         return installedBuild > 0 && pushedBuild <= installedBuild
     }
 
-    fun getLocalSubdir(context: Context): String =
-        prefs(context).getString(KEY_LOCAL_SUBDIR, DEFAULT_LOCAL_SUBDIR)
+    fun getLocalSubdir(context: Context): String {
+        cachedLocalSubdir?.let { return it }
+        val loaded = prefs(context).getString(KEY_LOCAL_SUBDIR, DEFAULT_LOCAL_SUBDIR)
             ?.trim()
             ?.takeIf { it.isNotEmpty() && !it.contains("..") }
             ?: DEFAULT_LOCAL_SUBDIR
+        cachedLocalSubdir = loaded
+        return loaded
+    }
 
     fun setLocalSubdir(context: Context, subdir: String) {
         val clean = subdir.trim().trim('/').replace(Regex("""[\\:*?"<>|]"""), "_").ifBlank { DEFAULT_LOCAL_SUBDIR }
+        cachedLocalSubdir = clean
         prefs(context).edit().putString(KEY_LOCAL_SUBDIR, clean).apply()
     }
 
-    fun getRemoteBinDir(context: Context): String =
-        prefs(context).getString(KEY_REMOTE_BIN_DIR, DEFAULT_REMOTE_BIN_DIR)
+    fun getRemoteBinDir(context: Context): String {
+        cachedRemoteBinDir?.let { return it }
+        val loaded = prefs(context).getString(KEY_REMOTE_BIN_DIR, DEFAULT_REMOTE_BIN_DIR)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: DEFAULT_REMOTE_BIN_DIR
+        cachedRemoteBinDir = loaded
+        return loaded
+    }
 
     fun setRemoteBinDir(context: Context, binDir: String) {
         val clean = binDir.trim().trimEnd('/').ifBlank { DEFAULT_REMOTE_BIN_DIR }
+        cachedRemoteBinDir = clean
         prefs(context).edit().putString(KEY_REMOTE_BIN_DIR, clean).apply()
     }
 
-    fun isAutoSyncAgentRulesEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_AUTO_SYNC_RULES, true)
+    fun isAutoSyncAgentRulesEnabled(context: Context): Boolean {
+        cachedAutoSyncRules?.let { return it }
+        val loaded = prefs(context).getBoolean(KEY_AUTO_SYNC_RULES, true)
+        cachedAutoSyncRules = loaded
+        return loaded
+    }
 
     fun setAutoSyncAgentRulesEnabled(context: Context, enabled: Boolean) {
+        cachedAutoSyncRules = enabled
         prefs(context).edit().putBoolean(KEY_AUTO_SYNC_RULES, enabled).apply()
     }
 
@@ -245,13 +264,25 @@ object AttacheFileStorage {
 
     private fun extractApkVersionLabel(context: Context, file: File): String? {
         if (classifyFileName(file.name) != AttacheFileKind.APK) return null
-        return try {
-            val info = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0) ?: return null
-            val vName = info.versionName?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-            if (vName.startsWith("v", ignoreCase = true) || vName.startsWith("git-")) vName else "v$vName"
-        } catch (_: Exception) {
-            null
+        val cacheKey = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
+        apkVersionCache[cacheKey]?.let { cached ->
+            return cached.takeIf { it.isNotEmpty() }
         }
+        val parsed = try {
+            val info = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+            val vName = info?.versionName?.trim()?.takeIf { it.isNotEmpty() }
+            if (vName == null) {
+                ""
+            } else if (vName.startsWith("v", ignoreCase = true) || vName.startsWith("git-")) {
+                vName
+            } else {
+                "v$vName"
+            }
+        } catch (_: Exception) {
+            ""
+        }
+        apkVersionCache[cacheKey] = parsed
+        return parsed.takeIf { it.isNotEmpty() }
     }
 
     fun listInboxFiles(context: Context): List<LocalInboxFile> {
@@ -450,10 +481,23 @@ fun AttacheFileInboxDialog(
     var remoteEntries by remember { mutableStateOf<List<RemoteFileEntry>>(emptyList()) }
 
     // Settings state (Tab 2)
-    var localSubdirInput by remember { mutableStateOf(AttacheFileStorage.getLocalSubdir(context)) }
-    var remoteBinDirInput by remember { mutableStateOf(AttacheFileStorage.getRemoteBinDir(context)) }
-    var autoSyncRules by remember { mutableStateOf(AttacheFileStorage.isAutoSyncAgentRulesEnabled(context)) }
+    var localSubdirInput by remember { mutableStateOf(AttacheFileStorage.DEFAULT_LOCAL_SUBDIR) }
+    var remoteBinDirInput by remember { mutableStateOf(AttacheFileStorage.DEFAULT_REMOTE_BIN_DIR) }
+    var autoSyncRules by remember { mutableStateOf(true) }
     var deployingHelper by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            val subdir = AttacheFileStorage.getLocalSubdir(context)
+            val binDir = AttacheFileStorage.getRemoteBinDir(context)
+            val sync = AttacheFileStorage.isAutoSyncAgentRulesEnabled(context)
+            withContext(Dispatchers.Main) {
+                localSubdirInput = subdir
+                remoteBinDirInput = binDir
+                autoSyncRules = sync
+            }
+        }
+    }
 
     fun refreshLocalFiles() {
         scope.launch(Dispatchers.IO) {
@@ -555,7 +599,7 @@ fun AttacheFileInboxDialog(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "存储位置: Download/${AttacheFileStorage.getLocalSubdir(context)}/ (系统文件管理与相册可直接访问)",
+                            text = "存储位置: Download/$localSubdirInput/ (系统文件管理与相册可直接访问)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -710,8 +754,13 @@ fun AttacheFileInboxDialog(
                                         AttacheFileStorage.shareFile(context, item, onShowMessage)
                                     },
                                     onDelete = {
-                                        item.file.delete()
-                                        refreshLocalFiles()
+                                        scope.launch(Dispatchers.IO) {
+                                            runCatching { item.file.delete() }
+                                            val loaded = AttacheFileStorage.listInboxFiles(context)
+                                            withContext(Dispatchers.Main) {
+                                                localFiles = loaded
+                                            }
+                                        }
                                     },
                                 )
                             }

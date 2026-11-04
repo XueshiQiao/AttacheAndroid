@@ -156,12 +156,13 @@ object AttacheShareManager {
                 (0 until clip.itemCount).mapNotNull { idx ->
                     val item = clip.getItemAt(idx) ?: return@mapNotNull null
                     val rawText = item.text?.toString()?.trim()
-                    val coerced = if (rawText.isNullOrBlank() && context != null) {
+                    val itemUri = item.uri
+                    val coerced = if (rawText.isNullOrBlank() && context != null && itemUri == null) {
                         runCatching { item.coerceToText(context)?.toString()?.trim() }.getOrNull()
                     } else {
                         rawText
                     }
-                    val itemUriStr = item.uri?.toString()?.trim()
+                    val itemUriStr = itemUri?.toString()?.trim()
                     when {
                         !coerced.isNullOrBlank() && !itemUriStr.isNullOrBlank() && !coerced.contains(itemUriStr) && itemUriStr.startsWith("http") ->
                             "$coerced $itemUriStr"
@@ -324,11 +325,14 @@ object AttacheShareManager {
     fun dispatchQuickShareInBackground(
         appContext: Context,
         payload: AttacheSharePayload,
-        preReadStreamBytes: ByteArray? = null,
+        preOpenedStream: java.io.InputStream? = null,
     ) {
         backgroundScope.launch {
             var connection: ServiceConnection? = null
             try {
+                val preReadStreamBytes = preOpenedStream?.use { stream ->
+                    runCatching { stream.readBytes() }.getOrNull()
+                }
                 val managerDeferred = CompletableDeferred<TerminalManager?>()
                 val conn = object : ServiceConnection {
                     override fun onServiceConnected(name: ComponentName?, service: IBinder?) {

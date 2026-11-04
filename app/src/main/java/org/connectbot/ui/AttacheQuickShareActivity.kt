@@ -22,13 +22,13 @@ class AttacheQuickShareActivity : Activity() {
 
         val payload = AttacheShareManager.extractSharePayload(this, intent)
         if (payload != null) {
-            val preReadBytes = payload.streamUri?.let { uri ->
-                runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            val preOpenedStream = payload.streamUri?.let { uri ->
+                runCatching { contentResolver.openInputStream(uri) }.getOrNull()
             }
             AttacheShareManager.dispatchQuickShareInBackground(
                 appContext = applicationContext,
                 payload = payload,
-                preReadStreamBytes = preReadBytes,
+                preOpenedStream = preOpenedStream,
             )
         } else {
             Toast.makeText(

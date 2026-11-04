@@ -723,7 +723,7 @@ class TerminalBridge {
     /**
      * Apply profile settings to the terminal.
      */
-    private fun applyProfileSettings(profile: Profile) {
+    private suspend fun applyProfileSettings(profile: Profile) {
         if (inlineImagesSetting != profile.inlineImages) {
             inlineImagesSetting = profile.inlineImages
             terminalEmulator.setInlineImages(sessionInlineImages.policy(inlineImagesSetting))
@@ -737,10 +737,14 @@ class TerminalBridge {
         // Apply color scheme if changed
         if (profile.colorSchemeId != currentColorSchemeId) {
             currentColorSchemeId = profile.colorSchemeId
-            fullColorPalette = manager.colorRepository.getColorsForSchemeBlocking(profile.colorSchemeId)
-            val defaults = manager.colorRepository.getDefaultColorsForSchemeBlocking(profile.colorSchemeId)
-            defaultFg = defaults[0]
-            defaultBg = defaults[1]
+            val (palette, defaultsPair) = kotlinx.coroutines.withContext(dispatchers.io) {
+                val p = manager.colorRepository.getSchemeColors(profile.colorSchemeId)
+                val d = manager.colorRepository.getSchemeDefaults(profile.colorSchemeId)
+                p to d
+            }
+            fullColorPalette = palette
+            defaultFg = defaultsPair.first
+            defaultBg = defaultsPair.second
 
             // Re-apply Attaché theme appearance (One Dark Pro or Claude Warm Paper)
             val currentThemeMode = org.connectbot.util.ThemeMode.fromString(
