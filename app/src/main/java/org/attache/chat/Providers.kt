@@ -81,10 +81,9 @@ object ClaudeProvider : AgentProvider {
 }
 
 /**
- * Antigravity (`agy`). Its conversations are SQLite files of protobuf blobs
- * with no published shape, so there is no transcript to read yet; what it
- * does write plainly is its model, in its own `settings.json`, and its
- * screen.
+ * Antigravity (`agy`). Its model is in its own `settings.json`, its state
+ * on its screen, and its conversation in a JSONL export it keeps beside the
+ * SQLite store.
  *
  * The screen is read on the host and only the verdict crosses: a dozen
  * bottom rows of eleven agy panes every few seconds would be more bytes than
@@ -99,6 +98,15 @@ object ClaudeProvider : AgentProvider {
  * - working: `esc to cancel` in the footer, or a braille spinner starting a
  *   row near the bottom;
  * - idle otherwise.
+ *
+ * Its conversation is read from the export agy writes beside it
+ * ([AgyTranscript]). Which conversation a pane shows is known from the lock
+ * agy holds open while it shows one, `presence/<conversation>.lock`, the way
+ * herdr-web-ui finds it (`server/agy-store.ts`): `lsof` on the agy
+ * processes, about 20 ms for twelve of them, where `lsof +d` on the folder
+ * walks every process on the machine and took 260. A pane counts only when
+ * its process holds exactly one lock; a freshly started agy holds none
+ * until the first message.
  */
 object AgyProvider : AgentProvider {
     override val kind = "agy"
@@ -107,8 +115,13 @@ object AgyProvider : AgentProvider {
 
     override fun sessionsScript() = "m=\$(grep -o -E '\"model\": *\"[^\"]*\"' \"\$HOME/.gemini/antigravity-cli/settings.json\" 2>/dev/null | head -n 1); " +
         "[ -n \"\$m\" ] || m='\"model\":null'; " +
-        "tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_id} #{pane_current_command}' | " +
-        "while read -r id where cmd; do [ \"\$cmd\" = agy ] || continue; " +
+        "a=\$(pgrep -x agy | paste -s -d , -); " +
+        "L=\$([ -n \"\$a\" ] && lsof -nPw -a -p \"\$a\" -Fpn 2>/dev/null | " +
+        "awk '/^p/ { p = substr(\$0, 2) } /^n.*\\/presence\\/[^\\/]*[.]lock\$/ { n = \$0; sub(/.*\\//, \"\", n); sub(/[.]lock\$/, \"\", n); print p, n }'); " +
+        "tmux list-panes -a -F '#{pane_id} #{pane_pid} #{session_name}:#{window_id} #{pane_current_command}' | " +
+        "while read -r id pp where cmd; do [ \"\$cmd\" = agy ] || continue; " +
+        "c=\$(printf '%s\\n' \"\$L\" | awk -v w=\" \$pp \$(pgrep -P \"\$pp\" | tr '\\n' ' ')\" 'index(w, \" \" \$1 \" \") { print \$2 }'); " +
+        "[ \"\$(printf '%s\\n' \"\$c\" | grep -c .)\" = 1 ] || c=; " +
         "s=\$(tmux capture-pane -p -J -t \"\$id\" | awk 'NF' | tail -n 12); " +
         "low=\$(printf '%s\\n' \"\$s\" | tr '[:upper:]' '[:lower:]'); foot=\$(printf '%s\\n' \"\$low\" | tail -n 4); st=idle; " +
         "if printf '%s' \"\$foot\" | grep -qF navigate && { printf '%s' \"\$foot\" | grep -qF 'tab amend' || printf '%s' \"\$foot\" | grep -qF 'esc skip'; }; then st=waiting; " +
@@ -116,7 +129,8 @@ object AgyProvider : AgentProvider {
         "elif printf '%s' \"\$low\" | grep -qF 'requesting permission for:'; then st=waiting; " +
         "elif printf '%s' \"\$foot\" | grep -qF 'esc to cancel'; then st=busy; " +
         "elif printf '%s\\n' \"\$s\" | LC_ALL=C grep -q \"^ *\$(printf '\\342')[\$(printf '\\240-\\243')]\"; then st=busy; fi; " +
-        "printf '{\"pane\":\"%s\",\"where\":\"%s\",\"status\":\"%s\",%s}\\n' \"\$id\" \"\$where\" \"\$st\" \"\$m\"; done"
+        "printf '{\"pane\":\"%s\",\"where\":\"%s\",\"status\":\"%s\",\"conversation\":\"%s\",\"home\":\"%s\",%s}\\n' " +
+        "\"\$id\" \"\$where\" \"\$st\" \"\$c\" \"\$HOME\" \"\$m\"; done"
 
     override fun parseSession(line: JSONObject): AgentSession? {
         val pane = line.optString("pane").takeIf { it.matches(Regex("^%\\d+$")) } ?: return null
@@ -132,8 +146,17 @@ object AgyProvider : AgentProvider {
                 else -> AgentPhase.IDLE
             },
             model = line.optString("model").takeIf { line.has("model") && !line.isNull("model") && it.isNotBlank() },
+            transcriptPath = line.optString("conversation").takeIf { CONVERSATION.matches(it) }?.let { c ->
+                line.optString("home").takeIf { it.startsWith("/") }?.let { transcriptPath(it, c) }
+            },
         )
     }
+
+    private val CONVERSATION = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+    fun transcriptPath(home: String, conversation: String) = "$home/.gemini/antigravity-cli/brain/$conversation/.system_generated/logs/transcript_full.jsonl"
+
+    override fun transcriptReader(): AgentTranscript = AgyTranscript()
 }
 
 /** Recognised by their command for now; what each keeps for itself is

@@ -153,6 +153,11 @@ class AgentChatViewModel @Inject constructor(
     val uiState: StateFlow<AgentChatUiState> = _uiState.asStateFlow()
 
     private val transcriptPath = MutableStateFlow<String?>(null)
+
+    /** Whose transcript [transcriptPath] is, set before it: the follow can
+     * start before the refresh that found the path has put the agent in
+     * the UI state, and agy's file read as Claude's shows nothing. */
+    @Volatile private var transcriptKind: String? = null
     private var control: TmuxControl? = null
     private var nextPendingId = 1L
     private var nextImageId = 1L
@@ -169,10 +174,18 @@ class AgentChatViewModel @Inject constructor(
 
     private fun currentStatus(): AgentStatus? {
         val kind = _uiState.value.agent?.kind
-        val files = transcriptStatus ?: sessionModel?.let { model ->
+        val settings = sessionModel?.let { model ->
             // agy's model carries its effort in brackets: `… (Medium)`.
             val effort = Regex("\\(([^)]+)\\)\\s*$").find(model)?.groupValues?.get(1)?.lowercase()
             AgentStatus(source = kind ?: "agent", model = model, effort = effort)
+        }
+        // agy's transcript has the tokens but no model; its settings have
+        // the model.
+        val transcript = transcriptStatus
+        val files = when {
+            transcript == null -> settings
+            transcript.model == null && settings != null -> transcript.copy(model = settings.model, effort = settings.effort)
+            else -> transcript
         }
         return AgentStatusMerge.merge(payloadStatus, files)
     }
@@ -516,7 +529,10 @@ class AgentChatViewModel @Inject constructor(
         }.orEmpty()
         val agent = parsed?.let { AgentPanes.merge(listOf(it), ownSessions).first() }
         val session = ownSessions.firstOrNull { it.paneId == paneId }
-        session?.transcriptPath?.let { transcriptPath.value = it }
+        session?.transcriptPath?.let {
+            transcriptKind = session.kind
+            transcriptPath.value = it
+        }
         sessionModel = session?.model
 
         // The status payload, when the desktop app's status line wrapper (or
@@ -532,7 +548,10 @@ class AgentChatViewModel @Inject constructor(
             // on this agent's page.
             payloadStatus = agent?.let { AgentStatuses.forAgent(AgentStatuses.parse(stat), it.kind) }
             if (transcriptPath.value == null && payloadStatus?.source == "claude") {
-                transcriptPathOf(stat)?.let { transcriptPath.value = it }
+                transcriptPathOf(stat)?.let {
+                    transcriptKind = "claude"
+                    transcriptPath.value = it
+                }
             }
         }
         if (transcriptPath.value == null && provider?.transcriptReader() == null) {
@@ -543,12 +562,15 @@ class AgentChatViewModel @Inject constructor(
             _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
         }
         val status = currentStatus()
-        // No reader for this agent's conversation (agy keeps it as protobuf
-        // in SQLite): show its screen instead, so what it is doing and what
-        // it answered can be followed without leaving the chat. The visible
+        // No conversation to read for this agent: no reader for it yet
+        // (Codex), none started yet (a fresh agy), or its file could not be
+        // followed. Show its screen instead, so what it is doing and what it
+        // answered can be followed without leaving the chat. The visible
         // screen only, with its colours; a few KB a refresh, and only while
-        // this page is open on such an agent.
-        val mirror = if (provider != null && provider.transcriptReader() == null) {
+        // this page is open on such an agent. Claude keeps its own messages.
+        val noConversation = transcriptPath.value == null ||
+            (_uiState.value.transcript == TranscriptStatus.MISSING && _uiState.value.items.isEmpty())
+        val mirror = if (provider != null && provider !== ClaudeProvider && (provider.transcriptReader() == null || noConversation)) {
             tmux.query("capture-pane -p -e -J -t $paneId").dropLastWhile { it.replace(AnsiText.SEQUENCE, "").isBlank() }
         } else {
             null
@@ -598,7 +620,7 @@ class AgentChatViewModel @Inject constructor(
         while (true) {
             _uiState.update { it.copy(transcript = TranscriptStatus.LOADING, items = carryOver, earlierNotLoaded = false) }
             withContext(transcriptLane) {
-                val transcript = (_uiState.value.agent?.kind?.let(AgentProviders::forKind) ?: ClaudeProvider).transcriptReader()
+                val transcript = ((transcriptKind ?: _uiState.value.agent?.kind)?.let(AgentProviders::forKind) ?: ClaudeProvider).transcriptReader()
                     ?: return@withContext
                 val splitter = LineSplitter()
                 liveTranscript = transcript

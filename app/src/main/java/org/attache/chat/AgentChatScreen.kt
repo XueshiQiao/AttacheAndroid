@@ -122,6 +122,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -963,6 +965,8 @@ internal fun Composer(
     onPickRecent: (AgentPane) -> Unit = {},
 ) {
     var text by rememberSaveable { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     var commandsOpen by remember { mutableStateOf(false) }
     var recentOpen by remember { mutableStateOf(false) }
     var confirmStop by remember { mutableStateOf(false) }
@@ -1098,6 +1102,10 @@ internal fun Composer(
                     onClick = {
                         onSend(text)
                         text = ""
+                        // Sent: the reply is what to look at now, and the
+                        // keyboard would cover most of it.
+                        keyboard?.hide()
+                        focus.clearFocus()
                     },
                     modifier = Modifier.size(48.dp),
                 ) {

@@ -1,3 +1,20 @@
+/*
+ * ConnectBot: simple, powerful, open-source SSH client for Android
+ * Copyright 2026 Kenny Root
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.attache.tmux
 
 import android.content.ClipData
@@ -30,6 +47,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -121,16 +140,17 @@ object AttacheFileStorage {
     private val VIDEO_EXTS = setOf("mp4", "mov", "mkv", "webm", "avi", "m4v")
     private val ATTACHE_APK_BUILD_REGEX = Regex("""^Attache-v[^/]+-b(\d+)-.*\.apk$""", RegexOption.IGNORE_CASE)
     private val apkVersionCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     @Volatile private var cachedLocalSubdir: String? = null
+
     @Volatile private var cachedRemoteBinDir: String? = null
+
     @Volatile private var cachedAutoSyncRules: Boolean? = null
 
-    private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     @Synchronized
-    fun getLastHandledPushToken(context: Context): String =
-        prefs(context).getString(KEY_LAST_HANDLED_PUSH_TOKEN, null)?.trim().orEmpty()
+    fun getLastHandledPushToken(context: Context): String = prefs(context).getString(KEY_LAST_HANDLED_PUSH_TOKEN, null)?.trim().orEmpty()
 
     @Synchronized
     fun isPushTokenHandled(context: Context, token: String): Boolean {
@@ -397,8 +417,7 @@ object AttacheFileStorage {
         return File(dir, "${System.currentTimeMillis()}_$fileName")
     }
 
-    fun uriForFile(context: Context, file: File): Uri =
-        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    fun uriForFile(context: Context, file: File): Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 
     fun openFileExternally(context: Context, item: LocalInboxFile, onError: (String) -> Unit = {}) {
         try {
@@ -540,14 +559,19 @@ fun AttacheFileInboxDialog(
     }
 
     previewImageFile?.let { imgItem ->
+        // Oldest on the left, as a phone's gallery has them: swiping left
+        // goes to the newer image, swiping right to the older one. The list
+        // itself is newest first.
+        val images = localFiles.filter { it.kind == AttacheFileKind.IMAGE }.reversed()
         InboxImagePreviewDialog(
-            item = imgItem,
+            images = images.ifEmpty { listOf(imgItem) },
+            startIndex = images.indexOfFirst { it.file.absolutePath == imgItem.file.absolutePath }.coerceAtLeast(0),
             onDismiss = { previewImageFile = null },
-            onOpenExternal = {
-                AttacheFileStorage.openFileExternally(context, imgItem, onShowMessage)
+            onOpenExternal = { shown ->
+                AttacheFileStorage.openFileExternally(context, shown, onShowMessage)
             },
-            onShare = {
-                AttacheFileStorage.shareFile(context, imgItem, onShowMessage)
+            onShare = { shown ->
+                AttacheFileStorage.shareFile(context, shown, onShowMessage)
             },
         )
     }
@@ -739,9 +763,11 @@ fun AttacheFileInboxDialog(
                                             item.kind == AttacheFileKind.IMAGE -> {
                                                 previewImageFile = item
                                             }
+
                                             isPreviewableTextFile(item.name) -> {
                                                 previewTextFile = item
                                             }
+
                                             else -> {
                                                 AttacheFileStorage.openFileExternally(context, item, onShowMessage)
                                             }
@@ -1167,6 +1193,7 @@ private fun LocalInboxFileCard(
                             Text("安装 APK", fontSize = 12.sp)
                         }
                     }
+
                     item.kind == AttacheFileKind.VIDEO -> {
                         FilledTonalButton(
                             onClick = onPrimaryAction,
@@ -1176,6 +1203,7 @@ private fun LocalInboxFileCard(
                             Text("播放视频", fontSize = 12.sp)
                         }
                     }
+
                     item.kind == AttacheFileKind.IMAGE -> {
                         FilledTonalButton(
                             onClick = onPrimaryAction,
@@ -1185,6 +1213,7 @@ private fun LocalInboxFileCard(
                             Text("预览图片", fontSize = 12.sp)
                         }
                     }
+
                     isTextFile -> {
                         FilledTonalButton(
                             onClick = onPrimaryAction,
@@ -1194,6 +1223,7 @@ private fun LocalInboxFileCard(
                             Text("查看文本", fontSize = 12.sp)
                         }
                     }
+
                     else -> {
                         FilledTonalButton(
                             onClick = onOpenExternal,
@@ -1422,20 +1452,14 @@ private fun InboxTextPreviewDialog(
 
 @Composable
 private fun InboxImagePreviewDialog(
-    item: LocalInboxFile,
+    images: List<LocalInboxFile>,
+    startIndex: Int,
     onDismiss: () -> Unit,
-    onOpenExternal: () -> Unit,
-    onShare: () -> Unit,
+    onOpenExternal: (LocalInboxFile) -> Unit,
+    onShare: (LocalInboxFile) -> Unit,
 ) {
-    val bitmap by produceState<ImageBitmap?>(initialValue = null, item.file.absolutePath) {
-        value = withContext(Dispatchers.IO) {
-            try {
-                BitmapFactory.decodeFile(item.file.absolutePath)?.asImageBitmap()
-            } catch (_: Exception) {
-                null
-            }
-        }
-    }
+    val pager = rememberPagerState(initialPage = startIndex) { images.size }
+    val item = images[pager.currentPage.coerceIn(0, images.lastIndex)]
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -1461,43 +1485,70 @@ private fun InboxImagePreviewDialog(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    if (images.size > 1) {
+                        Text(
+                            text = "${pager.currentPage + 1} / ${images.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
                     TextButton(onClick = onDismiss) {
                         Text("关闭")
                     }
                 }
-                Box(
-                    contentAlignment = Alignment.Center,
+                HorizontalPager(
+                    state = pager,
+                    key = { images[it].file.absolutePath },
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 200.dp, max = 480.dp)
                         .padding(vertical = 8.dp),
-                ) {
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap!!,
-                            contentDescription = item.name,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    } else {
-                        CircularProgressIndicator()
-                    }
+                ) { page ->
+                    InboxPreviewImage(images[page])
                 }
                 Row(
                     horizontalArrangement = Arrangement.End,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    TextButton(onClick = onShare) {
+                    TextButton(onClick = { onShare(item) }) {
                         Text("分享")
                     }
                     Button(
-                        onClick = onOpenExternal,
+                        onClick = { onOpenExternal(item) },
                         modifier = Modifier.padding(start = 8.dp),
                     ) {
                         Text("用系统图库打开")
                     }
                 }
             }
+        }
+    }
+}
+
+/** One image of the preview, decoded off the main thread when its page
+ * comes into view. */
+@Composable
+private fun InboxPreviewImage(item: LocalInboxFile) {
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, item.file.absolutePath) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                BitmapFactory.decodeFile(item.file.absolutePath)?.asImageBitmap()
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!,
+                contentDescription = item.name,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            CircularProgressIndicator()
         }
     }
 }
