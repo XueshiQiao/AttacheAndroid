@@ -238,6 +238,9 @@ class TmuxControl(
     /** Runs one shell command on the same SSH connection and returns its
      * output, or null on failure. */
     private val exec: suspend (String) -> String?,
+    /** Runs one shell command and hands its stdout over chunk by chunk until
+     * it exits or the caller is cancelled; false if it could not start. */
+    private val stream: suspend (String, suspend (ByteArray) -> Unit) -> Boolean = { _, _ -> false },
     /** Uploads image bytes with the given extension to `/tmp` on the remote
      * host and returns its remote path, or null on failure. */
     private val upload: suspend (ByteArray, String, (Long, Long) -> Unit) -> String? = { _, _, _ -> null },
@@ -1224,6 +1227,16 @@ class TmuxControl(
         }
         refreshRequests.trySend(Unit)
     }
+
+    /** The chat mode's way onto this channel: one tmux command, its reply
+     * lines. Callers target by id only; nothing here quotes user text. */
+    suspend fun query(command: String): List<String> = send(command)
+
+    /** The chat mode's one-shot shell command on the host; see [exec]. */
+    suspend fun run(command: String): String? = exec(command)
+
+    /** The chat mode's way to follow a file on the host; see [stream]. */
+    suspend fun follow(command: String, onChunk: suspend (ByteArray) -> Unit): Boolean = stream(command, onChunk)
 
     /** Throws [TmuxCommandError] when tmux answers `%error`, and
      * [CancellationException] when the channel ends first. */

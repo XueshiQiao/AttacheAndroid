@@ -805,6 +805,7 @@ open class SSH : AbsTransport {
                         currentBridge?.tmuxControl?.compareAndSet(ended, null)
                     },
                     exec = { command -> runOnce(command) },
+                    stream = { command, onChunk -> streamOnce(command, onChunk) },
                     upload = { bytes, ext, onProgress -> uploadImage(bytes, ext, onProgress) },
                     download = { remotePath, output, onProgress -> downloadFile(remotePath, output, onProgress) },
                     appContext = manager?.applicationContext,
@@ -840,6 +841,34 @@ open class SSH : AbsTransport {
             currentCoroutineContext().ensureActive()
             Timber.w(e, "exec failed: %s", command)
             null
+        } finally {
+            channel.close()
+        }
+    }
+
+    /**
+     * Attaché chat mode: runs [command] on its own exec channel and hands each
+     * stdout chunk to [onChunk] as it arrives, until the command exits or the
+     * caller is cancelled. False when the channel could not be opened.
+     *
+     * stderr is drained, not ignored: the follower's watchdog writes a byte
+     * there every few seconds for as long as it runs, and an undrained
+     * channel is a buffer that only ever grows.
+     */
+    private suspend fun streamOnce(command: String, onChunk: suspend (ByteArray) -> Unit): Boolean {
+        val channel = client?.openSession() ?: return false
+        return try {
+            if (!channel.requestExec(command)) return false
+            kotlinx.coroutines.coroutineScope {
+                val drain = launch { for (ignored in channel.stderr) Unit }
+                for (chunk in channel.stdout) onChunk(chunk)
+                drain.cancel()
+            }
+            true
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            Timber.w(e, "stream failed")
+            false
         } finally {
             channel.close()
         }
