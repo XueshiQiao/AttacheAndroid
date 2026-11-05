@@ -303,7 +303,7 @@ private fun CenteredMessage(
     }
 }
 
-private fun phaseLabel(phase: AgentPhase): String = when (phase) {
+internal fun phaseLabel(phase: AgentPhase): String = when (phase) {
     AgentPhase.NEEDS_YOU -> "Needs you"
     AgentPhase.WORKING -> "Working"
     AgentPhase.DONE -> "Done"
@@ -317,7 +317,7 @@ internal fun phaseColor(phase: AgentPhase): Color = when (phase) {
     AgentPhase.IDLE -> Color(0xFF8B8D98)
 }
 
-private fun age(seconds: Long): String = when {
+internal fun age(seconds: Long): String = when {
     seconds < 60 -> "now"
     seconds < 3_600 -> "${seconds / 60}m"
     seconds < 86_400 -> "${seconds / 3_600}h"

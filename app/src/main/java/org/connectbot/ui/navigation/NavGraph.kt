@@ -173,6 +173,17 @@ fun ConnectBotNavHost(
                     onOpenTerminal = {
                         chatHostId?.let { navController.navigateToConsole(UUID.fromString(it)) }
                     },
+                    onOpenAgent = { agent ->
+                        // In place of this chat rather than on top of it, so
+                        // Back still leads to the agent list however many
+                        // agents were switched between.
+                        val paneNumber = agent.paneId.removePrefix("%")
+                        navController.navigate("${NavDestinations.CHAT}/$chatHostId/$paneNumber") {
+                            popUpTo("${NavDestinations.CHAT}/{${NavArgs.HOST_ID}}/{${AgentChatViewModel.PANE_ARG}}") {
+                                inclusive = true
+                            }
+                        }
+                    },
                 )
             }
 

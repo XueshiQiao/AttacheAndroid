@@ -61,7 +61,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Stop
@@ -69,6 +71,7 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -79,6 +82,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -91,6 +97,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -135,6 +142,7 @@ import org.connectbot.ui.LocalTerminalManager
 fun AgentChatScreen(
     onNavigateBack: () -> Unit,
     onOpenTerminal: () -> Unit,
+    onOpenAgent: (AgentPane) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: AgentChatViewModel = hiltViewModel(),
 ) {
@@ -188,122 +196,154 @@ fun AgentChatScreen(
         )
     }
 
-    Scaffold(
-        modifier = modifier,
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(state.agent?.title ?: "Agent", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            state.agent?.let {
-                                Box(
-                                    Modifier
-                                        .size(8.dp)
-                                        .background(phaseColor(it.phase), CircleShape),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                            }
-                            Text(
-                                subtitle(state),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = openTerminal) {
-                        Icon(Icons.Filled.Terminal, contentDescription = "Open terminal")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .imePadding(),
-        ) {
-            Box(Modifier.weight(1f)) {
-                when {
-                    state.connection == ChatConnection.NEEDS_TERMINAL -> Centered(
-                        "The connection is asking for a password or a host key.",
-                        action = "Answer in terminal" to openTerminal,
-                    )
-
-                    state.connection == ChatConnection.DISCONNECTED -> Centered(
-                        "Disconnected.",
-                        action = "Reconnect" to viewModel::reconnect,
-                    )
-
-                    state.paneGone -> Centered("This pane has been closed.")
-
-                    state.transcript == TranscriptStatus.MISSING && state.items.isEmpty() -> Centered(
-                        "There is no conversation to show for this agent. " +
-                            "Only Claude Code with Attaché's status line reports one.",
-                        action = "Open terminal" to openTerminal,
-                    )
-
-                    state.transcript == TranscriptStatus.LOADING && state.items.isEmpty() -> Centered("Loading…", progress = true)
-
-                    else -> Conversation(state, follow, onLoadEarlier = viewModel::loadEarlier)
-                }
+    // The other agents, a swipe from the left edge or a tap on the title
+    // away, as the terminal mode's sidebar is: switching should not mean
+    // going back to the list first.
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
+    val visits by RecentAgents.visits.collectAsStateWithLifecycle()
+    val recents = remember(visits, state.allAgents) {
+        RecentAgents.offer(visits[viewModel.hostId].orEmpty(), state.allAgents, current = viewModel.paneId)
+    }
+    val switchTo = { agent: AgentPane ->
+        drawerScope.launch { drawer.close() }
+        if (agent.paneId != viewModel.paneId) onOpenAgent(agent)
+    }
+    ModalNavigationDrawer(
+        drawerState = drawer,
+        drawerContent = {
+            ModalDrawerSheet(modifier = Modifier.widthIn(max = 320.dp)) {
+                AgentDrawer(agents = state.allAgents, current = viewModel.paneId, onPick = switchTo)
             }
-            if (state.agentExited && !state.paneGone) {
-                Text(
-                    "The agent is no longer running in this pane.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        },
+    ) {
+        Scaffold(
+            modifier = modifier,
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column(Modifier.clickable { drawerScope.launch { drawer.open() } }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    state.agent?.title ?: "Agent",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Other agents")
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                state.agent?.let {
+                                    Box(
+                                        Modifier
+                                            .size(8.dp)
+                                            .background(phaseColor(it.phase), CircleShape),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(
+                                    subtitle(state),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = openTerminal) {
+                            Icon(Icons.Filled.Terminal, contentDescription = "Open terminal")
+                        }
+                    },
+                )
+            },
+        ) { padding ->
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .imePadding(),
+            ) {
+                Box(Modifier.weight(1f)) {
+                    when {
+                        state.connection == ChatConnection.NEEDS_TERMINAL -> Centered(
+                            "The connection is asking for a password or a host key.",
+                            action = "Answer in terminal" to openTerminal,
+                        )
+
+                        state.connection == ChatConnection.DISCONNECTED -> Centered(
+                            "Disconnected.",
+                            action = "Reconnect" to viewModel::reconnect,
+                        )
+
+                        state.paneGone -> Centered("This pane has been closed.")
+
+                        state.transcript == TranscriptStatus.MISSING && state.items.isEmpty() -> Centered(
+                            "There is no conversation to show for this agent. " +
+                                "Only Claude Code with Attaché's status line reports one.",
+                            action = "Open terminal" to openTerminal,
+                        )
+
+                        state.transcript == TranscriptStatus.LOADING && state.items.isEmpty() -> Centered("Loading…", progress = true)
+
+                        else -> Conversation(state, follow, onLoadEarlier = viewModel::loadEarlier)
+                    }
+                }
+                if (state.agentExited && !state.paneGone) {
+                    Text(
+                        "The agent is no longer running in this pane.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+                if (state.agent?.phase == AgentPhase.WORKING && !state.agentExited) {
+                    WorkingBar(state.activity, sinceEpochSec = state.agent?.sinceEpochSec)
+                }
+                state.panel?.let { panel ->
+                    PanelDock(panel, onKey = viewModel::panelKey)
+                }
+                if (state.agent?.phase == AgentPhase.NEEDS_YOU) {
+                    val prompt = state.prompt
+                    if (prompt != null) {
+                        PromptDock(prompt, onAnswer = viewModel::answer)
+                    } else {
+                        UnreadablePromptDock(onOpenTerminal = openTerminal)
+                    }
+                }
+                Composer(
+                    enabled = state.connection == ChatConnection.READY && !state.paneGone && !state.agentExited &&
+                        state.agent?.phase != AgentPhase.NEEDS_YOU && state.panel == null,
+                    agentName = state.agent?.kind?.replaceFirstChar { it.uppercase() } ?: "the agent",
+                    images = state.images,
+                    onPickImages = {
+                        try {
+                            imagePicker.launch("image/*")
+                        } catch (_: ActivityNotFoundException) {
+                            viewModel.reportNotice("No image picker found")
+                        }
+                    },
+                    onRemoveImage = viewModel::removeImage,
+                    onOpenFiles = { showFiles = true },
+                    recents = recents,
+                    onPickRecent = switchTo,
+                    working = state.agent?.phase == AgentPhase.WORKING && !state.agentExited && state.panel == null,
+                    onStop = viewModel::stop,
+                    onSend = { text ->
+                        // What the person just sent is always brought into view,
+                        // wherever they had scrolled to.
+                        follow.stick = true
+                        viewModel.send(text)
+                    },
                 )
             }
-            if (state.agent?.phase == AgentPhase.WORKING && !state.agentExited) {
-                WorkingBar(state.activity, sinceEpochSec = state.agent?.sinceEpochSec)
-            }
-            state.panel?.let { panel ->
-                PanelDock(panel, onKey = viewModel::panelKey)
-            }
-            if (state.agent?.phase == AgentPhase.NEEDS_YOU) {
-                val prompt = state.prompt
-                if (prompt != null) {
-                    PromptDock(prompt, onAnswer = viewModel::answer)
-                } else {
-                    UnreadablePromptDock(onOpenTerminal = openTerminal)
-                }
-            }
-            Composer(
-                enabled = state.connection == ChatConnection.READY && !state.paneGone && !state.agentExited &&
-                    state.agent?.phase != AgentPhase.NEEDS_YOU && state.panel == null,
-                agentName = state.agent?.kind?.replaceFirstChar { it.uppercase() } ?: "the agent",
-                images = state.images,
-                onPickImages = {
-                    try {
-                        imagePicker.launch("image/*")
-                    } catch (_: ActivityNotFoundException) {
-                        viewModel.reportNotice("No image picker found")
-                    }
-                },
-                onRemoveImage = viewModel::removeImage,
-                onOpenFiles = { showFiles = true },
-                working = state.agent?.phase == AgentPhase.WORKING && !state.agentExited && state.panel == null,
-                onStop = viewModel::stop,
-                onSend = { text ->
-                    // What the person just sent is always brought into view,
-                    // wherever they had scrolled to.
-                    follow.stick = true
-                    viewModel.send(text)
-                },
-            )
         }
     }
 }
@@ -886,9 +926,12 @@ internal fun Composer(
     onSend: (String) -> Unit,
     working: Boolean = false,
     onStop: () -> Unit = {},
+    recents: List<Pair<AgentPane, Long>> = emptyList(),
+    onPickRecent: (AgentPane) -> Unit = {},
 ) {
     var text by rememberSaveable { mutableStateOf("") }
     var commandsOpen by remember { mutableStateOf(false) }
+    var recentOpen by remember { mutableStateOf(false) }
     var confirmStop by remember { mutableStateOf(false) }
     if (confirmStop) {
         AlertDialog(
@@ -910,10 +953,46 @@ internal fun Composer(
         // The terminal mode's tool keys that mean something here.
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 6.dp, end = 6.dp, top = 4.dp),
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(start = 6.dp, end = 6.dp, top = 4.dp),
         ) {
             ToolChip("Image", Icons.Filled.Image, enabled, onPickImages)
             ToolChip("Files", Icons.Filled.Folder, true, onOpenFiles)
+            // The terminal mode's recent windows, as agents: the last chats
+            // opened, a tap away.
+            Box {
+                ToolChip("Recent", Icons.Filled.History, recents.isNotEmpty()) { recentOpen = true }
+                DropdownMenu(expanded = recentOpen, onDismissRequest = { recentOpen = false }) {
+                    val nowMs = System.currentTimeMillis()
+                    for ((agent, atMs) in recents) {
+                        DropdownMenuItem(
+                            leadingIcon = {
+                                Box(
+                                    Modifier
+                                        .size(8.dp)
+                                        .background(phaseColor(agent.phase), CircleShape),
+                                )
+                            },
+                            text = {
+                                Column {
+                                    Text(agent.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        "${agent.sessionName} · ${agent.windowName} · ${age((nowMs - atMs) / 1000)} ago",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                recentOpen = false
+                                onPickRecent(agent)
+                            },
+                        )
+                    }
+                }
+            }
             Box {
                 ToolChip("Commands", null, enabled) { commandsOpen = true }
                 DropdownMenu(expanded = commandsOpen, onDismissRequest = { commandsOpen = false }) {
@@ -1073,3 +1152,58 @@ private const val DIFF_PREVIEW = 12
 private const val OUTPUT_PREVIEW = 4
 private const val COMMAND_PREVIEW = 30
 private const val THINKING_PREVIEW = 4
+
+/** Every agent, by what it needs, with the one on screen marked. */
+@Composable
+internal fun AgentDrawer(agents: List<AgentPane>, current: String, onPick: (AgentPane) -> Unit) {
+    val nowSec = System.currentTimeMillis() / 1000
+    val groups = agents.groupBy { it.phase }
+    LazyColumn(contentPadding = PaddingValues(vertical = 12.dp)) {
+        item {
+            Text(
+                "Agents",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
+        }
+        for (phase in AgentPhase.entries) {
+            val inPhase = groups[phase].orEmpty()
+            if (inPhase.isEmpty()) continue
+            item(key = "h-$phase") {
+                Text(
+                    "${phaseLabel(phase)}  ${inPhase.size}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
+                )
+            }
+            items(inPhase, key = { it.paneId }) { agent ->
+                NavigationDrawerItem(
+                    selected = agent.paneId == current,
+                    onClick = { onPick(agent) },
+                    icon = {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .background(phaseColor(agent.phase), CircleShape),
+                        )
+                    },
+                    label = {
+                        Column {
+                            Text(agent.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                listOf(agent.sessionName, agent.windowName).joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    },
+                    badge = agent.sinceEpochSec?.let { since -> { Text(age(nowSec - since), style = MaterialTheme.typography.labelSmall) } },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+            }
+        }
+    }
+}

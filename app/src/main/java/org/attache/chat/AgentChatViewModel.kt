@@ -119,6 +119,8 @@ data class AgentChatUiState(
     /** What is on screen while Claude has a panel or picker open over its
      * input box, after `/usage`, `/model` and the like; null when none. */
     val panel: List<String>? = null,
+    /** Every agent on the host, for switching without going back. */
+    val allAgents: List<AgentPane> = emptyList(),
 )
 
 /**
@@ -139,7 +141,7 @@ class AgentChatViewModel @Inject constructor(
     val hostId: UUID = EntityIds.parse(savedStateHandle.get<String>(NavArgs.HOST_ID))
 
     /** `%42`; the route carries the digits, because `%` is URL syntax. */
-    private val paneId: String = "%" + savedStateHandle.get<String>(PANE_ARG).orEmpty().filter(Char::isDigit)
+    val paneId: String = "%" + savedStateHandle.get<String>(PANE_ARG).orEmpty().filter(Char::isDigit)
 
     private val link = ChatLink(hostId, viewModelScope, dispatchers)
     private val _uiState = MutableStateFlow(AgentChatUiState())
@@ -173,6 +175,7 @@ class AgentChatViewModel @Inject constructor(
     private val transcriptLane = dispatchers.default.limitedParallelism(1)
 
     init {
+        RecentAgents.visit(hostId, paneId)
         viewModelScope.launch {
             link.connection.collect { c -> _uiState.update { it.copy(connection = c) } }
         }
@@ -182,6 +185,7 @@ class AgentChatViewModel @Inject constructor(
                 if (tmux == null) return@collectLatest
                 coroutineScope {
                     launch { watchPane(tmux) }
+                    launch { watchAgents(tmux) }
                     launch { transcriptPath.collectLatest { path -> follow(tmux, path) } }
                 }
             }
@@ -397,6 +401,24 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
+    /** The other agents, for the drawer and the recent list. The same
+     * read-only `list-panes` the agent list sends, a little less often. */
+    private suspend fun watchAgents(tmux: TmuxControl) {
+        while (true) {
+            try {
+                val lines = tmux.query(AgentPanes.LIST_COMMAND)
+                val agents = withContext(dispatchers.default) { AgentPanes.parse(lines) }
+                _uiState.update { it.copy(allAgents = agents) }
+            } catch (e: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                return
+            } catch (e: Exception) {
+                Timber.w(e, "agent list refresh failed")
+            }
+            delay(AGENTS_POLL_MS)
+        }
+    }
+
     private suspend fun watchPane(tmux: TmuxControl) {
         while (true) {
             try {
@@ -602,6 +624,7 @@ class AgentChatViewModel @Inject constructor(
         private const val CONFIRM_MS = 15_000L
         private const val PANEL_WATCH_MS = 30_000L
         private const val PANEL_POLL_MS = 1_000L
+        private const val AGENTS_POLL_MS = 4_000L
         private const val CLEAR_WINDOW_MS = 120_000L
         private val PANEL_KEYS = setOf("Up", "Down", "Left", "Right", "Enter", "Escape", "Tab")
     }
