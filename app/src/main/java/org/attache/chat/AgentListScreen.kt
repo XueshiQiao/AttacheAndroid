@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -139,6 +140,8 @@ fun AgentListScreen(
 
     Scaffold(
         modifier = modifier,
+        // The bottom is kept clear by the list itself (bottomSafeInset).
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
                 title = {
@@ -217,7 +220,7 @@ private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit) {
     }
     val groups = agents.groupBy { it.phase }
     LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp + bottomSafeInset()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         for (phase in AgentPhase.entries) {

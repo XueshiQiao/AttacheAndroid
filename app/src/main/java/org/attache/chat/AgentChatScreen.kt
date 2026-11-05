@@ -41,11 +41,11 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -230,6 +230,9 @@ fun AgentChatScreen(
     ) {
         Scaffold(
             modifier = modifier,
+            // The bottom is kept clear by hand (bottomSafeInset), which also
+            // covers the systems whose navigation bar inset reads zero.
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
                 TopAppBar(
@@ -293,8 +296,8 @@ fun AgentChatScreen(
             Column(
                 Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .imePadding(),
+                    .padding(top = padding.calculateTopPadding())
+                    .padding(bottom = bottomSafeInset()),
             ) {
                 Box(Modifier.weight(1f)) {
                     when {
@@ -310,9 +313,10 @@ fun AgentChatScreen(
 
                         state.paneGone -> Centered("This pane has been closed.")
 
+                        state.mirror != null -> ScreenMirror(state.mirror.orEmpty(), onOpenTerminal = openTerminal)
+
                         state.transcript == TranscriptStatus.MISSING && state.items.isEmpty() -> Centered(
-                            "There is no conversation to show for this agent. " +
-                                "Only Claude Code with Attaché's status line reports one.",
+                            "This agent's conversation could not be found.",
                             action = "Open terminal" to openTerminal,
                         )
 
@@ -1187,7 +1191,7 @@ private const val THINKING_PREVIEW = 4
 internal fun AgentDrawer(agents: List<AgentPane>, current: String, onPick: (AgentPane) -> Unit) {
     val nowSec = System.currentTimeMillis() / 1000
     val groups = agents.groupBy { it.phase }
-    LazyColumn(contentPadding = PaddingValues(vertical = 12.dp)) {
+    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp + bottomSafeInset())) {
         item {
             Text(
                 "Agents",
@@ -1338,4 +1342,51 @@ private fun tokens(n: Long): String = when {
     n >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", n / 1_000_000.0).replace(".0M", "M")
     n >= 1_000 -> "${n / 1_000}k"
     else -> n.toString()
+}
+
+/**
+ * The pane as it looks now, for an agent whose conversation the phone cannot
+ * read: its own drawing, colours kept, newest at the bottom. Read only;
+ * typing still goes through the composer below.
+ */
+@Composable
+internal fun ScreenMirror(lines: List<String>, onOpenTerminal: () -> Unit) {
+    val vertical = rememberScrollState()
+    LaunchedEffect(lines) { vertical.scrollTo(vertical.maxValue) }
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 4.dp),
+        ) {
+            Text(
+                "Live screen · read only",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onOpenTerminal) { Text("Open terminal") }
+        }
+        val card = MaterialTheme.colorScheme.surfaceContainer
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = card,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        ) {
+            Text(
+                AnsiText.of(lines.joinToString("\n"), background = card),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                softWrap = false,
+                modifier = Modifier
+                    .verticalScroll(vertical)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(10.dp),
+            )
+        }
+    }
 }

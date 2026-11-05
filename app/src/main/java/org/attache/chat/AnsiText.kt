@@ -32,7 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
  * so what is left is the printed text with the look it had in the terminal.
  */
 internal object AnsiText {
-    private val SEQUENCE = Regex("\u001B\\[([0-9;?]*)([ -/]*[@-~])|\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)")
+    internal val SEQUENCE = Regex("\u001B\\[([0-9;?]*)([ -/]*[@-~])|\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)")
 
     /**
      * [background] is what the text is drawn on. A colour the command chose

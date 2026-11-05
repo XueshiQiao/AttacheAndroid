@@ -123,6 +123,9 @@ data class AgentChatUiState(
     val allAgents: List<AgentPane> = emptyList(),
     /** What the agent's own status line says: model, effort, context. */
     val status: AgentStatus? = null,
+    /** The pane as it looks now, colour codes and all, for an agent whose
+     * conversation cannot be read: null while there is a transcript. */
+    val mirror: List<String>? = null,
 )
 
 /**
@@ -540,6 +543,16 @@ class AgentChatViewModel @Inject constructor(
             _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
         }
         val status = currentStatus()
+        // No reader for this agent's conversation (agy keeps it as protobuf
+        // in SQLite): show its screen instead, so what it is doing and what
+        // it answered can be followed without leaving the chat. The visible
+        // screen only, with its colours; a few KB a refresh, and only while
+        // this page is open on such an agent.
+        val mirror = if (provider != null && provider.transcriptReader() == null) {
+            tmux.query("capture-pane -p -e -J -t $paneId").dropLastWhile { it.replace(AnsiText.SEQUENCE, "").isBlank() }
+        } else {
+            null
+        }
         val watchPanel = agent != null && agent.phase != AgentPhase.NEEDS_YOU && agent.phase != AgentPhase.WORKING &&
             (_uiState.value.panel != null || System.currentTimeMillis() < panelWatchUntilMs)
         val screen = when {
@@ -563,6 +576,7 @@ class AgentChatViewModel @Inject constructor(
                 activity = activity,
                 panel = panel,
                 status = status,
+                mirror = mirror,
             )
         }
     }
