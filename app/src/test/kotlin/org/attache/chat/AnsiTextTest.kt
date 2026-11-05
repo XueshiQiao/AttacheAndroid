@@ -48,4 +48,13 @@ class AnsiTextTest {
         assertEquals(Color(148, 148, 148), styles["G"]?.color)
         assertEquals(Color(0xFFCD3131), styles["R"]?.color)
     }
+
+    @Test
+    fun aColourThatCannotBeReadOnTheCardGivesWayToTheThemes() {
+        val dark = Color(0xFF2B2D31)
+        val text = AnsiText.of("\u001b[30mblack\u001b[38;5;246mgrey", background = dark)
+        val styles = text.spanStyles.associate { text.text.substring(it.start, it.end) to it.item }
+        assertEquals(Color.Unspecified, styles["black"]?.color)
+        assertEquals(Color(148, 148, 148), styles["grey"]?.color)
+    }
 }

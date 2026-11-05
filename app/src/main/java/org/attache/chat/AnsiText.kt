@@ -18,6 +18,7 @@
 package org.attache.chat
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -33,13 +34,19 @@ import androidx.compose.ui.text.font.FontWeight
 internal object AnsiText {
     private val SEQUENCE = Regex("\u001B\\[([0-9;?]*)([ -/]*[@-~])|\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)")
 
-    fun of(raw: String): AnnotatedString = buildAnnotatedString {
+    /**
+     * [background] is what the text is drawn on. A colour the command chose
+     * for a terminal of the other brightness, black on a dark card or white
+     * on a light one, is dropped back to the theme's text colour rather than
+     * drawn where it cannot be read.
+     */
+    fun of(raw: String, background: Color = Color.Unspecified): AnnotatedString = buildAnnotatedString {
         var color: Color? = null
         var bold = false
         var italic = false
         var at = 0
         for (m in SEQUENCE.findAll(raw)) {
-            appendStyled(raw.substring(at, m.range.first), color, bold, italic)
+            appendStyled(raw.substring(at, m.range.first), color, bold, italic, background)
             at = m.range.last + 1
             if (m.groupValues[2] != "m") continue
             val codes = m.groupValues[1].split(';').map { it.toIntOrNull() ?: 0 }
@@ -81,19 +88,29 @@ internal object AnsiText {
                 i++
             }
         }
-        appendStyled(raw.substring(at), color, bold, italic)
+        appendStyled(raw.substring(at), color, bold, italic, background)
     }
 
-    private fun AnnotatedString.Builder.appendStyled(text: String, color: Color?, bold: Boolean, italic: Boolean) {
+    private fun AnnotatedString.Builder.appendStyled(text: String, color: Color?, bold: Boolean, italic: Boolean, background: Color) {
         if (text.isEmpty()) return
+        val readable = color?.takeIf { background == Color.Unspecified || contrast(it, background) >= MIN_CONTRAST }
         val style = SpanStyle(
-            color = color ?: Color.Unspecified,
+            color = readable ?: Color.Unspecified,
             fontWeight = if (bold) FontWeight.Bold else null,
             fontStyle = if (italic) FontStyle.Italic else null,
         )
         pushStyle(style)
         append(text)
         pop()
+    }
+
+    /** WCAG's floor for large text; below it the colour goes. */
+    private const val MIN_CONTRAST = 3.0
+
+    private fun contrast(a: Color, b: Color): Double {
+        val la = a.luminance() + 0.05
+        val lb = b.luminance() + 0.05
+        return maxOf(la, lb).toDouble() / minOf(la, lb)
     }
 
     private val BASIC = intArrayOf(

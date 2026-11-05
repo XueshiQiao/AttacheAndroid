@@ -492,7 +492,7 @@ private fun ToolGroupCard(group: ToolGroup) {
     val rail = MaterialTheme.colorScheme.outlineVariant
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
@@ -555,7 +555,7 @@ private fun ToolRow(step: ChatItem.ToolStep) {
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(14.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, CircleShape),
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape),
             ) {
                 Text(mark, color = markColor, style = MaterialTheme.typography.labelMedium)
             }
@@ -668,6 +668,7 @@ private fun DiffBlock(lines: List<DiffLine>) {
 /** What a slash command or a `!` command printed, under the command. */
 @Composable
 private fun CommandOutputCard(output: ChatItem.CommandOutput) {
+    val cardColor = if (output.isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant
     var open by rememberSaveable(output.key) { mutableStateOf(false) }
     val lines = output.text.lines()
     Column(
@@ -677,12 +678,15 @@ private fun CommandOutputCard(output: ChatItem.CommandOutput) {
     ) {
         Surface(
             shape = RoundedCornerShape(10.dp),
-            color = if (output.isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
+            color = cardColor,
             modifier = Modifier.fillMaxWidth(),
         ) {
             SelectionContainer {
                 Text(
-                    AnsiText.of(if (open) output.raw else output.raw.lines().take(COMMAND_PREVIEW).joinToString("\n")),
+                    AnsiText.of(
+                        if (open) output.raw else output.raw.lines().take(COMMAND_PREVIEW).joinToString("\n"),
+                        background = cardColor,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     softWrap = false,
