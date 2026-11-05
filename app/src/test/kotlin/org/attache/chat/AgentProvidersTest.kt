@@ -86,7 +86,7 @@ class AgentProvidersTest {
 
     @Test
     fun runShellDoublesEveryHashSoTmuxLeavesItAlone() {
-        val command = HostScripts.sessionsCommand()!!
+        val command = HostScripts.sessionsCommand("attache-agents-1")!!
         assertTrue(command.startsWith("run-shell '"))
         // agy's script asks tmux for `#{pane_id}`; run-shell would expand a
         // single `#` itself, in the wrong pane.

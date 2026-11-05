@@ -517,16 +517,7 @@ class AgentChatViewModel @Inject constructor(
         // what says the agent is waiting on the person, and the approval
         // dock should not lag it. Only this agent's provider is asked.
         val provider = parsed?.let { AgentProviders.forKind(it.kind) }
-        val ownSessions = provider?.let { p ->
-            HostScripts.sessionsCommand(listOf(p))?.let { cmd ->
-                try {
-                    HostScripts.parse(tmux.query(cmd), listOf(p))
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    emptyList()
-                }
-            }
-        }.orEmpty()
+        val ownSessions = provider?.let { readSessions(tmux, listOf(it)) }.orEmpty()
         val agent = parsed?.let { AgentPanes.merge(listOf(it), ownSessions).first() }
         val session = ownSessions.firstOrNull { it.paneId == paneId }
         session?.transcriptPath?.let {

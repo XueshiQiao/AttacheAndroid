@@ -17,7 +17,10 @@
 
 package org.attache.chat
 
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import kotlin.random.Random
 
 /**
  * What an agent says about one of its running sessions, read from the
@@ -95,18 +98,57 @@ object AgentProviders {
  * Runs every provider's script in one `run-shell` on the control channel
  * that is already open: one round trip, where a fresh SSH exec channel costs
  * three, about 1.5 s on the owner's relayed 5G link.
+ *
+ * **What `run-shell` prints is not its reply.** Measured on tmux 3.6a over a
+ * control client: the command's `%begin`/`%end` block arrives empty once the
+ * script has finished, and the output follows it as bare lines, which a
+ * client pairing replies with blocks (as [org.attache.tmux.TmuxControl]
+ * does) never sees. Every read through here came back empty from b58 to
+ * b60, hidden for Claude by the desktop app's options and not for agy. So
+ * the script writes its output into a tmux buffer, and `show-buffer`, which
+ * tmux runs only after the script has finished, reads it as an ordinary
+ * reply. Three lines, not one: a line of three commands gets three reply
+ * blocks, which would put every later reply one command off.
  */
 object HostScripts {
     private const val MARK = "@@attache-agent "
 
-    /** The `run-shell` command, quoted for tmux's parser. `run-shell`
-     * expands formats in its argument first, so `#` is doubled to stay `#`. */
-    fun sessionsCommand(providers: List<AgentProvider> = AgentProviders.all): String? {
+    /** The `run-shell` command that leaves the scripts' output in tmux
+     * buffer [buffer], quoted for tmux's parser. `run-shell` expands formats
+     * in its argument first, so `#` is doubled to stay `#`. */
+    fun sessionsCommand(buffer: String, providers: List<AgentProvider> = AgentProviders.all): String? {
+        require(BUFFER.matches(buffer)) { "not a buffer name" }
         val parts = providers.mapNotNull { p -> p.sessionsScript()?.let { "printf '%s\\n' '$MARK${p.kind}'; $it" } }
         if (parts.isEmpty()) return null
-        val script = parts.joinToString("; ").replace("#", "##")
-        return "run-shell " + quote(script)
+        val script = "{ " + parts.joinToString("; ") + "; } 2>/dev/null | tmux load-buffer -b $buffer -"
+        return "run-shell " + quote(script.replace("#", "##"))
     }
+
+    /**
+     * What the agents say of their live sessions, through [query] (one tmux
+     * command, its reply lines). Throws what [query] throws; the buffer is
+     * deleted whatever happens, as it is visible in `choose-buffer`.
+     */
+    suspend fun read(query: suspend (String) -> List<String>, providers: List<AgentProvider> = AgentProviders.all): List<AgentSession> {
+        // Per call, not per app: the phone and the tablet can poll the same
+        // server at once.
+        val buffer = "attache-agents-" + Random.nextLong().toULong().toString(16)
+        val command = sessionsCommand(buffer, providers) ?: return emptyList()
+        try {
+            query(command)
+            return parse(query("show-buffer -b $buffer"), providers)
+        } finally {
+            withContext(NonCancellable) {
+                try {
+                    query("delete-buffer -b $buffer")
+                } catch (_: Exception) {
+                    // Never made (the script failed), or the channel is gone.
+                }
+            }
+        }
+    }
+
+    private val BUFFER = Regex("^[a-z0-9-]+$")
 
     fun parse(lines: List<String>, providers: List<AgentProvider> = AgentProviders.all): List<AgentSession> {
         val out = ArrayList<AgentSession>()

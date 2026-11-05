@@ -113,12 +113,9 @@ class AgentListViewModel @Inject constructor(
 
 /** Every agent's own report of its live sessions, or none if the host would
  * not run the script; the tmux options still stand in then. */
-internal suspend fun readSessions(tmux: TmuxControl): List<AgentSession> {
-    val command = HostScripts.sessionsCommand() ?: return emptyList()
-    return try {
-        HostScripts.parse(tmux.query(command))
-    } catch (e: Exception) {
-        if (e is kotlinx.coroutines.CancellationException) throw e
-        emptyList()
-    }
+internal suspend fun readSessions(tmux: TmuxControl, providers: List<AgentProvider> = AgentProviders.all): List<AgentSession> = try {
+    HostScripts.read(tmux::query, providers)
+} catch (e: Exception) {
+    if (e is kotlinx.coroutines.CancellationException) throw e
+    emptyList()
 }
