@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,7 +54,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -130,6 +134,8 @@ fun AgentListScreen(
         terminalManager?.let { viewModel.setTerminalManager(it) }
     }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var showAppearance by remember { mutableStateOf(false) }
+    if (showAppearance) ChatAppearanceDialog(onDismiss = { showAppearance = false })
 
     Scaffold(
         modifier = modifier,
@@ -151,6 +157,9 @@ fun AgentListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showAppearance = true }) {
+                        Icon(Icons.Outlined.Palette, contentDescription = "Appearance")
+                    }
                     IconButton(onClick = onOpenTerminal) {
                         Icon(Icons.Filled.Terminal, contentDescription = "Open terminal")
                     }

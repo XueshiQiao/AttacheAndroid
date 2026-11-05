@@ -68,6 +68,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -151,6 +152,8 @@ fun AgentChatScreen(
         terminalManager?.let { viewModel.setTerminalManager(it) }
     }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var showAppearance by remember { mutableStateOf(false) }
+    if (showAppearance) ChatAppearanceDialog(onDismiss = { showAppearance = false })
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.notice) {
         state.notice?.let {
@@ -258,6 +261,9 @@ fun AgentChatScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = { showAppearance = true }) {
+                            Icon(Icons.Outlined.Palette, contentDescription = "Appearance")
+                        }
                         IconButton(onClick = openTerminal) {
                             Icon(Icons.Filled.Terminal, contentDescription = "Open terminal")
                         }

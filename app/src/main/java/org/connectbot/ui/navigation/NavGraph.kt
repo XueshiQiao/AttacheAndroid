@@ -32,6 +32,7 @@ import androidx.navigation.navArgument
 import org.attache.chat.AgentChatScreen
 import org.attache.chat.AgentChatViewModel
 import org.attache.chat.AgentListScreen
+import org.attache.chat.ChatTheme
 import org.connectbot.data.EntityIds
 import org.connectbot.data.entity.Host
 import org.connectbot.ui.screens.colors.ColorsScreen
@@ -148,16 +149,18 @@ fun ConnectBotNavHost(
                 ),
             ) { entry ->
                 val chatHostId = entry.arguments?.getString(NavArgs.HOST_ID)
-                AgentListScreen(
-                    onNavigateBack = { navController.safePopBackStack() },
-                    onOpenTerminal = {
-                        chatHostId?.let { navController.navigateToConsole(UUID.fromString(it)) }
-                    },
-                    onOpenAgent = { agent ->
-                        val paneNumber = agent.paneId.removePrefix("%")
-                        navController.navigateSafely("${NavDestinations.CHAT}/$chatHostId/$paneNumber")
-                    },
-                )
+                ChatTheme {
+                    AgentListScreen(
+                        onNavigateBack = { navController.safePopBackStack() },
+                        onOpenTerminal = {
+                            chatHostId?.let { navController.navigateToConsole(UUID.fromString(it)) }
+                        },
+                        onOpenAgent = { agent ->
+                            val paneNumber = agent.paneId.removePrefix("%")
+                            navController.navigateSafely("${NavDestinations.CHAT}/$chatHostId/$paneNumber")
+                        },
+                    )
+                }
             }
 
             composable(
@@ -168,23 +171,25 @@ fun ConnectBotNavHost(
                 ),
             ) { entry ->
                 val chatHostId = entry.arguments?.getString(NavArgs.HOST_ID)
-                AgentChatScreen(
-                    onNavigateBack = { navController.safePopBackStack() },
-                    onOpenTerminal = {
-                        chatHostId?.let { navController.navigateToConsole(UUID.fromString(it)) }
-                    },
-                    onOpenAgent = { agent ->
-                        // In place of this chat rather than on top of it, so
-                        // Back still leads to the agent list however many
-                        // agents were switched between.
-                        val paneNumber = agent.paneId.removePrefix("%")
-                        navController.navigate("${NavDestinations.CHAT}/$chatHostId/$paneNumber") {
-                            popUpTo("${NavDestinations.CHAT}/{${NavArgs.HOST_ID}}/{${AgentChatViewModel.PANE_ARG}}") {
-                                inclusive = true
+                ChatTheme {
+                    AgentChatScreen(
+                        onNavigateBack = { navController.safePopBackStack() },
+                        onOpenTerminal = {
+                            chatHostId?.let { navController.navigateToConsole(UUID.fromString(it)) }
+                        },
+                        onOpenAgent = { agent ->
+                            // In place of this chat rather than on top of it, so
+                            // Back still leads to the agent list however many
+                            // agents were switched between.
+                            val paneNumber = agent.paneId.removePrefix("%")
+                            navController.navigate("${NavDestinations.CHAT}/$chatHostId/$paneNumber") {
+                                popUpTo("${NavDestinations.CHAT}/{${NavArgs.HOST_ID}}/{${AgentChatViewModel.PANE_ARG}}") {
+                                    inclusive = true
+                                }
                             }
-                        }
-                    },
-                )
+                        },
+                    )
+                }
             }
 
             composable(
