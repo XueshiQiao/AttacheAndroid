@@ -89,8 +89,10 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.attache.chat.ModeChooserDialog
 import org.attache.tailscale.TailscaleDialog
 import org.attache.tailscale.TailscaleStatusBadge
+import org.attache.tmux.TmuxTrial
 import org.connectbot.R
 import org.connectbot.data.EntityIds
 import org.connectbot.data.JsonImportReader
@@ -127,6 +129,7 @@ fun HostListScreen(
     modifier: Modifier = Modifier,
     makingShortcut: Boolean = false,
     onSelectShortcut: (Host, String?, IconStyle) -> Unit = { _, _, _ -> },
+    onNavigateToChat: (Host) -> Unit = {},
     viewModel: HostListViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -256,10 +259,34 @@ fun HostListScreen(
         )
     }
 
+    // Attaché: a tmux host can open as the terminal or as the chat mode.
+    // Every other host goes straight to the terminal, as it always has.
+    var modeChoiceHost by remember { mutableStateOf<Host?>(null) }
+    modeChoiceHost?.let { host ->
+        ModeChooserDialog(
+            hostName = host.nickname,
+            onTerminal = {
+                modeChoiceHost = null
+                onNavigateToConsole(host)
+            },
+            onChat = {
+                modeChoiceHost = null
+                onNavigateToChat(host)
+            },
+            onDismiss = { modeChoiceHost = null },
+        )
+    }
+
     HostListScreenContent(
         uiState = uiState,
         makingShortcut = makingShortcut,
-        onNavigateToConsole = onNavigateToConsole,
+        onNavigateToConsole = { host ->
+            if (TmuxTrial.targetFor(host.nickname) != null) {
+                modeChoiceHost = host
+            } else {
+                onNavigateToConsole(host)
+            }
+        },
         onSelectShortcut = { host -> shortcutHost = host },
         onNavigateToEditHost = onNavigateToEditHost,
         onNavigateToSettings = onNavigateToSettings,

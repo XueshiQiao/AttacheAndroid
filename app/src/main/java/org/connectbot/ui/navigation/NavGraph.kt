@@ -29,6 +29,9 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import org.attache.chat.AgentChatScreen
+import org.attache.chat.AgentChatViewModel
+import org.attache.chat.AgentListScreen
 import org.connectbot.data.EntityIds
 import org.connectbot.data.entity.Host
 import org.connectbot.ui.screens.colors.ColorsScreen
@@ -85,6 +88,9 @@ fun ConnectBotNavHost(
                 HostListScreen(
                     makingShortcut = makingShortcut,
                     onNavigateToConsole = onNavigateToConsole,
+                    onNavigateToChat = { host ->
+                        navController.navigateSafely("${NavDestinations.CHAT}/${host.id}")
+                    },
                     onSelectShortcut = onSelectShortcut,
                     onNavigateToEditHost = { host ->
                         if (host != null) {
@@ -131,6 +137,41 @@ fun ConnectBotNavHost(
                     },
                     onNavigateToSettings = {
                         navController.navigateSafely(NavDestinations.SETTINGS_HIGHLIGHT_CONN_PERSIST)
+                    },
+                )
+            }
+
+            composable(
+                route = "${NavDestinations.CHAT}/{${NavArgs.HOST_ID}}",
+                arguments = listOf(
+                    navArgument(NavArgs.HOST_ID) { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val chatHostId = entry.arguments?.getString(NavArgs.HOST_ID)
+                AgentListScreen(
+                    onNavigateBack = { navController.safePopBackStack() },
+                    onOpenTerminal = {
+                        chatHostId?.let { navController.navigateToConsole(UUID.fromString(it)) }
+                    },
+                    onOpenAgent = { agent ->
+                        val paneNumber = agent.paneId.removePrefix("%")
+                        navController.navigateSafely("${NavDestinations.CHAT}/$chatHostId/$paneNumber")
+                    },
+                )
+            }
+
+            composable(
+                route = "${NavDestinations.CHAT}/{${NavArgs.HOST_ID}}/{${AgentChatViewModel.PANE_ARG}}",
+                arguments = listOf(
+                    navArgument(NavArgs.HOST_ID) { type = NavType.StringType },
+                    navArgument(AgentChatViewModel.PANE_ARG) { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val chatHostId = entry.arguments?.getString(NavArgs.HOST_ID)
+                AgentChatScreen(
+                    onNavigateBack = { navController.safePopBackStack() },
+                    onOpenTerminal = {
+                        chatHostId?.let { navController.navigateToConsole(UUID.fromString(it)) }
                     },
                 )
             }
