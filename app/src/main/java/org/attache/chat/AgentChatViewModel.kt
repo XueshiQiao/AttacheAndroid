@@ -121,6 +121,8 @@ data class AgentChatUiState(
     val panel: List<String>? = null,
     /** Every agent on the host, for switching without going back. */
     val allAgents: List<AgentPane> = emptyList(),
+    /** What the agent's own status line says: model, effort, context. */
+    val status: AgentStatus? = null,
 )
 
 /**
@@ -151,6 +153,7 @@ class AgentChatViewModel @Inject constructor(
     private var control: TmuxControl? = null
     private var nextPendingId = 1L
     private var nextImageId = 1L
+    private var statReads = 0
 
     // The conversation being followed, and the file offset its earliest
     // line starts at. Touched on [transcriptLane] only.
@@ -474,14 +477,31 @@ class AgentChatViewModel @Inject constructor(
             return
         }
         val agent = AgentPanes.parse(listOf(mine)).firstOrNull()
-        val stat = tmux.query("display-message -p -t $paneId '#{@agent_stat}'").joinToString("\n")
-        val path = transcriptPathOf(stat)
-        if (path != null) {
-            transcriptPath.value = path
-        } else if (transcriptPath.value == null) {
-            // Only Claude Code's status line carries the path; another agent,
-            // or a Claude without Attaché's status line, has nothing to follow.
-            _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
+        // The status payload is read one refresh in three: agy's runs to
+        // 12.7 KB (measured 2026-11-05, its subagents ride along), and every
+        // two seconds that is 6 KB a second over a relayed 5G link for numbers
+        // that move once a turn. Until a transcript path is known it is read
+        // every time.
+        val readStat = statReads++ % STAT_EVERY == 0 || transcriptPath.value == null
+        val status = if (readStat) {
+            val stat = tmux.query("display-message -p -t $paneId '#{@agent_stat}'").joinToString("\n")
+            // Only the running agent's own payload counts: a pane keeps the
+            // one a previous agent wrote, and a Claude payload left in a pane
+            // now running agy would otherwise put the old Claude conversation
+            // on this agent's page.
+            val own = agent?.let { AgentStatuses.forAgent(AgentStatuses.parse(stat), it.kind) }
+            val path = if (own?.source == "claude") transcriptPathOf(stat) else null
+            if (path != null) {
+                transcriptPath.value = path
+            } else if (transcriptPath.value == null) {
+                // Only Claude Code's status line carries the path; another
+                // agent, or a Claude without Attaché's status line, has
+                // nothing to follow.
+                _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
+            }
+            own
+        } else {
+            _uiState.value.status
         }
         val watchPanel = agent != null && agent.phase != AgentPhase.NEEDS_YOU && agent.phase != AgentPhase.WORKING &&
             (_uiState.value.panel != null || System.currentTimeMillis() < panelWatchUntilMs)
@@ -505,6 +525,7 @@ class AgentChatViewModel @Inject constructor(
                 prompt = prompt,
                 activity = activity,
                 panel = panel,
+                status = status,
             )
         }
     }
@@ -625,6 +646,7 @@ class AgentChatViewModel @Inject constructor(
         private const val PANEL_WATCH_MS = 30_000L
         private const val PANEL_POLL_MS = 1_000L
         private const val AGENTS_POLL_MS = 4_000L
+        private const val STAT_EVERY = 3
         private const val CLEAR_WINDOW_MS = 120_000L
         private val PANEL_KEYS = setOf("Up", "Down", "Left", "Right", "Enter", "Escape", "Tab")
     }

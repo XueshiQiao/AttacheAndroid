@@ -83,6 +83,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
@@ -121,11 +122,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -153,6 +157,10 @@ fun AgentChatScreen(
     }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showAppearance by remember { mutableStateOf(false) }
+    var showStatus by remember { mutableStateOf(false) }
+    if (showStatus) {
+        state.status?.let { st -> StatusSheet(st, agent = state.agent, onDismiss = { showStatus = false }) } ?: run { showStatus = false }
+    }
     if (showAppearance) ChatAppearanceDialog(onDismiss = { showAppearance = false })
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.notice) {
@@ -226,8 +234,11 @@ fun AgentChatScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Column(Modifier.clickable { drawerScope.launch { drawer.open() } }) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { drawerScope.launch { drawer.open() } },
+                            ) {
                                 Text(
                                     state.agent?.title ?: "Agent",
                                     maxLines = 1,
@@ -236,7 +247,10 @@ fun AgentChatScreen(
                                 )
                                 Icon(Icons.Filled.ArrowDropDown, contentDescription = "Other agents")
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable(enabled = state.status != null) { showStatus = true },
+                            ) {
                                 state.agent?.let {
                                     Box(
                                         Modifier
@@ -245,13 +259,18 @@ fun AgentChatScreen(
                                     )
                                     Spacer(Modifier.width(6.dp))
                                 }
-                                Text(
-                                    subtitle(state),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                val status = state.status
+                                if (status != null) {
+                                    StatusLine(status)
+                                } else {
+                                    Text(
+                                        subtitle(state),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     },
@@ -1216,4 +1235,107 @@ internal fun AgentDrawer(agents: List<AgentPane>, current: String, onPick: (Agen
             }
         }
     }
+}
+
+/**
+ * The agent's own status line in a row: model, effort, how full the context
+ * is and how long the prompt cache stays warm. Context turns amber past 60%
+ * and red past 85%, where compaction and its cost are near.
+ */
+@Composable
+internal fun StatusLine(status: AgentStatus) {
+    val nowSec by produceState(System.currentTimeMillis() / 1000) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis() / 1000
+        }
+    }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val text = buildAnnotatedString {
+        val parts = ArrayList<Pair<String, Color?>>()
+        // "Gemini 4 Argon (Medium)" carries its effort in brackets, and the
+        // effort follows anyway; the row is too narrow to say it twice.
+        status.model?.let { parts += it.substringBefore(" (").trim() to null }
+        status.effort?.let { parts += it to null }
+        status.contextPercent?.let { pct ->
+            val color = when {
+                pct >= 85 -> Color(0xFFE5484D)
+                pct >= 60 -> Color(0xFFF5A524)
+                else -> null
+            }
+            parts += "$pct%" to color
+        }
+        cacheText(status, nowSec)?.let { parts += it to null }
+        parts.forEachIndexed { i, (part, color) ->
+            if (i > 0) append(" · ")
+            if (color != null) withStyle(SpanStyle(color = color, fontWeight = FontWeight.SemiBold)) { append(part) } else append(part)
+        }
+    }
+    Text(text, style = MaterialTheme.typography.bodySmall, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+}
+
+private fun cacheText(status: AgentStatus, nowSec: Long): String? {
+    val warm = status.cacheWarm ?: return null
+    val left = status.cacheExpiresAt?.minus(nowSec)
+    return when {
+        !warm || (left != null && left <= 0) -> "cache cold"
+        left != null -> "cache ${age(left)}"
+        else -> "cache warm"
+    }
+}
+
+/** Everything the status line carries, for when the row is not enough. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StatusSheet(status: AgentStatus, agent: AgentPane?, onDismiss: () -> Unit) {
+    val nowSec = System.currentTimeMillis() / 1000
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
+        ) {
+            Text(status.model ?: "Agent", style = MaterialTheme.typography.titleLarge)
+            val rows = buildList {
+                add("Agent" to listOfNotNull(status.source, status.version).joinToString(" "))
+                agent?.let { add("Where" to "${it.sessionName} · ${it.windowName}") }
+                status.effort?.let { add("Effort" to it) }
+                status.thinking?.let { add("Thinking" to if (it) "on" else "off") }
+                status.fastMode?.let { add("Fast mode" to if (it) "on" else "off") }
+                status.contextPercent?.let { pct ->
+                    val of = listOfNotNull(status.contextTokens?.let(::tokens), status.contextWindow?.let(::tokens)).joinToString(" of ")
+                    add("Context" to "$pct% used" + if (of.isNotEmpty()) " · $of" else "")
+                }
+                cacheText(status, nowSec)?.let { c ->
+                    add("Prompt cache" to c + (status.cacheHitRatio?.let { " · ${Math.round(it * 100)}% hits" } ?: ""))
+                }
+                status.costUsd?.let { add("Cost" to "$" + String.format(java.util.Locale.US, "%.2f", it)) }
+                if (status.linesAdded != null || status.linesRemoved != null) {
+                    add("Lines" to "+${status.linesAdded ?: 0} −${status.linesRemoved ?: 0}")
+                }
+                for (limit in status.limits) {
+                    val resets = limit.resetsAt?.minus(nowSec)?.takeIf { it > 0 }?.let { " · resets in ${age(it)}" } ?: ""
+                    add("${limit.label} limit" to "${limit.usedPercent}% used$resets")
+                }
+            }
+            for ((label, value) in rows) {
+                Row {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(120.dp),
+                    )
+                    Text(value, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+}
+
+private fun tokens(n: Long): String = when {
+    n >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", n / 1_000_000.0).replace(".0M", "M")
+    n >= 1_000 -> "${n / 1_000}k"
+    else -> n.toString()
 }
