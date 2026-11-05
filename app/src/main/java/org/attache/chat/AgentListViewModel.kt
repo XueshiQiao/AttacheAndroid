@@ -75,6 +75,9 @@ class AgentListViewModel @Inject constructor(
 
     fun reconnect() = link.reconnect()
 
+    private var polls = 0
+    private var sessions: List<AgentSession> = emptyList()
+
     /**
      * Polled rather than subscribed: three seconds is fast enough to see an
      * agent start waiting, and a `list-panes` every three seconds is a few
@@ -84,7 +87,11 @@ class AgentListViewModel @Inject constructor(
         while (true) {
             try {
                 val lines = tmux.query(AgentPanes.LIST_COMMAND)
-                agents.value = withContext(dispatchers.default) { AgentPanes.parse(lines) }
+                // What the agents say for themselves, every other poll: it
+                // runs a script on the host, a quarter second of it reading
+                // agy's screens, and states move slower than that.
+                if (polls++ % 2 == 0) sessions = readSessions(tmux)
+                agents.value = withContext(dispatchers.default) { AgentPanes.merge(AgentPanes.parse(lines), sessions) }
                 pollError.value = null
             } catch (e: CancellationException) {
                 // Either this poll was cancelled, or the control channel
@@ -101,5 +108,17 @@ class AgentListViewModel @Inject constructor(
 
     private companion object {
         const val POLL_MS = 3_000L
+    }
+}
+
+/** Every agent's own report of its live sessions, or none if the host would
+ * not run the script; the tmux options still stand in then. */
+internal suspend fun readSessions(tmux: TmuxControl): List<AgentSession> {
+    val command = HostScripts.sessionsCommand() ?: return emptyList()
+    return try {
+        HostScripts.parse(tmux.query(command))
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        emptyList()
     }
 }

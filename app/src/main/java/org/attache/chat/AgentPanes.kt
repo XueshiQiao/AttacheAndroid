@@ -65,16 +65,8 @@ object AgentPanes {
     private val VERSION_COMMAND = Regex("^\\d+\\.\\d+\\.\\d+$")
     private val SHELLS = setOf("zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh", "login")
 
-    /** The agent a running command is, or null. Grok Build's process is
-     * named after its build, `grok-1.0.52-mac`. */
-    private fun agentOfCommand(command: String): String? = when {
-        command == "claude" || VERSION_COMMAND.matches(command) -> "claude"
-        command == "codex" || command.startsWith("codex-") -> "codex"
-        command == "gemini" -> "gemini"
-        command == "agy" -> "agy"
-        command == "grok" || command.startsWith("grok-") -> "grok"
-        else -> null
-    }
+    /** The agent a running command is, or null. */
+    private fun agentOfCommand(command: String): String? = AgentProviders.forCommand(command)?.kind
 
     // Claude Code prefixes the terminal title with a spinner or a marker glyph.
     private val TITLE_GLYPHS = Regex("^[\\u2800-\\u28FF\\u25D0-\\u25D3\\u2722\\u2731\\u2733\\u273B\\u273D\\u00B7*]+\\s*")
@@ -130,4 +122,25 @@ object AgentPanes {
             USER_AT_HOST.containsMatchIn(t) || t == command || t.startsWith("$command ")
         return if (meaningless) fallback else t
     }
+
+    /**
+     * Lays what agents report for themselves over what tmux options say.
+     * An agent's own word wins: it is what needs nothing installed on the
+     * host. The options stay as detail, here to tell a finished turn
+     * (`done`) from a session that was never used, which the agents' own
+     * files do not separate.
+     */
+    fun merge(panes: List<AgentPane>, sessions: List<AgentSession>): List<AgentPane> = panes.map { pane ->
+        val own = sessions.firstOrNull { s ->
+            s.paneId == pane.paneId && s.kind == pane.kind &&
+                (s.sessionName == null || s.sessionName == pane.sessionName) &&
+                (s.windowId == null || s.windowId == pane.windowId)
+        } ?: return@map pane
+        val phase = when {
+            own.phase == AgentPhase.IDLE && pane.phase == AgentPhase.DONE -> AgentPhase.DONE
+            own.phase != null -> own.phase
+            else -> pane.phase
+        }
+        pane.copy(phase = phase, sinceEpochSec = own.sinceEpochSec ?: pane.sinceEpochSec)
+    }.sortedWith(compareBy<AgentPane>({ it.phase.ordinal }, { -(it.sinceEpochSec ?: 0L) }))
 }

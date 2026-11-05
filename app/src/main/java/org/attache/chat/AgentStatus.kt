@@ -24,6 +24,8 @@ data class AgentStatus(
     /** `claude`, `agy` or `grok`: whose payload this is. */
     val source: String,
     val model: String? = null,
+    /** `claude-opus-5-5`: what the context window is remembered by. */
+    val modelId: String? = null,
     val effort: String? = null,
     val contextPercent: Int? = null,
     val contextWindow: Long? = null,
@@ -86,6 +88,7 @@ object AgentStatuses {
         return AgentStatus(
             source = source,
             model = model?.str("display_name") ?: model?.str("id"),
+            modelId = model?.str("id"),
             effort = root.optJSONObject("effort")?.str("level") ?: model?.str("effort"),
             contextPercent = context?.num("used_percentage")?.let { Math.round(it).toInt().coerceIn(0, 100) },
             contextWindow = context?.num("context_window_size")?.toLong(),
@@ -144,4 +147,58 @@ object AgentStatuses {
     private fun JSONObject.num(key: String): Double? = if (has(key) && !isNull(key)) optDouble(key).takeIf { !it.isNaN() } else null
 
     private fun JSONObject.bool(key: String): Boolean? = if (has(key) && !isNull(key)) optBoolean(key) else null
+}
+
+/**
+ * Puts together what an agent's own files say and, when present, what its
+ * status line payload adds. The files win where both speak, since the
+ * transcript moves with every reply and the payload only when the status
+ * line redraws; the payload supplies what the files lack (window size,
+ * cache, limits). Either may be absent.
+ */
+object AgentStatusMerge {
+    fun merge(payload: AgentStatus?, files: AgentStatus?): AgentStatus? {
+        if (payload == null && files == null) return null
+        val modelId = files?.modelId ?: payload?.modelId
+        if (payload?.modelId != null && payload.contextWindow != null) ContextWindows.remember(payload.modelId, payload.contextWindow)
+        val window = payload?.contextWindow ?: modelId?.let(ContextWindows::lookup)
+        val tokens = files?.contextTokens ?: payload?.contextTokens
+        val percent = if (tokens != null && window != null && window > 0) {
+            Math.round(tokens * 100.0 / window).toInt().coerceIn(0, 100)
+        } else {
+            payload?.contextPercent
+        }
+        val base = payload ?: files!!
+        return base.copy(
+            model = payload?.model ?: files?.model?.let(::displayModel),
+            modelId = modelId,
+            effort = files?.effort ?: payload?.effort,
+            contextTokens = tokens,
+            contextWindow = window,
+            contextPercent = percent,
+        )
+    }
+
+    /** `claude-opus-5-5` to `Opus 5.5`, as Claude Code itself names it. */
+    fun displayModel(id: String): String {
+        val m = Regex("^claude-(opus|sonnet|haiku|fable)-(\\d+)-(\\d+)").find(id) ?: return id
+        return m.groupValues[1].replaceFirstChar { it.uppercase() } + " " + m.groupValues[2] + "." + m.groupValues[3]
+    }
+}
+
+/**
+ * Context window sizes, learned from status line payloads while the app
+ * runs. A transcript says how many tokens are in the window but never how
+ * large the window is, and the size depends on the plan as well as the
+ * model, so it is taken from where the agent stated it rather than from a
+ * table that would be wrong somewhere.
+ */
+object ContextWindows {
+    private val sizes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    fun remember(modelId: String, size: Long) {
+        sizes[modelId] = size
+    }
+
+    fun lookup(modelId: String): Long? = sizes[modelId]
 }

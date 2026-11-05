@@ -155,9 +155,28 @@ class AgentChatViewModel @Inject constructor(
     private var nextImageId = 1L
     private var statReads = 0
 
+    // What the status is put together from: the payload in `@agent_stat`
+    // when present, the transcript's own account, and the model an agent
+    // keeps in its settings (agy).
+    @Volatile private var payloadStatus: AgentStatus? = null
+
+    @Volatile private var transcriptStatus: AgentStatus? = null
+
+    @Volatile private var sessionModel: String? = null
+
+    private fun currentStatus(): AgentStatus? {
+        val kind = _uiState.value.agent?.kind
+        val files = transcriptStatus ?: sessionModel?.let { model ->
+            // agy's model carries its effort in brackets: `… (Medium)`.
+            val effort = Regex("\\(([^)]+)\\)\\s*$").find(model)?.groupValues?.get(1)?.lowercase()
+            AgentStatus(source = kind ?: "agent", model = model, effort = effort)
+        }
+        return AgentStatusMerge.merge(payloadStatus, files)
+    }
+
     // The conversation being followed, and the file offset its earliest
     // line starts at. Touched on [transcriptLane] only.
-    private var liveTranscript: ClaudeTranscript? = null
+    private var liveTranscript: AgentTranscript? = null
 
     @Volatile private var livePath: String? = null
     private var historyStart: Long? = null
@@ -410,7 +429,8 @@ class AgentChatViewModel @Inject constructor(
         while (true) {
             try {
                 val lines = tmux.query(AgentPanes.LIST_COMMAND)
-                val agents = withContext(dispatchers.default) { AgentPanes.parse(lines) }
+                val sessions = readSessions(tmux)
+                val agents = withContext(dispatchers.default) { AgentPanes.merge(AgentPanes.parse(lines), sessions) }
                 _uiState.update { it.copy(allAgents = agents) }
             } catch (e: CancellationException) {
                 currentCoroutineContext().ensureActive()
@@ -476,33 +496,50 @@ class AgentChatViewModel @Inject constructor(
             _uiState.update { it.copy(paneGone = true, prompt = null) }
             return
         }
-        val agent = AgentPanes.parse(listOf(mine)).firstOrNull()
-        // The status payload is read one refresh in three: agy's runs to
-        // 12.7 KB (measured 2026-11-05, its subagents ride along), and every
-        // two seconds that is 6 KB a second over a relayed 5G link for numbers
-        // that move once a turn. Until a transcript path is known it is read
-        // every time.
-        val readStat = statReads++ % STAT_EVERY == 0 || transcriptPath.value == null
-        val status = if (readStat) {
+        val parsed = AgentPanes.parse(listOf(mine)).firstOrNull()
+        // The agent's own report for this pane, read every refresh: it is
+        // what says the agent is waiting on the person, and the approval
+        // dock should not lag it. Only this agent's provider is asked.
+        val provider = parsed?.let { AgentProviders.forKind(it.kind) }
+        val ownSessions = provider?.let { p ->
+            HostScripts.sessionsCommand(listOf(p))?.let { cmd ->
+                try {
+                    HostScripts.parse(tmux.query(cmd), listOf(p))
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    emptyList()
+                }
+            }
+        }.orEmpty()
+        val agent = parsed?.let { AgentPanes.merge(listOf(it), ownSessions).first() }
+        val session = ownSessions.firstOrNull { it.paneId == paneId }
+        session?.transcriptPath?.let { transcriptPath.value = it }
+        sessionModel = session?.model
+
+        // The status payload, when the desktop app's status line wrapper (or
+        // a hand-added one) writes it, is extra detail and read one refresh
+        // in three: agy's runs to 12.7 KB (measured 2026-11-05, its
+        // subagents ride along), 6 KB a second at the full rate over a
+        // relayed 5G link for numbers that move once a turn.
+        if (statReads++ % STAT_EVERY == 0) {
             val stat = tmux.query("display-message -p -t $paneId '#{@agent_stat}'").joinToString("\n")
             // Only the running agent's own payload counts: a pane keeps the
             // one a previous agent wrote, and a Claude payload left in a pane
             // now running agy would otherwise put the old Claude conversation
             // on this agent's page.
-            val own = agent?.let { AgentStatuses.forAgent(AgentStatuses.parse(stat), it.kind) }
-            val path = if (own?.source == "claude") transcriptPathOf(stat) else null
-            if (path != null) {
-                transcriptPath.value = path
-            } else if (transcriptPath.value == null) {
-                // Only Claude Code's status line carries the path; another
-                // agent, or a Claude without Attaché's status line, has
-                // nothing to follow.
-                _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
+            payloadStatus = agent?.let { AgentStatuses.forAgent(AgentStatuses.parse(stat), it.kind) }
+            if (transcriptPath.value == null && payloadStatus?.source == "claude") {
+                transcriptPathOf(stat)?.let { transcriptPath.value = it }
             }
-            own
-        } else {
-            _uiState.value.status
         }
+        if (transcriptPath.value == null && provider?.transcriptReader() == null) {
+            _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
+        } else if (transcriptPath.value == null && session == null && payloadStatus == null) {
+            // Claude, but neither its session file nor a payload named a
+            // transcript: nothing to follow.
+            _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
+        }
+        val status = currentStatus()
         val watchPanel = agent != null && agent.phase != AgentPhase.NEEDS_YOU && agent.phase != AgentPhase.WORKING &&
             (_uiState.value.panel != null || System.currentTimeMillis() < panelWatchUntilMs)
         val screen = when {
@@ -547,7 +584,8 @@ class AgentChatViewModel @Inject constructor(
         while (true) {
             _uiState.update { it.copy(transcript = TranscriptStatus.LOADING, items = carryOver, earlierNotLoaded = false) }
             withContext(transcriptLane) {
-                val transcript = ClaudeTranscript()
+                val transcript = (_uiState.value.agent?.kind?.let(AgentProviders::forKind) ?: ClaudeProvider).transcriptReader()
+                    ?: return@withContext
                 val splitter = LineSplitter()
                 liveTranscript = transcript
                 livePath = path
@@ -615,8 +653,10 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
-    private fun publish(transcript: ClaudeTranscript) {
+    private fun publish(transcript: AgentTranscript) {
         val items = carryOver + transcript.snapshot
+        transcriptStatus = transcript.status
+        val status = currentStatus()
         _uiState.update { s ->
             s.copy(
                 items = items,
@@ -625,6 +665,7 @@ class AgentChatViewModel @Inject constructor(
                 // A sent message is confirmed once the agent has written it
                 // down; until then its bubble stays marked as unconfirmed.
                 pending = s.pending.filterNot { PendingMessages.confirmed(it, items) },
+                status = status ?: s.status,
             )
         }
     }

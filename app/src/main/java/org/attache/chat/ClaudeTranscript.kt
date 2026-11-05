@@ -75,7 +75,7 @@ data class DiffLine(val kind: Char, val text: String)
  *   times. Those are ignored in favour of the attachment.
  * - Most `type: user` records are tool results, not the person.
  */
-class ClaudeTranscript {
+class ClaudeTranscript : AgentTranscript {
     private val items = ArrayList<ChatItem>()
 
     /** Where each tool call sits in [items], so its result lands on it. */
@@ -86,18 +86,33 @@ class ClaudeTranscript {
      * whole conversation is read again in order rather than patched. */
     private val lines = ArrayList<String>()
 
-    val snapshot: List<ChatItem> get() = items.toList()
+    override val snapshot: List<ChatItem> get() = items.toList()
 
-    fun accept(line: String) {
+    // The latest reply's own account of itself. Sidechain records are
+    // skipped before here, so a subagent's model never speaks for the
+    // session, and Claude Code's `<synthetic>` stand-ins carry no real one.
+    private var lastModel: String? = null
+    private var lastEffort: String? = null
+    private var lastContextTokens: Long? = null
+
+    override val status: AgentStatus?
+        get() = lastModel?.let { model ->
+            AgentStatus(source = "claude", model = model, effort = lastEffort, contextTokens = lastContextTokens)
+        }
+
+    override fun accept(line: String) {
         lines += line
         read(line)
     }
 
-    fun prepend(earlier: List<String>) {
+    override fun prepend(earlier: List<String>) {
         val all = earlier + lines
         lines.clear()
         items.clear()
         stepIndex.clear()
+        lastModel = null
+        lastEffort = null
+        lastContextTokens = null
         all.forEach(::accept)
     }
 
@@ -216,7 +231,18 @@ class ClaudeTranscript {
     }
 
     private fun assistant(root: JSONObject, uuid: String) {
-        val content = root.optJSONObject("message")?.optJSONArray("content") ?: return
+        val message = root.optJSONObject("message") ?: return
+        message.optString("model").takeIf { it.isNotEmpty() && !it.startsWith("<") }?.let { model ->
+            lastModel = model
+            lastEffort = root.optString("effort").ifEmpty { null } ?: lastEffort
+            // What was sent is what the window holds: fresh input, plus what
+            // was read from the cache and what was written to it.
+            message.optJSONObject("usage")?.let { u ->
+                val inWindow = u.optLong("input_tokens") + u.optLong("cache_read_input_tokens") + u.optLong("cache_creation_input_tokens")
+                if (inWindow > 0) lastContextTokens = inWindow
+            }
+        }
+        val content = message.optJSONArray("content") ?: return
         for (i in 0 until content.length()) {
             val block = content.optJSONObject(i) ?: continue
             val key = "$uuid-$i"
