@@ -27,7 +27,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /** What attache-cli prints, read the way the chat mode reads it. Shapes as
- * attache-cli 0.1.0 prints them (XueshiQiao/Attache cli/README.md). */
+ * attache-cli 0.2.0 prints them (XueshiQiao/Attache cli/README.md). */
 @RunWith(AndroidJUnit4::class)
 class AttacheCliTest {
     private fun agent(fill: JSONObject.() -> Unit): String = JSONObject().apply {
@@ -178,5 +178,38 @@ class AttacheCliTest {
         val cut = "{\"t\":\"items\",\"text\":\"中".toByteArray().size - 1
         assertEquals(emptyList<String>(), lines.feed(bytes.copyOfRange(0, cut)))
         assertEquals(listOf("{\"t\":\"items\",\"text\":\"中文\"}", "{\"t\":\"status\"}"), lines.feed(bytes.copyOfRange(cut, bytes.size)))
+    }
+
+    @Test
+    fun aScreenIsReadAsAttacheCliPrintsIt() {
+        val reading = AttacheCli.screen(
+            JSONObject(
+                """{"t":"screen","pane":"%1","kind":"claude","prompt":false,"approval":{"subject":["Bash command","touch x"],""" +
+                    """"question":"Do you want to proceed?","fingerprint":"0123456789abcdef","options":[""" +
+                    """{"number":1,"label":"Yes","risk":null},{"number":2,"label":"Yes, always","risk":"stops asking about this from now on"}]},""" +
+                    """"panel":null,"panel_fingerprint":null,"activity":null}""",
+            ),
+        )
+        val approval = reading.approval!!
+        assertEquals("0123456789abcdef", approval.fingerprint)
+        assertEquals(listOf(1, 2), approval.options.map { it.number })
+        assertNull(approval.options[0].risk)
+        assertEquals("stops asking about this from now on", approval.options[1].risk)
+        assertFalse(reading.prompt)
+        // A fingerprint that is not attache-cli's shape is no fingerprint:
+        // an answer could not name the menu, so there is no menu to answer.
+        assertNull(AttacheCli.screen(JSONObject("""{"approval":{"fingerprint":"x","options":[{"number":1,"label":"Yes"}]}}""")).approval)
+        val panel = AttacheCli.screen(JSONObject("""{"prompt":false,"panel":["Usage","Esc to exit"],"panel_fingerprint":"00000000000000ff"}"""))
+        assertEquals(listOf("Usage", "Esc to exit"), panel.panel)
+        assertEquals("00000000000000ff", panel.panelFingerprint)
+    }
+
+    @Test
+    fun inputSaysWhetherItWasSent() {
+        assertEquals(InputResult(true, null), AttacheCli.parseInput(listOf("""{"sent":true}""")))
+        assertEquals(InputResult(false, "panel_closed"), AttacheCli.parseInput(listOf("""{"sent":false,"why":"panel_closed"}""")))
+        // Nothing printed (no attache-cli, or one from before protocol 2) sent nothing.
+        assertEquals(InputResult(false, "unreachable"), AttacheCli.parseInput(emptyList()))
+        assertEquals(InputResult(false, "unreachable"), AttacheCli.parseInput(null))
     }
 }

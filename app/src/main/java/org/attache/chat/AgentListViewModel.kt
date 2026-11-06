@@ -37,6 +37,7 @@ import org.connectbot.data.EntityIds
 import org.connectbot.di.CoroutineDispatchers
 import org.connectbot.service.TerminalManager
 import org.connectbot.ui.navigation.NavArgs
+import org.json.JSONObject
 import java.util.UUID
 import javax.inject.Inject
 
@@ -86,35 +87,51 @@ class AgentListViewModel @Inject constructor(
     fun reconnect() = link.reconnect()
 
     /**
-     * Polled rather than subscribed: three seconds is fast enough to see an
-     * agent start waiting. Each poll is one `attache-cli agents` on the
-     * control channel, a few KB, 0.08 s on the host with 26 agents.
+     * Pushed rather than polled: `attache-cli agents --watch` reads every
+     * agent on the host every 1.5 s (0.08 s with 26 agents) and sends the
+     * list over an exec channel of its own only when something changed, so
+     * an agent that starts waiting shows within a couple of seconds and the
+     * control channel the chat page waits on carries nothing for it.
      */
     private suspend fun poll(tmux: TmuxControl) {
         while (true) {
-            try {
-                val found = AttacheCli.agents(tmux)
-                if (found == null) {
-                    pollError.value = "attache-cli could not be installed or run on this host"
-                } else {
-                    agents.value = found
-                    AgentDirectory.put(hostId, found)
-                    pollError.value = null
+            val cli = tmux.cli()
+            if (cli == null) {
+                pollError.value = "attache-cli could not be installed or run on this host"
+            } else {
+                val lines = JsonLines()
+                try {
+                    tmux.follow(AttacheCli.watchCommand(cli)) { chunk ->
+                        for (line in lines.feed(chunk)) {
+                            val event = try {
+                                JSONObject(line)
+                            } catch (_: Exception) {
+                                continue
+                            }
+                            if (event.optString("t") != "agents") continue
+                            val found = AttacheCli.agentsEvent(event)
+                            agents.value = found
+                            AgentDirectory.put(hostId, found)
+                            pollError.value = null
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    // Either this watch was cancelled, or the channel closed
+                    // under it, which also surfaces as a cancellation; the
+                    // bridge then publishes the next channel and a new one
+                    // starts.
+                    currentCoroutineContext().ensureActive()
+                    return
+                } catch (e: Exception) {
+                    pollError.value = e.message ?: "tmux did not answer"
                 }
-            } catch (e: CancellationException) {
-                // Either this poll was cancelled, or the control channel
-                // closed under it, which also surfaces as a cancellation; the
-                // bridge then publishes the next channel and a new poll starts.
-                currentCoroutineContext().ensureActive()
-                return
-            } catch (e: Exception) {
-                pollError.value = e.message ?: "tmux did not answer"
             }
-            delay(POLL_MS)
+            if (tmux.isClosed) return
+            delay(RETRY_MS)
         }
     }
 
     private companion object {
-        const val POLL_MS = 3_000L
+        const val RETRY_MS = 3_000L
     }
 }

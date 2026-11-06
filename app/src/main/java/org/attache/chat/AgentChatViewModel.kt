@@ -187,9 +187,8 @@ class AgentChatViewModel @Inject constructor(
      * the old one. */
     @Volatile private var carryOver: List<ChatItem> = emptyList()
 
-    /** After a slash command the screen is watched for a panel for a while,
-     * since a panel changes nothing tmux or the transcript would report. */
-    @Volatile private var panelWatchUntilMs = 0L
+    /** The last slash command sent, for keeping the old conversation above
+     * a `/clear`. */
     private var lastSlash: String? = null
     private var lastSlashAtMs = 0L
 
@@ -287,13 +286,20 @@ class AgentChatViewModel @Inject constructor(
                 if (body.startsWith("/")) {
                     lastSlash = body.substringBefore(' ')
                     lastSlashAtMs = System.currentTimeMillis()
-                    panelWatchUntilMs = lastSlashAtMs + PANEL_WATCH_MS
                 }
                 // attache-cli types it: copy mode left first, a `/` or `!`
                 // command typed key by key, anything else as one bracketed
                 // paste, then Enter, holding the pane so a message from the
-                // tablet at the same moment cannot interleave.
-                if (!AttacheCli.send(tmux, paneId, body)) error("attache-cli did not take it")
+                // tablet at the same moment cannot interleave, and only into
+                // Claude's own input box: pasted into a picker, its Enter
+                // would choose something.
+                val result = AttacheCli.send(tmux, paneId, body)
+                if (!result.sent) {
+                    _uiState.update { s ->
+                        s.copy(pending = s.pending.filterNot { it.id == pending.id }, notice = AttacheCli.refusal(result.why))
+                    }
+                    return@launch
+                }
             } catch (e: Exception) {
                 if (e is CancellationException) currentCoroutineContext().ensureActive()
                 _uiState.update { s ->
@@ -311,18 +317,13 @@ class AgentChatViewModel @Inject constructor(
         val tmux = control ?: return
         viewModelScope.launch {
             try {
-                // Only while the turn is visibly still running. An Esc that
-                // arrives after it ended lands on the idle prompt, and two of
+                // Only while the turn is visibly still running, which the
+                // host checks right before pressing it. An Esc that arrives
+                // after the turn ended lands on the idle prompt, and two of
                 // those open Claude's rewind menu, a step away from cutting
                 // the conversation back and losing its prompt cache.
-                if (AgentActivities.detect(capture(tmux)) == null) {
-                    _uiState.update { it.copy(notice = "It has already stopped, so nothing was sent") }
-                    refreshPane(tmux)
-                    return@launch
-                }
-                AttacheCli.key(tmux, paneId, "Escape")
-                delay(600)
-                refreshPane(tmux)
+                val result = AttacheCli.key(tmux, paneId, "Escape", "working")
+                if (!result.sent) _uiState.update { it.copy(notice = AttacheCli.refusal(result.why)) }
             } catch (e: Exception) {
                 if (e is CancellationException) currentCoroutineContext().ensureActive()
                 _uiState.update { it.copy(notice = "Not sent: ${e.message}") }
@@ -393,27 +394,25 @@ class AgentChatViewModel @Inject constructor(
     fun removeImage(id: Long) = _uiState.update { s -> s.copy(images = s.images.filterNot { it.id == id }) }
 
     /**
-     * Answers the menu on screen by its number. The screen is read again
-     * first and the digit goes out only if the very same menu is still
-     * there: answered at the desk in the meantime, a stray digit would land
-     * in the agent's input box instead.
+     * Answers the menu on screen by its number. attache-cli reads the screen
+     * again on the host and presses the digit only if the very same menu is
+     * still there: answered at the desk in the meantime, a stray digit would
+     * land in the agent's input box instead.
      */
     fun answer(option: ApprovalPrompt.Option) {
         val tmux = control ?: return
         val shown = _uiState.value.prompt ?: return
         viewModelScope.launch {
             try {
-                val now = ApprovalPrompts.detect(capture(tmux))
-                if (now == null || now.fingerprint != shown.fingerprint) {
-                    _uiState.update { it.copy(prompt = now, notice = "The question changed, so nothing was sent") }
-                    return@launch
-                }
                 // Claude Code selects on the digit alone; an Enter after it
-                // would submit whatever sits in its input box.
-                AttacheCli.key(tmux, paneId, option.number.toString())
-                _uiState.update { it.copy(prompt = null) }
-                delay(800)
-                refreshPane(tmux)
+                // would submit whatever sits in its input box. The host
+                // presses it only while this very menu is on screen.
+                val result = AttacheCli.key(tmux, paneId, option.number.toString(), "approval:${shown.fingerprint}")
+                if (result.sent) {
+                    _uiState.update { it.copy(prompt = null) }
+                } else {
+                    _uiState.update { it.copy(notice = AttacheCli.refusal(result.why)) }
+                }
             } catch (e: Exception) {
                 if (e is CancellationException) currentCoroutineContext().ensureActive()
                 _uiState.update { it.copy(notice = "Not sent: ${e.message}") }
@@ -446,52 +445,51 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
-    private suspend fun watchPane(tmux: TmuxControl) {
+    /**
+     * This pane's agent and screen, pushed by attache-cli (`agents --watch
+     * --pane`) over an exec channel of its own: the host reads them every
+     * half second and sends only what changed, so nothing is polled over
+     * the link and the approval dock does not lag the screen.
+     */
+    private suspend fun watchPane(tmux: TmuxControl) = coroutineScope {
+        launch { mirrorLoop(tmux) }
+        val cli = tmux.cli()
+        if (cli == null) {
+            _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
+            return@coroutineScope
+        }
         while (true) {
+            val lines = JsonLines()
             try {
-                refreshPane(tmux)
+                tmux.follow(AttacheCli.watchCommand(cli, paneId)) { chunk ->
+                    for (line in lines.feed(chunk)) {
+                        val event = try {
+                            JSONObject(line)
+                        } catch (_: Exception) {
+                            continue
+                        }
+                        when (event.optString("t")) {
+                            "agents" -> onAgent(tmux, AttacheCli.agentsEvent(event).firstOrNull())
+                            "screen" -> onScreen(AttacheCli.screen(event))
+                        }
+                    }
+                }
             } catch (e: CancellationException) {
                 currentCoroutineContext().ensureActive()
-                return
+                return@coroutineScope
             } catch (e: Exception) {
-                Timber.w(e, "pane refresh failed")
+                Timber.w(e, "pane watch failed")
             }
-            val watchingPanel = _uiState.value.panel != null || System.currentTimeMillis() < panelWatchUntilMs
-            delay(if (watchingPanel) PANEL_POLL_MS else PANE_POLL_MS)
+            // The channel is gone; otherwise attache-cli ended on its own, so
+            // start it again shortly.
+            if (tmux.isClosed) return@coroutineScope
+            delay(WATCH_RETRY_MS)
         }
     }
 
-    /** The keys a panel takes, and nothing else: the phone never types into
-     * one, since what a letter does there depends on the panel. */
-    fun panelKey(key: String) {
-        require(key in PANEL_KEYS) { "not a panel key: $key" }
-        val tmux = control ?: return
-        viewModelScope.launch {
-            try {
-                // The panel may have closed since it was drawn. A key meant for
-                // it would then reach Claude's prompt, where Tab and Esc have
-                // meanings of their own that can change the session's settings
-                // or open its rewind menu.
-                if (ScreenPanels.detect(tmux.query("capture-pane -p -J -t $paneId")) == null) {
-                    _uiState.update { it.copy(panel = null, notice = "The panel has closed, so nothing was sent") }
-                    return@launch
-                }
-                AttacheCli.key(tmux, paneId, key)
-                delay(250)
-                refreshPane(tmux)
-            } catch (e: Exception) {
-                if (e is CancellationException) currentCoroutineContext().ensureActive()
-                _uiState.update { it.copy(notice = "Not sent: ${e.message}") }
-            }
-        }
-    }
+    @Volatile private var lastScreen: ScreenReading? = null
 
-    private suspend fun refreshPane(tmux: TmuxControl) {
-        // This pane's agent, from attache-cli: which agent, what it is doing,
-        // and which transcript it is writing, read every refresh, since it is
-        // what says the agent waits on the person and the approval dock
-        // should not lag it.
-        val agent = AttacheCli.agents(tmux, paneId)?.firstOrNull()
+    private suspend fun onAgent(tmux: TmuxControl, agent: AgentPane?) {
         if (agent == null) {
             val stillThere = try {
                 tmux.query("display-message -p -t $paneId '#{pane_id}'").firstOrNull()?.trim() == paneId
@@ -513,49 +511,98 @@ class AgentChatViewModel @Inject constructor(
         if (transcriptPath.value == null && (agent == null || !followed)) {
             _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
         }
-        val status = currentStatus()
-        // No conversation to read for this agent: no reader for it yet
-        // (Codex), none started yet (a fresh agy), or its file could not be
-        // followed. Show its screen instead, so what it is doing and what it
-        // answered can be followed without leaving the chat. The visible
-        // screen only, with its colours; a few KB a refresh, and only while
-        // this page is open on such an agent. Claude keeps its own messages.
-        val noConversation = transcriptPath.value == null ||
-            (_uiState.value.transcript == TranscriptStatus.MISSING && _uiState.value.items.isEmpty())
-        val mirror = if (agent != null && agent.kind != "claude" && (!followed || noConversation)) {
-            tmux.query("capture-pane -p -e -J -t $paneId").dropLastWhile { it.replace(AnsiText.SEQUENCE, "").isBlank() }
-        } else {
-            null
-        }
-        val watchPanel = agent != null && agent.phase != AgentPhase.NEEDS_YOU && agent.phase != AgentPhase.WORKING &&
-            (_uiState.value.panel != null || System.currentTimeMillis() < panelWatchUntilMs)
-        val screen = when {
-            agent?.phase == AgentPhase.NEEDS_YOU || agent?.phase == AgentPhase.WORKING -> capture(tmux)
-
-            // The visible screen only: a panel is what is drawn now, and
-            // scrollback above it would read as part of it.
-            watchPanel -> tmux.query("capture-pane -p -J -t $paneId")
-
-            else -> null
-        }
-        val prompt = if (agent?.phase == AgentPhase.NEEDS_YOU) screen?.let(ApprovalPrompts::detect) else null
-        val activity = if (agent?.phase == AgentPhase.WORKING) screen?.let(AgentActivities::detect) else null
-        val panel = if (watchPanel) screen?.let(ScreenPanels::detect) else null
         _uiState.update { s ->
             s.copy(
                 agent = agent ?: s.agent,
                 agentExited = agent == null,
                 paneGone = false,
-                prompt = prompt,
-                activity = activity,
-                panel = panel,
-                status = status,
-                mirror = mirror,
+                status = currentStatus(),
+            )
+        }
+        lastScreen?.let(::onScreen)
+    }
+
+    /**
+     * What attache-cli read off the screen. The approval dock and the panel
+     * dock follow the agent's phase as before: a menu is answered only while
+     * Claude says it waits, and a panel is offered only while it neither
+     * waits nor works (the multi-question form stays with the terminal).
+     */
+    private fun onScreen(reading: ScreenReading) {
+        lastScreen = reading
+        _uiState.update { s ->
+            val phase = s.agent?.phase
+            s.copy(
+                prompt = if (phase == AgentPhase.NEEDS_YOU) reading.approval else null,
+                activity = if (phase == AgentPhase.WORKING) reading.activity else null,
+                panel = if (s.agent != null && phase != AgentPhase.NEEDS_YOU && phase != AgentPhase.WORKING) reading.panel else null,
             )
         }
     }
 
-    private suspend fun capture(tmux: TmuxControl): List<String> = tmux.query("capture-pane -p -J -t $paneId -S -40")
+    /**
+     * No conversation to read for this agent: no reader for it yet (Codex),
+     * none started yet (a fresh agy), or its file could not be followed. Its
+     * screen is shown instead, so what it is doing and what it answered can
+     * be followed without leaving the chat. The visible screen only, with
+     * its colours; a few KB a refresh, and only while this page is open on
+     * such an agent. Claude keeps its own messages. Read-only, so polled.
+     */
+    private suspend fun mirrorLoop(tmux: TmuxControl) {
+        while (true) {
+            val s = _uiState.value
+            val agent = s.agent
+            val followed = agent?.kind in FOLLOWED
+            val noConversation = transcriptPath.value == null ||
+                (s.transcript == TranscriptStatus.MISSING && s.items.isEmpty())
+            val mirror = try {
+                if (agent != null && !s.agentExited && agent.kind != "claude" && (!followed || noConversation)) {
+                    tmux.query("capture-pane -p -e -J -t $paneId").dropLastWhile { it.replace(AnsiText.SEQUENCE, "").isBlank() }
+                } else {
+                    null
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "mirror read failed")
+                s.mirror
+            }
+            if (mirror != s.mirror) _uiState.update { it.copy(mirror = mirror) }
+            delay(MIRROR_POLL_MS)
+        }
+    }
+
+    /** The keys a panel takes, and nothing else: the phone never types into
+     * one, since what a letter does there depends on the panel. */
+    fun panelKey(key: String) {
+        require(key in PANEL_KEYS) { "not a panel key: $key" }
+        val tmux = control ?: return
+        viewModelScope.launch {
+            try {
+                // The panel may have closed since it was drawn. A key meant for
+                // it would then reach Claude's prompt, where Tab and Esc have
+                // meanings of their own that can change the session's settings
+                // or open its rewind menu; the host checks it is still open
+                // right before pressing.
+                // Enter chooses whatever is selected, so it names the panel
+                // the person was looking at; the rest only move or close.
+                val shown = lastScreen?.panelFingerprint
+                val condition = if (key == "Enter") {
+                    shown?.let { "panel:$it" } ?: run {
+                        _uiState.update { it.copy(notice = "The panel is still being read, so nothing was sent") }
+                        return@launch
+                    }
+                } else {
+                    "panel"
+                }
+                val result = AttacheCli.key(tmux, paneId, key, condition)
+                if (!result.sent) _uiState.update { it.copy(panel = null, notice = AttacheCli.refusal(result.why)) }
+            } catch (e: Exception) {
+                if (e is CancellationException) currentCoroutineContext().ensureActive()
+                _uiState.update { it.copy(notice = "Not sent: ${e.message}") }
+            }
+        }
+    }
 
     private suspend fun follow(tmux: TmuxControl, path: String?) {
         if (path == null || !AttacheCli.isFollowablePath(path)) {
@@ -640,10 +687,9 @@ class AgentChatViewModel @Inject constructor(
 
     companion object {
         const val PANE_ARG = "pane"
-        private const val PANE_POLL_MS = 2_000L
+        private const val MIRROR_POLL_MS = 2_000L
+        private const val WATCH_RETRY_MS = 3_000L
         private const val CONFIRM_MS = 15_000L
-        private const val PANEL_WATCH_MS = 30_000L
-        private const val PANEL_POLL_MS = 1_000L
 
         /** The agents attache-cli reads conversations for. */
         private val FOLLOWED = setOf("claude", "agy")

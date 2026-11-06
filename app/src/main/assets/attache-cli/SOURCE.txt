@@ -1,1 +1,1 @@
-Built from XueshiQiao/Attache cli/ at 4d55afa by cli/build-all.sh; copy dist/* here to update, and bump version.txt with Cargo.toml.
+Built from XueshiQiao/Attache cli/ (0.2.0, on top of 4d55afa) by cli/build-all.sh; copy dist/* here to update (dist/version.txt comes with it).

@@ -22,6 +22,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -114,7 +115,7 @@ class AttacheCliTmuxTest {
     @Test
     fun itsOutputComesBackThroughTheBufferAndTheBufferGoes() = runBlocking {
         val out = AttacheCli.linesVia(q, cli.path, "version")!!
-        assertEquals(1, JSONObject(out.single()).getInt("protocol"))
+        assertEquals(2, JSONObject(out.single()).getInt("protocol"))
         assertTrue(query("list-buffers").none { it.startsWith("attache-cli-") })
         // Nothing printed is no rows, not a failure.
         assertEquals(emptyList<String>(), AttacheCli.linesVia(q, cli.path, "agents"))
@@ -137,12 +138,24 @@ class AttacheCliTmuxTest {
         assertEquals(AgentPhase.IDLE, AttacheCli.parseAgents(AttacheCli.linesVia(q, cli.path, "agents")!!)[0].phase)
     }
 
+    /** `cat` standing in for an agent, named `codex` so attache-cli knows it
+     * as one by name: a pane with no agent in it takes no message at all. */
+    private fun fakeAgent(): String {
+        val agent = File(home, "codex")
+        File("/bin/cat").copyTo(agent, overwrite = true)
+        agent.setExecutable(true)
+        // macOS kills a copied system binary on launch until it carries a
+        // signature of its own.
+        run(emptyMap(), "codesign", "-s", "-", "-f", agent.absolutePath)
+        return agent.absolutePath
+    }
+
     @Test
     fun aMessageTypedThroughItArrives() = runBlocking {
-        query("new-window -t probe cat")
+        query("new-window -t probe ${fakeAgent()}")
         val pane = query("display-message -p -t probe '#{pane_id}'").single().trim()
         val b64 = java.util.Base64.getEncoder().encodeToString("你好 # world".toByteArray())
-        assertTrue(AttacheCli.runVia(q, cli.path, "input $pane --text $b64 --enter"))
+        assertEquals(InputResult(true, null), AttacheCli.parseInput(AttacheCli.linesVia(q, cli.path, "input $pane --text $b64 --enter")))
         var screen = ""
         repeat(30) {
             screen = query("capture-pane -p -J -t $pane").joinToString("\n")
@@ -150,5 +163,15 @@ class AttacheCliTmuxTest {
             Thread.sleep(50)
         }
         error("not on screen:\n$screen")
+    }
+
+    @Test
+    fun aPaneWithNoAgentTakesNoMessage() = runBlocking {
+        query("new-window -t probe cat")
+        val pane = query("display-message -p -t probe '#{pane_id}'").single().trim()
+        val b64 = java.util.Base64.getEncoder().encodeToString("hello".toByteArray())
+        assertEquals(InputResult(false, "no_agent"), AttacheCli.parseInput(AttacheCli.linesVia(q, cli.path, "input $pane --text $b64 --enter")))
+        Thread.sleep(300)
+        assertFalse(query("capture-pane -p -J -t $pane").joinToString("\n").contains("hello"))
     }
 }

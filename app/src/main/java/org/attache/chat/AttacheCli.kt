@@ -37,6 +37,21 @@ import kotlin.random.Random
  * about 1.5 s on the owner's relayed 5G link. `follow` is long-lived and gets
  * an exec channel of its own.
  */
+/** What `input` did: sent, or why not. */
+data class InputResult(val sent: Boolean, val why: String?)
+
+/** What attache-cli read off a Claude pane; nothing at all on another agent. */
+data class ScreenReading(
+    /** Claude's input box is on screen. */
+    val prompt: Boolean,
+    val approval: ApprovalPrompt?,
+    val panel: List<String>?,
+    /** attache-cli's hash of [panel]: an Enter, the key that chooses, names
+     * it and is pressed only on that very panel. */
+    val panelFingerprint: String?,
+    val activity: AgentActivity?,
+)
+
 object AttacheCli {
     /**
      * Runs `attache-cli <args>` and returns what it printed; null when
@@ -100,19 +115,99 @@ object AttacheCli {
         if (ID.matches(kind) && ID.matches(conversation)) run(tmux, "seen $kind $conversation")
     }
 
-    /** Types [text] into [pane], then Enter: one message at a time per pane,
-     * whichever device sends it. */
-    suspend fun send(tmux: TmuxControl, pane: String, text: String): Boolean {
+    /**
+     * Types [text] into [pane], then Enter: one message at a time per pane,
+     * whichever device sends it. attache-cli sends it only if Claude's own
+     * input box is on screen with nothing over it, read again on the host
+     * just before typing.
+     */
+    suspend fun send(tmux: TmuxControl, pane: String, text: String): InputResult {
         require(PANE.matches(pane)) { "not a pane id" }
         val b64 = android.util.Base64.encodeToString(text.toByteArray(), android.util.Base64.NO_WRAP)
-        return run(tmux, "input $pane --text $b64 --enter")
+        return parseInput(lines(tmux, "input $pane --text $b64 --enter"))
     }
 
-    /** One of the keys a panel or an approval takes. */
-    suspend fun key(tmux: TmuxControl, pane: String, key: String): Boolean {
-        require(PANE.matches(pane) && KEY.matches(key)) { "not a pane or a key" }
-        return run(tmux, "input $pane --key $key")
+    /**
+     * Presses [key] in [pane], but only while [condition] holds on the host,
+     * checked holding the pane right before the key goes out: what the phone
+     * was shown is a request, not a permission. `approval:<fingerprint>` for
+     * a digit on that very menu, `panel` for a panel's arrows, Tab and Esc,
+     * `panel:<fingerprint>` for those and Enter on that very panel, and
+     * `working` for the Esc that stops a turn. A key that lands elsewhere can cost the
+     * session its prompt cache (an Esc on the idle prompt is half of the two
+     * that open the rewind menu, a Tab turns thinking on or off).
+     */
+    suspend fun key(tmux: TmuxControl, pane: String, key: String, condition: String): InputResult {
+        require(PANE.matches(pane) && KEY.matches(key) && CONDITION.matches(condition)) { "not a pane, a key or a condition" }
+        return parseInput(lines(tmux, "input $pane --key $key --if $condition"))
     }
+
+    /** What `input` printed; a host that printed nothing (attache-cli
+     * missing, or one from before protocol 2) sent nothing either. */
+    fun parseInput(lines: List<String>?): InputResult {
+        val o = lines?.lastOrNull()?.let {
+            try {
+                JSONObject(it)
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return InputResult(false, "unreachable")
+        return InputResult(o.optBoolean("sent"), o.optStringOrNull("why"))
+    }
+
+    /** The shell command that keeps this host's agents (or [pane]'s agent
+     * and screen) coming over an exec channel. */
+    fun watchCommand(cli: String, pane: String? = null): String {
+        require(pane == null || PANE.matches(pane)) { "not a pane id" }
+        return "${shell(cli)} agents --watch" + (pane?.let { " --pane $it" } ?: "")
+    }
+
+    /** The agents in a `watch` event, as [parseAgents] reads `agents`. */
+    fun agentsEvent(o: JSONObject): List<AgentPane> {
+        val a = o.optJSONArray("agents") ?: JSONArray()
+        return parseAgents((0 until a.length()).mapNotNull { a.optJSONObject(it)?.toString() })
+    }
+
+    /** What attache-cli read off the pane's screen (`screen`, or a watch's
+     * `screen` event). */
+    fun screen(o: JSONObject): ScreenReading {
+        val approval = o.optJSONObject("approval")?.let { a ->
+            val opts = a.optJSONArray("options") ?: JSONArray()
+            val subject = a.optJSONArray("subject") ?: JSONArray()
+            ApprovalPrompt(
+                subject = (0 until subject.length()).map { subject.optString(it) },
+                question = a.optString("question"),
+                options = (0 until opts.length()).mapNotNull { i ->
+                    val opt = opts.optJSONObject(i) ?: return@mapNotNull null
+                    ApprovalPrompt.Option(opt.optInt("number"), opt.optString("label"), opt.optStringOrNull("risk"))
+                },
+                fingerprint = a.optString("fingerprint"),
+            ).takeIf { it.options.isNotEmpty() && FINGERPRINT.matches(it.fingerprint) }
+        }
+        val panel = o.optJSONArray("panel")?.let { p -> (0 until p.length()).map { p.optString(it) } }
+        val activity = o.optJSONObject("activity")?.let { AgentActivity(it.optString("verb"), it.optStringOrNull("detail")) }
+        val panelFingerprint = o.optStringOrNull("panel_fingerprint")?.takeIf { FINGERPRINT.matches(it) }
+        return ScreenReading(o.optBoolean("prompt"), approval, panel, panelFingerprint, activity)
+    }
+
+    /** Why attache-cli did not send, in words for a notice. */
+    fun refusal(why: String?): String = when (why) {
+        "question" -> "Answer the question first"
+        "panel" -> "Close the panel first"
+        "no_prompt" -> "Claude's input box is not on screen"
+        "no_agent" -> "No agent runs in this pane"
+        "enter_withheld" -> "Something came up on screen as it was typed, so it was not sent; the text is in the box"
+        "panel_changed" -> "The panel changed"
+        "question_gone" -> "The question was answered already"
+        "question_changed" -> "The question changed"
+        "no_such_option" -> "That answer is not on the menu"
+        "panel_closed" -> "The panel has closed"
+        "not_working" -> "It has already stopped"
+        "not_claude" -> "Only Claude's screen can be answered from here"
+        "busy" -> "Another device is typing into this pane"
+        "unreachable" -> "attache-cli did not answer"
+        else -> "tmux did not take it"
+    }.let { if (why == "enter_withheld") it else "$it, so nothing was sent" }
 
     /** The shell command that follows a conversation over an exec channel. */
     fun followCommand(cli: String, kind: String, transcript: String, before: Long? = null): String {
@@ -216,7 +311,9 @@ object AttacheCli {
 
     private val PANE = Regex("^%\\d+$")
     private val ID = Regex("^[A-Za-z0-9_-]{1,128}$")
-    private val KEY = Regex("^(Enter|Escape|Up|Down|Left|Right|Tab|BSpace|[1-8])$")
+    private val KEY = Regex("^(Enter|Escape|Up|Down|Left|Right|Tab|[1-8])$")
+    private val FINGERPRINT = Regex("^[0-9a-f]{16}$")
+    private val CONDITION = Regex("^(approval:[0-9a-f]{16}|panel(:[0-9a-f]{16})?|working)$")
 
     /** Single-quoted for sh. */
     private fun shell(s: String) = "'" + s.replace("'", "'\\''") + "'"
