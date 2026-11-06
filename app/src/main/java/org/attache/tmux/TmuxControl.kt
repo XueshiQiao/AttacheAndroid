@@ -1,3 +1,20 @@
+/*
+ * ConnectBot: simple, powerful, open-source SSH client for Android
+ * Copyright 2026 Kenny Root
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.attache.tmux
 
 import android.content.ComponentName
@@ -74,8 +91,7 @@ object TmuxTrial {
     private const val ORPHAN_REAP =
         "ps -eo pid=,ppid=,command= 2>/dev/null | awk '\$2 == 1 && /tmux.*-C/ && !/attache-mobile-test/ { print \$1 }' | xargs kill -9 2>/dev/null || true"
 
-    fun controlCommand(t: Target) =
-        "export $PATH_SETUP; $ORPHAN_REAP; exec tmux -u ${t.socketArg}-C new-session -A -s '${t.session}'"
+    fun controlCommand(t: Target) = "export $PATH_SETUP; $ORPHAN_REAP; exec tmux -u ${t.socketArg}-C new-session -A -s '${t.session}'"
 
     fun attachCommand(t: Target) = "export $PATH_SETUP; exec tmux ${t.socketArg}new-session -A -s '${t.session}'"
 }
@@ -253,6 +269,7 @@ class TmuxControl(
     val state: StateFlow<TmuxState> = _state.asStateFlow()
 
     private val _incomingPushFiles = MutableSharedFlow<String>(extraBufferCapacity = 32)
+
     /** Remote file paths pushed from the computer via `attache-send <file>`. */
     val incomingPushFiles: SharedFlow<String> = _incomingPushFiles.asSharedFlow()
 
@@ -264,8 +281,9 @@ class TmuxControl(
 
     @Volatile private var currentDownloadJob: Job? = null
     private val downloadQueue = Channel<String>(Channel.UNLIMITED)
-    private val activeOrQueuedPaths = java.util.Collections.synchronizedSet( linkedSetOf<String>() )
+    private val activeOrQueuedPaths = java.util.Collections.synchronizedSet(linkedSetOf<String>())
     private val pendingPushTokensByPath = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     @Volatile private var lastHandledPushToken: String =
         appContext?.let { AttacheFileStorage.getLastHandledPushToken(it) }.orEmpty()
     private val handledPushTokens = java.util.Collections.synchronizedSet(
@@ -282,6 +300,7 @@ class TmuxControl(
     private val scrollRequests = Channel<ScrollRequest>(Channel.UNLIMITED)
     private val startNanos = System.nanoTime()
     private fun nowMs(): Long = (System.nanoTime() - startNanos) / 1_000_000L
+
     @Volatile private var lastScrollActivityAtMs = -SCROLL_REFRESH_DEBOUNCE_MS
 
     private val sendLock = Mutex()
@@ -290,6 +309,9 @@ class TmuxControl(
      * before close drains the queue, or refused. */
     private val pending = ArrayDeque<CompletableDeferred<List<String>>>()
     private var closed = false
+
+    /** Whether this channel has ended; a new one replaces it on reconnect. */
+    val isClosed: Boolean get() = synchronized(pending) { closed }
 
     private val refreshRequests = Channel<Unit>(Channel.CONFLATED)
     private val jobs = mutableListOf<Job>()
@@ -488,8 +510,7 @@ class TmuxControl(
         refresh()
     }
 
-    private fun shSingleQuote(value: String): String =
-        "'" + value.replace("'", "'\\''") + "'"
+    private fun shSingleQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     suspend fun newWindow() {
         val session = _state.value.sessionId ?: return
@@ -555,7 +576,7 @@ class TmuxControl(
         val pane = _state.value.activePane?.id
         val targetArg = if (pane != null && PANE_ID.matches(pane)) "-t $pane " else ""
         val path = try {
-            send("display-message -p ${targetArg}'#{pane_current_path}'").firstOrNull()?.trim().orEmpty()
+            send("display-message -p $targetArg'#{pane_current_path}'").firstOrNull()?.trim().orEmpty()
         } catch (_: Exception) {
             ""
         }
@@ -688,7 +709,7 @@ class TmuxControl(
         val script = """
             RAW_BIN=$quotedBinDir
             case "${d}RAW_BIN" in
-              "~"*) BIN_DIR="${d}HOME${d}{RAW_BIN#\~}" ;;
+              "~"*) BIN_DIR="${d}HOME$d{RAW_BIN#\~}" ;;
               *) BIN_DIR="${d}RAW_BIN" ;;
             esac
             mkdir -p "${d}BIN_DIR" "${d}HOME/.local/share/attache" || exit 1
@@ -702,9 +723,9 @@ class TmuxControl(
             export PATH=/opt/homebrew/bin:/usr/local/bin:${d}PATH
             mkdir -p "${d}HOME/.local/share/attache"
             LAST_ABS=""
-            for ARG in "${d}@"; do
-              DIR=${d}(cd "${d}(dirname "${d}ARG")" 2>/dev/null && pwd)
-              ABS="${d}DIR/${d}(basename "${d}ARG")"
+            for ARG in "$d@"; do
+              DIR=$d(cd "$d(dirname "${d}ARG")" 2>/dev/null && pwd)
+              ABS="${d}DIR/$d(basename "${d}ARG")"
               if [ ! -f "${d}ABS" ]; then
                 echo "attache-send: file not found: ${d}ARG" >&2
                 exit 1
@@ -713,10 +734,10 @@ class TmuxControl(
               LAST_ABS="${d}ABS"
               echo "Queued for Attaché mobile inbox: ${d}ABS"
             done
-            TOKEN="${d}(date +%s)-${d}${d}:${d}LAST_ABS"
+            TOKEN="$d(date +%s)-${d}$d:${d}LAST_ABS"
             tmux set -g @attache_push "${d}TOKEN" 2>/dev/null || true
-            for S in ${d}(tmux list-sessions -F '#S' 2>/dev/null); do
-              W=${d}(tmux display-message -p -t "${d}S" '#W' 2>/dev/null)
+            for S in $d(tmux list-sessions -F '#S' 2>/dev/null); do
+              W=$d(tmux display-message -p -t "${d}S" '#W' 2>/dev/null)
               tmux rename-window -t "${d}S" "${d}W" 2>/dev/null || true
             done
             EOF
@@ -725,7 +746,7 @@ class TmuxControl(
             tmux set-environment -g PATH "${d}BIN_DIR:/opt/homebrew/bin:/usr/local/bin:${d}PATH" 2>/dev/null || true
             if [ "$syncFlag" = "1" ]; then
               for RFILE in "${d}HOME/.claude/CLAUDE.md" "${d}HOME/.gemini/GEMINI.md"; do
-                RDIR=${d}(dirname "${d}RFILE")
+                RDIR=$d(dirname "${d}RFILE")
                 mkdir -p "${d}RDIR" 2>/dev/null || true
                 if [ ! -f "${d}RFILE" ] || ! grep -q "attache-send" "${d}RFILE" 2>/dev/null; then
                   printf '\n## 向手机 / Pad 发送文件 (Attaché File Transfer)\n- 当用户要求「把这个文件发给我」「传到我手机上」「发到 Pad 上」「把 APK / 视频 / 图片发给我」时，直接运行：\n  `%s/attache-send "<文件绝对路径>"`\n- 该命令会通过 tmux 触发用户的 Attaché 移动端自动将文件流式下载到手机/Pad 的公共收件箱目录。\n' "${d}BIN_DIR" >> "${d}RFILE"
@@ -752,7 +773,7 @@ class TmuxControl(
                 """
                 Q="${d}HOME/.local/share/attache/outbox.queue"
                 if [ -s "${d}Q" ]; then
-                  mv "${d}Q" "${d}Q.draining.${d}${d}" 2>/dev/null && cat "${d}Q.draining.${d}${d}" && rm -f "${d}Q.draining.${d}${d}"
+                  mv "${d}Q" "${d}Q.draining.${d}$d" 2>/dev/null && cat "${d}Q.draining.${d}$d" && rm -f "${d}Q.draining.${d}$d"
                 fi
                 """.trimIndent(),
             )
@@ -956,15 +977,18 @@ class TmuxControl(
                         updatePaneFlags(paneId, inMode = false)
                     }
                 }
+
                 pane.mouseAnyFlag -> {
                     val ticks = if (!wasMouseAny) (n / 3).coerceAtLeast(1) else n
                     send("send-keys -H -N $ticks -t $paneId ${wheelBytes(up, column, row, sgr = pane.mouseSgrFlag)}")
                     if (isNewGesture) refreshRequests.trySend(Unit)
                 }
+
                 pane.alternateOn -> {
                     send("send-keys -N $n -t $paneId ${if (up) "Up" else "Down"}")
                     if (isNewGesture) refreshRequests.trySend(Unit)
                 }
+
                 up -> {
                     updatePaneFlags(paneId, inMode = true)
                     send("copy-mode -e -t $paneId")
@@ -987,8 +1011,14 @@ class TmuxControl(
         val one = if (sgr) {
             "\u001b[<$button;$column;${row}M".toByteArray()
         } else {
-            byteArrayOf(0x1b, '['.code.toByte(), 'M'.code.toByte(), (32 + button).toByte(),
-                (32 + column.coerceAtMost(223)).toByte(), (32 + row.coerceAtMost(223)).toByte())
+            byteArrayOf(
+                0x1b,
+                '['.code.toByte(),
+                'M'.code.toByte(),
+                (32 + button).toByte(),
+                (32 + column.coerceAtMost(223)).toByte(),
+                (32 + row.coerceAtMost(223)).toByte(),
+            )
         }
         return one.joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
     }
@@ -1317,7 +1347,9 @@ class TmuxControl(
                         blockGuard = text.removePrefix("%begin ")
                         blockIsOurs = blockGuard.split(' ').getOrNull(2) == "1"
                     }
+
                     REFRESH_ON.any { text.startsWith(it) } -> refreshRequests.trySend(Unit)
+
                     text.startsWith("%exit") -> Timber.i("tmux -C exited: %s", text)
                 }
             }

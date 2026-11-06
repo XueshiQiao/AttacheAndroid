@@ -190,45 +190,29 @@ class AgentChatViewModel @Inject constructor(
         return AgentStatusMerge.merge(payloadStatus, files)
     }
 
-    // The conversation being followed, and the file offset its earliest
-    // line starts at. Touched on [transcriptLane] only.
-    private var liveTranscript: AgentTranscript? = null
+    // The conversation shown, kept by [Conversations] beyond this page.
+    @Volatile private var liveConversation: LiveConversation? = null
 
     @Volatile private var livePath: String? = null
-    private var historyStart: Long? = null
 
     /** The conversation before a `/clear`, kept above the new one with a
      * divider, since the new file starts empty and the person just watched
      * the old one. */
     @Volatile private var carryOver: List<ChatItem> = emptyList()
 
-    // TEMPORARY (measurement build): how long opening a conversation takes,
-    // step by step, shown once as a notice. Times are from the page opening.
-    private class OpenTiming {
-        val start = System.nanoTime()
-        var control = 0L
-        var pane = 0L
-        var sessions = 0L
-        var channel = 0L
-        var header = 0L
-        var lastChunk = 0L
-        var bytes = 0L
-        var lines = 0
-        var parseNs = 0L
-        fun now() = (System.nanoTime() - start) / 1_000_000
-    }
+    // TEMPORARY (measurement build): how long until the conversation was
+    // on screen, and whether it came from memory, shown once as a notice.
+    private val openedAt = System.nanoTime()
 
-    @Volatile private var openTiming: OpenTiming? = OpenTiming()
+    @Volatile private var openReported = false
+
+    @Volatile private var openFromMemory = false
 
     /** After a slash command the screen is watched for a panel for a while,
      * since a panel changes nothing tmux or the transcript would report. */
     @Volatile private var panelWatchUntilMs = 0L
     private var lastSlash: String? = null
     private var lastSlashAtMs = 0L
-
-    /** Parsing a megabyte of JSON is not for the main thread, and the
-     * transcript is not thread-safe: one lane for all of it. */
-    private val transcriptLane = dispatchers.default.limitedParallelism(1)
 
     init {
         RecentAgents.visit(hostId, paneId)
@@ -252,7 +236,6 @@ class AgentChatViewModel @Inject constructor(
             link.control.collectLatest { tmux ->
                 control = tmux
                 if (tmux == null) return@collectLatest
-                openTiming?.let { if (it.control == 0L) it.control = it.now() }
                 coroutineScope {
                     launch { watchPane(tmux) }
                     launch { transcriptPath.collectLatest { path -> follow(tmux, path) } }
@@ -546,7 +529,6 @@ class AgentChatViewModel @Inject constructor(
             _uiState.update { it.copy(paneGone = true, prompt = null) }
             return
         }
-        openTiming?.let { if (it.pane == 0L) it.pane = it.now() }
         val mine = rows.firstOrNull { it.startsWith(paneId + AgentPanes.SEP) }
         if (mine == null) {
             _uiState.update { it.copy(paneGone = true, prompt = null) }
@@ -559,7 +541,6 @@ class AgentChatViewModel @Inject constructor(
         val provider = parsed?.let { AgentProviders.forKind(it.kind) }
         // This pane's agent only, and only this pane of it.
         val ownSessions = provider?.let { readSessions(tmux, listOf(it), paneId) }.orEmpty()
-        openTiming?.let { if (it.sessions == 0L) it.sessions = it.now() }
         val agent = parsed?.let { AgentPanes.merge(listOf(it), ownSessions).first() }
         val session = ownSessions.firstOrNull { it.paneId == paneId }
         session?.transcriptPath?.let {
@@ -659,52 +640,15 @@ class AgentChatViewModel @Inject constructor(
         } else {
             emptyList()
         }
-        while (true) {
-            _uiState.update { it.copy(transcript = TranscriptStatus.LOADING, items = carryOver, earlierNotLoaded = false) }
-            withContext(transcriptLane) {
-                val transcript = ((transcriptKind ?: _uiState.value.agent?.kind)?.let(AgentProviders::forKind) ?: ClaudeProvider).transcriptReader()
-                    ?: return@withContext
-                val splitter = LineSplitter()
-                liveTranscript = transcript
-                livePath = path
-                historyStart = null
-                var publishJob: Job? = null
-                coroutineScope {
-                    openTiming?.let { if (it.channel == 0L) it.channel = it.now() }
-                    val ok = tmux.follow(TranscriptFollower.command(path)) { chunk ->
-                        val timing = openTiming
-                        if (timing != null) {
-                            timing.bytes += chunk.size
-                            timing.lastChunk = timing.now()
-                        }
-                        val lines = splitter.feed(chunk)
-                        if (lines.isEmpty() && splitter.startOffset == null) return@follow
-                        if (timing != null && timing.header == 0L) timing.header = timing.now()
-                        if (historyStart == null) historyStart = splitter.startOffset
-                        val parseStart = System.nanoTime()
-                        lines.forEach(transcript::accept)
-                        if (timing != null) {
-                            timing.parseNs += System.nanoTime() - parseStart
-                            timing.lines += lines.size
-                        }
-                        // Coalesced: an agent mid-turn appends several times
-                        // a second, and the list need not redraw for each.
-                        publishJob?.cancel()
-                        publishJob = launch {
-                            delay(PUBLISH_DELAY_MS)
-                            publish(transcript)
-                        }
-                    }
-                    publishJob?.join()
-                    if (!ok || splitter.startOffset == null) {
-                        _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
-                    }
-                }
-            }
-            // The command ended: the file went away, or the channel did.
-            // Either way try again shortly; a new path cancels this loop.
-            delay(RETRY_MS)
-        }
+        livePath = path
+        val provider = (transcriptKind ?: _uiState.value.agent?.kind)?.let(AgentProviders::forKind) ?: ClaudeProvider
+        if (provider.transcriptReader() == null) return
+        val conversation = Conversations.get(hostId, path, provider.kind, dispatchers.default)
+        liveConversation = conversation
+        if (!openReported && conversation.view.value.items.isNotEmpty()) openFromMemory = true
+        conversation.follow(tmux)
+        // Until a new path or a new channel replaces this one.
+        conversation.view.collect(::publish)
     }
 
     /**
@@ -713,27 +657,12 @@ class AgentChatViewModel @Inject constructor(
      */
     fun loadEarlier() {
         val tmux = control ?: return
+        val conversation = liveConversation ?: return
         if (_uiState.value.loadingEarlier) return
         _uiState.update { it.copy(loadingEarlier = true) }
-        viewModelScope.launch(transcriptLane) {
+        viewModelScope.launch {
             try {
-                val transcript = liveTranscript ?: return@launch
-                val path = livePath ?: return@launch
-                val end = historyStart?.takeIf { it > 0 } ?: return@launch
-                // At least one line always comes back, so each load gets
-                // further up however long the records are.
-                val text = tmux.run(TranscriptFollower.earlierCommand(path, end))
-                val start = text?.substringBefore('\n')?.removePrefix(TranscriptFollower.HEADER)?.trim()?.toLongOrNull()
-                if (text == null || start == null) {
-                    _uiState.update { it.copy(notice = "Could not load earlier messages") }
-                    return@launch
-                }
-                // The file was followed anew while this was in flight.
-                if (transcript !== liveTranscript) return@launch
-                val lines = text.substringAfter('\n', "").split('\n').filter { it.isNotBlank() }
-                transcript.prepend(lines)
-                historyStart = minOf(start, end)
-                publish(transcript)
+                if (!conversation.loadEarlier(tmux)) _uiState.update { it.copy(notice = "Could not load earlier messages") }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _uiState.update { it.copy(notice = "Could not load earlier messages") }
@@ -743,25 +672,24 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
-    private fun publish(transcript: AgentTranscript) {
-        val items = carryOver + transcript.snapshot
-        openTiming?.let { t ->
-            openTiming = null
-            _uiState.update {
-                it.copy(
-                    notice = "Open ms: link ${t.control} · pane ${t.pane} · sessions ${t.sessions} · channel ${t.channel} · " +
-                        "first byte ${t.header} · last byte ${t.lastChunk} (${t.bytes / 1000} KB, ${t.lines} lines) · " +
-                        "parse ${t.parseNs / 1_000_000} · shown ${t.now()}",
-                )
-            }
+    private fun publish(view: ConversationView) {
+        if (view.items.isEmpty() && view.state != TranscriptStatus.LIVE) {
+            _uiState.update { it.copy(transcript = view.state, items = carryOver, earlierNotLoaded = false) }
+            return
         }
-        transcriptStatus = transcript.status
+        val items = carryOver + view.items
+        if (!openReported) {
+            openReported = true
+            val ms = (System.nanoTime() - openedAt) / 1_000_000
+            _uiState.update { it.copy(notice = "Open ms: shown $ms · ${if (openFromMemory) "from memory" else "read from the Mac"}") }
+        }
+        transcriptStatus = view.status
         val status = currentStatus()
         _uiState.update { s ->
             s.copy(
                 items = items,
-                transcript = TranscriptStatus.LIVE,
-                earlierNotLoaded = (historyStart ?: 0L) > 0L,
+                transcript = view.state,
+                earlierNotLoaded = (view.historyStart ?: 0L) > 0L,
                 // A sent message is confirmed once the agent has written it
                 // down; until then its bubble stays marked as unconfirmed.
                 pending = s.pending.filterNot { PendingMessages.confirmed(it, items) },
@@ -781,8 +709,6 @@ class AgentChatViewModel @Inject constructor(
     companion object {
         const val PANE_ARG = "pane"
         private const val PANE_POLL_MS = 2_000L
-        private const val PUBLISH_DELAY_MS = 120L
-        private const val RETRY_MS = 3_000L
         private const val CONFIRM_MS = 15_000L
         private const val PANEL_WATCH_MS = 30_000L
         private const val PANEL_POLL_MS = 1_000L
