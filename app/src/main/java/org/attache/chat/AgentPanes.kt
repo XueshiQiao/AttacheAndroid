@@ -42,79 +42,15 @@ data class AgentPane(
     /** From the agent's own report, when it gave one. */
     val transcriptPath: String? = null,
     val model: String? = null,
+    /** The conversation's id: Claude's session, agy's conversation. */
+    val conversation: String? = null,
 )
 
-/**
- * Reads agents out of `list-panes -a`. Nothing here is authored by the phone:
- * `@agent_state`, `@agent_kind` and `@agent_at` are pane options the desktop
- * app's hook (`attache-agent-hub`) writes from Claude Code's and Codex's own
- * hook events, so the phone, the desktop rail and a plain `tmux attach` all
- * read the same value.
- */
+/** How the list names a pane: by the task Claude titled it with, or by its
+ * window when the title says nothing about the work. */
 object AgentPanes {
-    const val SEP = "\u0001"
-    private const val FIELDS = 10
-
-    /** Quoted for tmux's command parser; ids and options only, no user text. */
-    val FORMAT =
-        "'#{pane_id}$SEP#{session_name}$SEP#{window_id}$SEP#{window_name}$SEP" +
-            "#{pane_current_path}$SEP#{@agent_kind}$SEP#{@agent_state}$SEP#{@agent_at}$SEP" +
-            "#{pane_current_command}$SEP#{pane_title}'"
-
-    val LIST_COMMAND = "list-panes -a -F $FORMAT"
-
-    private val PANE_ID = Regex("^%\\d+$")
-    private val WINDOW_ID = Regex("^@\\d+$")
-
-    // Claude Code's process names itself after its version, so
-    // `pane_current_command` reads `2.1.220` rather than `claude`.
-    private val VERSION_COMMAND = Regex("^\\d+\\.\\d+\\.\\d+$")
-    private val SHELLS = setOf("zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh", "login")
-
-    /** The agent a running command is, or null. */
-    private fun agentOfCommand(command: String): String? = AgentProviders.forCommand(command)?.kind
-
     // Claude Code prefixes the terminal title with a spinner or a marker glyph.
     private val TITLE_GLYPHS = Regex("^[\\u2800-\\u28FF\\u25D0-\\u25D3\\u2722\\u2731\\u2733\\u273B\\u273D\\u00B7*]+\\s*")
-
-    fun parse(lines: List<String>): List<AgentPane> = lines.mapNotNull(::parseLine)
-        .sortedWith(compareBy<AgentPane>({ it.phase.ordinal }, { -(it.sinceEpochSec ?: 0L) }))
-
-    private fun parseLine(line: String): AgentPane? {
-        val f = line.split(SEP, limit = FIELDS)
-        if (f.size != FIELDS || !PANE_ID.matches(f[0]) || !WINDOW_ID.matches(f[2])) return null
-        val optionKind = f[5].trim()
-        val command = f[8].trim()
-        // `@agent_state` outlives a `^C` exit, so a pane back at its shell
-        // prompt still carries `@agent_kind=claude`: the running command is
-        // the liveness check, and the option alone is not.
-        if (command in SHELLS) return null
-        val running = agentOfCommand(command)
-        if (running == null && optionKind.isEmpty()) return null
-        // Seen on this machine: `@agent_kind=claude @agent_state=working` left
-        // on a pane that has since started Grok Build. A known agent other
-        // than the option's means the option belongs to the one before.
-        val stale = running != null && optionKind.isNotEmpty() && agentOfCommand(optionKind) != null &&
-            agentOfCommand(optionKind) != running
-        return AgentPane(
-            paneId = f[0],
-            sessionName = f[1],
-            windowId = f[2],
-            windowName = f[3],
-            path = f[4],
-            kind = if (stale || optionKind.isEmpty()) running.orEmpty() else optionKind,
-            phase = if (stale) AgentPhase.IDLE else phaseOf(f[6].trim()),
-            sinceEpochSec = if (stale) null else f[7].trim().toLongOrNull(),
-            title = cleanTitle(f[9], command = command, fallback = f[3]),
-        )
-    }
-
-    private fun phaseOf(state: String): AgentPhase = when (state) {
-        "needs-input" -> AgentPhase.NEEDS_YOU
-        "working" -> AgentPhase.WORKING
-        "done" -> AgentPhase.DONE
-        else -> AgentPhase.IDLE
-    }
 
     // A shell's own title, `joey@Xueshis-MacBook-Pro:~/Code/Attache`.
     private val USER_AT_HOST = Regex("^[^\\s@]+@[^\\s:]+:")
@@ -122,38 +58,12 @@ object AgentPanes {
     /** Claude Code titles the pane after the task; anything else titles it
      * with the host, `user@host:path` or its own command line, none of which
      * names the work, so the window name stands in. */
-    private fun cleanTitle(raw: String, command: String, fallback: String): String {
+    fun cleanTitle(raw: String, command: String, fallback: String): String {
         val t = raw.replace(TITLE_GLYPHS, "").trim()
         val meaningless = t.isEmpty() || t == "Claude Code" || t.endsWith(".local") ||
             USER_AT_HOST.containsMatchIn(t) || t == command || t.startsWith("$command ")
         return if (meaningless) fallback else t
     }
-
-    /**
-     * Lays what agents report for themselves over what tmux options say.
-     * An agent's own word wins: it is what needs nothing installed on the
-     * host. The options stay as detail, here to tell a finished turn
-     * (`done`) from a session that was never used, which the agents' own
-     * files do not separate.
-     */
-    fun merge(panes: List<AgentPane>, sessions: List<AgentSession>): List<AgentPane> = panes.map { pane ->
-        val own = sessions.firstOrNull { s ->
-            s.paneId == pane.paneId && s.kind == pane.kind &&
-                (s.sessionName == null || s.sessionName == pane.sessionName) &&
-                (s.windowId == null || s.windowId == pane.windowId)
-        } ?: return@map pane
-        val phase = when {
-            own.phase == AgentPhase.IDLE && pane.phase == AgentPhase.DONE -> AgentPhase.DONE
-            own.phase != null -> own.phase
-            else -> pane.phase
-        }
-        pane.copy(
-            phase = phase,
-            sinceEpochSec = own.sinceEpochSec ?: pane.sinceEpochSec,
-            transcriptPath = own.transcriptPath,
-            model = own.model,
-        )
-    }.sortedWith(compareBy<AgentPane>({ it.phase.ordinal }, { -(it.sinceEpochSec ?: 0L) }))
 }
 
 /**

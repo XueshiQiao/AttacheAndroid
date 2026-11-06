@@ -134,6 +134,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -212,6 +213,11 @@ fun AgentChatScreen(
     // The other agents, a swipe from the left edge or a tap on the title
     // away, as the terminal mode's sidebar is: switching should not mean
     // going back to the list first.
+    // Only a page in front of the person counts as seeing what the agent did.
+    LifecycleResumeEffect(viewModel) {
+        viewModel.setOnScreen(true)
+        onPauseOrDispose { viewModel.setOnScreen(false) }
+    }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
     LaunchedEffect(drawer.targetValue) {

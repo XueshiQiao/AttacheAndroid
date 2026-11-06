@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.connectbot.sshlib.SshSession
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
@@ -313,6 +314,23 @@ class TmuxControl(
     /** Whether this channel has ended; a new one replaces it on reconnect. */
     val isClosed: Boolean get() = synchronized(pending) { closed }
 
+    /** attache-cli's absolute path on the host once it is installed and
+     * current, or null when it could not be. */
+    private val cliPath = CompletableDeferred<String?>()
+
+    /**
+     * The path of attache-cli on the host, the program the chat mode reads
+     * agents through, waiting for the install that runs on connect; null when
+     * it could not be installed (no build for the host, or the upload failed).
+     */
+    suspend fun cli(): String? = withTimeoutOrNull(CLI_WAIT_MS) { cliPath.await() }
+
+    /** Says where attache-cli is, once: the install on connect does, and a
+     * test standing in for it. */
+    internal fun cliInstalled(path: String?) {
+        cliPath.complete(path)
+    }
+
     private val refreshRequests = Channel<Unit>(Channel.CONFLATED)
     private val jobs = mutableListOf<Job>()
 
@@ -356,6 +374,15 @@ class TmuxControl(
             jobs += scope.launch {
                 val binDir = appContext?.let { AttacheFileStorage.getRemoteBinDir(it) } ?: "~/.local/bin"
                 val autoSyncRules = appContext?.let { AttacheFileStorage.isAutoSyncAgentRulesEnabled(it) } ?: true
+                cliInstalled(
+                    try {
+                        installAttacheCli(binDir)
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        Timber.w(e, "attache-cli install failed")
+                        null
+                    },
+                )
                 installRemoteSendHelper(binDir, autoSyncRules)
                 handleRemotePushIfAny()
             }
@@ -442,6 +469,7 @@ class TmuxControl(
     }
 
     fun close() {
+        cliPath.complete(null)
         val waiting = synchronized(pending) {
             if (closed) return
             closed = true
@@ -693,6 +721,51 @@ class TmuxControl(
     }
 
     /**
+     * Installs attache-cli into [remoteBinDir] when the host has none, or an
+     * older one than this app carries (never a newer one: the desktop app or
+     * another phone may have put that there), and puts it into the agents'
+     * configs (`attache-cli setup`). Returns its absolute path.
+     *
+     * The binary goes up as a file in /tmp and is moved into place by rename,
+     * so an agent running it (its status line does, every few seconds) never
+     * finds half a binary.
+     */
+    private suspend fun installAttacheCli(remoteBinDir: String): String? {
+        val context = appContext ?: return null
+        val bundled = AttacheCliBundle.version(context) ?: return null
+        val d = "$"
+        val quotedBinDir = "'" + remoteBinDir.trim().ifBlank { "~/.local/bin" }.replace("'", "'\"'\"'") + "'"
+        val resolve = "RAW_BIN=$quotedBinDir; case \"${d}RAW_BIN\" in \"~\"*) BIN_DIR=\"${d}HOME$d{RAW_BIN#\\~}\" ;; *) BIN_DIR=\"${d}RAW_BIN\" ;; esac; "
+        val probe = exec(
+            resolve + "printf 'BIN:%s\\n' \"${d}BIN_DIR\"; printf 'OS:%s\\n' \"$d(uname -s)\"; printf 'ARCH:%s\\n' \"$d(uname -m)\"; " +
+                "printf 'HAVE:%s\\n' \"$d(\"${d}BIN_DIR/attache-cli\" version 2>/dev/null)\"",
+        ) ?: return null
+        fun field(name: String) = probe.lineSequence().firstOrNull { it.startsWith("$name:") }?.substringAfter(':')?.trim().orEmpty()
+        val binDir = field("BIN").takeIf { it.startsWith("/") } ?: return null
+        val path = "$binDir/attache-cli"
+        val installed = try {
+            org.json.JSONObject(field("HAVE")).optString("version").ifEmpty { null }
+        } catch (_: Exception) {
+            null
+        }
+        if (installed == null || AttacheCliBundle.older(installed, bundled)) {
+            val build = AttacheCliBundle.buildFor(field("OS"), field("ARCH")) ?: return null
+            val bytes = AttacheCliBundle.binary(context, build) ?: return null
+            val uploaded = upload(bytes, "bin") { _, _ -> } ?: return null
+            val q = { p: String -> "'" + p.replace("'", "'\"'\"'") + "'" }
+            val moved = exec(
+                "mkdir -p ${q(binDir)} && mv -f ${q(uploaded)} ${q("$path.new")} && chmod 755 ${q("$path.new")} && " +
+                    "mv -f ${q("$path.new")} ${q(path)} && ${q(path)} version",
+            )
+            if (moved?.contains("\"protocol\"") != true) return null
+            Timber.i("attache-cli %s installed at %s (was %s)", bundled, path, installed ?: "none")
+        }
+        val setup = exec("'" + path.replace("'", "'\"'\"'") + "' setup")
+        Timber.i("attache-cli setup: %s", setup?.trim())
+        return path
+    }
+
+    /**
      * Installs `attache-send` into [remoteBinDir] (default `~/.local/bin`) on the remote host,
      * adds [remoteBinDir] to the tmux server's global `PATH`, and optionally injects the
      * `attache-send` usage rule into `~/.claude/CLAUDE.md` and `~/.gemini/GEMINI.md` on the
@@ -714,6 +787,12 @@ class TmuxControl(
             esac
             mkdir -p "${d}BIN_DIR" "${d}HOME/.local/share/attache" || exit 1
             CMD_PATH="${d}BIN_DIR/attache-send"
+            # attache-cli answers to the name attache-send. Removed first either
+            # way: writing the script through a link would overwrite attache-cli.
+            rm -f "${d}CMD_PATH"
+            if [ -x "${d}BIN_DIR/attache-cli" ]; then
+              ln -s attache-cli "${d}CMD_PATH"
+            else
             cat > "${d}CMD_PATH" << 'EOF' && chmod +x "${d}CMD_PATH"
             #!/bin/sh
             if [ -z "${d}1" ]; then
@@ -741,6 +820,7 @@ class TmuxControl(
               tmux rename-window -t "${d}S" "${d}W" 2>/dev/null || true
             done
             EOF
+            fi
             ln -sf "${d}CMD_PATH" /tmp/attache-send 2>/dev/null || true
             export PATH=/opt/homebrew/bin:/usr/local/bin:${d}PATH
             tmux set-environment -g PATH "${d}BIN_DIR:/opt/homebrew/bin:/usr/local/bin:${d}PATH" 2>/dev/null || true
@@ -1377,6 +1457,9 @@ class TmuxControl(
         const val EXTRA_SHARE_SESSION_NAME = "attache_share_session_name"
         private const val SEP = "\u0001"
         private const val MIN_SCROLL_INTERVAL_MS = 8L
+
+        /** An upload of a 0.6 MB binary over a relayed 5G link, with room. */
+        private const val CLI_WAIT_MS = 60_000L
         private const val SCROLL_REFRESH_DEBOUNCE_MS = 180L
         private val SESSION_ID = Regex("^\\$\\d+$")
         private val WINDOW_ID = Regex("^@\\d+$")

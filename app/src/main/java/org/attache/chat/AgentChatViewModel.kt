@@ -161,33 +161,20 @@ class AgentChatViewModel @Inject constructor(
     private var control: TmuxControl? = null
     private var nextPendingId = 1L
     private var nextImageId = 1L
-    private var statReads = 0
 
-    // What the status is put together from: the payload in `@agent_stat`
-    // when present, the transcript's own account, and the model an agent
-    // keeps in its settings (agy).
-    @Volatile private var payloadStatus: AgentStatus? = null
-
+    /** What the header shows, as attache-cli reads it from the agent's own
+     * files (and, for Claude, its status line snapshot). */
     @Volatile private var transcriptStatus: AgentStatus? = null
 
-    @Volatile private var sessionModel: String? = null
+    private fun currentStatus(): AgentStatus? = transcriptStatus
 
-    private fun currentStatus(): AgentStatus? {
-        val kind = _uiState.value.agent?.kind
-        val settings = sessionModel?.let { model ->
-            // agy's model carries its effort in brackets: `… (Medium)`.
-            val effort = Regex("\\(([^)]+)\\)\\s*$").find(model)?.groupValues?.get(1)?.lowercase()
-            AgentStatus(source = kind ?: "agent", model = model, effort = effort)
-        }
-        // agy's transcript has the tokens but no model; its settings have
-        // the model.
-        val transcript = transcriptStatus
-        val files = when {
-            transcript == null -> settings
-            transcript.model == null && settings != null -> transcript.copy(model = settings.model, effort = settings.effort)
-            else -> transcript
-        }
-        return AgentStatusMerge.merge(payloadStatus, files)
+    /** Whether the page is in front of the person: only then does an agent
+     * that finished count as seen. */
+    @Volatile private var onScreen = false
+
+    fun setOnScreen(value: Boolean) {
+        onScreen = value
+        if (value) control?.let { tmux -> viewModelScope.launch { markSeen(tmux) } }
     }
 
     // The conversation shown, kept by [Conversations] beyond this page.
@@ -215,7 +202,6 @@ class AgentChatViewModel @Inject constructor(
         val row = known.firstOrNull { it.paneId == paneId }
         _uiState.update { it.copy(agent = row ?: it.agent, allAgents = known) }
         if (row != null) {
-            sessionModel = row.model
             row.transcriptPath?.let {
                 transcriptKind = row.kind
                 transcriptPath.value = it
@@ -298,26 +284,16 @@ class AgentChatViewModel @Inject constructor(
         _uiState.update { it.copy(pending = it.pending + pending, images = emptyList()) }
         viewModelScope.launch {
             try {
-                val inMode = tmux.query("display-message -p -t $paneId '#{pane_in_mode}'").firstOrNull()?.trim() == "1"
-                if (inMode) tmux.query("send-keys -X -t $paneId cancel")
                 if (body.startsWith("/")) {
                     lastSlash = body.substringBefore(' ')
                     lastSlashAtMs = System.currentTimeMillis()
                     panelWatchUntilMs = lastSlashAtMs + PANEL_WATCH_MS
                 }
-                if (body.startsWith("/") || body.startsWith("!")) {
-                    // Typed, not pasted: `/` and `!` mean something to
-                    // Claude Code only as the first key of the line, which
-                    // is how the terminal mode's command keys send them too.
-                    tmux.query("send-keys -t $paneId -l -- ${quote(body)}")
-                } else {
-                    // A bracketed paste (`-p`), so text arrives as one piece
-                    // and nothing in it is read as a key binding.
-                    tmux.query("set-buffer -b attache_chat -- ${quote(body)}")
-                    tmux.query("paste-buffer -d -p -b attache_chat -t $paneId")
-                }
-                delay(150)
-                tmux.query("send-keys -t $paneId Enter")
+                // attache-cli types it: copy mode left first, a `/` or `!`
+                // command typed key by key, anything else as one bracketed
+                // paste, then Enter, holding the pane so a message from the
+                // tablet at the same moment cannot interleave.
+                if (!AttacheCli.send(tmux, paneId, body)) error("attache-cli did not take it")
             } catch (e: Exception) {
                 if (e is CancellationException) currentCoroutineContext().ensureActive()
                 _uiState.update { s ->
@@ -344,7 +320,7 @@ class AgentChatViewModel @Inject constructor(
                     refreshPane(tmux)
                     return@launch
                 }
-                tmux.query("send-keys -t $paneId Escape")
+                AttacheCli.key(tmux, paneId, "Escape")
                 delay(600)
                 refreshPane(tmux)
             } catch (e: Exception) {
@@ -434,7 +410,7 @@ class AgentChatViewModel @Inject constructor(
                 }
                 // Claude Code selects on the digit alone; an Enter after it
                 // would submit whatever sits in its input box.
-                tmux.query("send-keys -t $paneId ${option.number}")
+                AttacheCli.key(tmux, paneId, option.number.toString())
                 _uiState.update { it.copy(prompt = null) }
                 delay(800)
                 refreshPane(tmux)
@@ -460,9 +436,7 @@ class AgentChatViewModel @Inject constructor(
         if (agentsRefresh?.isActive == true) return
         agentsRefresh = viewModelScope.launch {
             try {
-                val lines = tmux.query(AgentPanes.LIST_COMMAND)
-                val sessions = readSessions(tmux)
-                val agents = withContext(dispatchers.default) { AgentPanes.merge(AgentPanes.parse(lines), sessions) }
+                val agents = AttacheCli.agents(tmux) ?: return@launch
                 AgentDirectory.put(hostId, agents)
                 _uiState.update { it.copy(allAgents = agents) }
             } catch (e: Exception) {
@@ -502,7 +476,7 @@ class AgentChatViewModel @Inject constructor(
                     _uiState.update { it.copy(panel = null, notice = "The panel has closed, so nothing was sent") }
                     return@launch
                 }
-                tmux.query("send-keys -t $paneId $key")
+                AttacheCli.key(tmux, paneId, key)
                 delay(250)
                 refreshPane(tmux)
             } catch (e: Exception) {
@@ -513,67 +487,30 @@ class AgentChatViewModel @Inject constructor(
     }
 
     private suspend fun refreshPane(tmux: TmuxControl) {
-        val rows = try {
-            tmux.query("list-panes -t $paneId -F ${AgentPanes.FORMAT}")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            // `can't find pane`: the pane was closed.
-            _uiState.update { it.copy(paneGone = true, prompt = null) }
-            return
-        }
-        val mine = rows.firstOrNull { it.startsWith(paneId + AgentPanes.SEP) }
-        if (mine == null) {
-            _uiState.update { it.copy(paneGone = true, prompt = null) }
-            return
-        }
-        val parsed = AgentPanes.parse(listOf(mine)).firstOrNull()
-        // The agent's own report for this pane, read every refresh: it is
-        // what says the agent is waiting on the person, and the approval
-        // dock should not lag it. Only this agent's provider is asked.
-        val provider = parsed?.let { AgentProviders.forKind(it.kind) }
-        // This pane's agent only, and only this pane of it.
-        val ownSessions = provider?.let { readSessions(tmux, listOf(it), paneId) }.orEmpty()
-        val agent = parsed?.let { AgentPanes.merge(listOf(it), ownSessions).first() }
-        val session = ownSessions.firstOrNull { it.paneId == paneId }
-        session?.transcriptPath?.let {
-            transcriptKind = session.kind
-            transcriptPath.value = it
-        }
-        sessionModel = session?.model
-
-        // The status payload, when the desktop app's status line wrapper (or
-        // a hand-added one) writes it, is extra detail and read one refresh
-        // in three: agy's runs to 12.7 KB (measured 2026-11-05, its
-        // subagents ride along), 6 KB a second at the full rate over a
-        // relayed 5G link for numbers that move once a turn.
-        if (statReads++ % STAT_EVERY == 0) {
-            val stat = tmux.query("display-message -p -t $paneId '#{@agent_stat}'").joinToString("\n")
-            // Only the running agent's own payload counts: a pane keeps the
-            // one a previous agent wrote, and a Claude payload left in a pane
-            // now running agy would otherwise put the old Claude conversation
-            // on this agent's page.
-            val payload = agent?.let { AgentStatuses.forAgent(AgentStatuses.parse(stat), it.kind) }
-            // The payload is written by the status line of the process in the
-            // pane. A session handed to a background process (ClaudeProvider)
-            // leaves the last one behind for good, naming the old transcript:
-            // its cache countdown ran out an hour later and read "cache cold"
-            // over a conversation in full flow. It counts only while it names
-            // the transcript being followed.
-            val payloadPath = transcriptPathOf(stat)
-            val current = transcriptPath.value
-            payloadStatus = payload.takeUnless { current != null && payloadPath != null && payloadPath != current }
-            if (transcriptPath.value == null && payloadStatus?.source == "claude") {
-                transcriptPathOf(stat)?.let {
-                    transcriptKind = "claude"
-                    transcriptPath.value = it
-                }
+        // This pane's agent, from attache-cli: which agent, what it is doing,
+        // and which transcript it is writing, read every refresh, since it is
+        // what says the agent waits on the person and the approval dock
+        // should not lag it.
+        val agent = AttacheCli.agents(tmux, paneId)?.firstOrNull()
+        if (agent == null) {
+            val stillThere = try {
+                tmux.query("display-message -p -t $paneId '#{pane_id}'").firstOrNull()?.trim() == paneId
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                false
+            }
+            if (!stillThere) {
+                _uiState.update { it.copy(paneGone = true, prompt = null) }
+                return
             }
         }
-        if (transcriptPath.value == null && provider?.transcriptReader() == null) {
-            _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
-        } else if (transcriptPath.value == null && session == null && payloadStatus == null) {
-            // Claude, but neither its session file nor a payload named a
-            // transcript: nothing to follow.
+        agent?.transcriptPath?.let {
+            transcriptKind = agent.kind
+            transcriptPath.value = it
+        }
+        if (agent?.phase == AgentPhase.DONE && onScreen) markSeen(tmux, agent)
+        val followed = agent?.kind in FOLLOWED
+        if (transcriptPath.value == null && (agent == null || !followed)) {
             _uiState.update { it.copy(transcript = TranscriptStatus.MISSING) }
         }
         val status = currentStatus()
@@ -585,7 +522,7 @@ class AgentChatViewModel @Inject constructor(
         // this page is open on such an agent. Claude keeps its own messages.
         val noConversation = transcriptPath.value == null ||
             (_uiState.value.transcript == TranscriptStatus.MISSING && _uiState.value.items.isEmpty())
-        val mirror = if (provider != null && provider !== ClaudeProvider && (provider.transcriptReader() == null || noConversation)) {
+        val mirror = if (agent != null && agent.kind != "claude" && (!followed || noConversation)) {
             tmux.query("capture-pane -p -e -J -t $paneId").dropLastWhile { it.replace(AnsiText.SEQUENCE, "").isBlank() }
         } else {
             null
@@ -621,7 +558,7 @@ class AgentChatViewModel @Inject constructor(
     private suspend fun capture(tmux: TmuxControl): List<String> = tmux.query("capture-pane -p -J -t $paneId -S -40")
 
     private suspend fun follow(tmux: TmuxControl, path: String?) {
-        if (path == null || !TranscriptFollower.isFollowablePath(path)) {
+        if (path == null || !AttacheCli.isFollowablePath(path)) {
             _uiState.update { it.copy(transcript = if (path == null) TranscriptStatus.LOADING else TranscriptStatus.MISSING) }
             return
         }
@@ -633,9 +570,9 @@ class AgentChatViewModel @Inject constructor(
             emptyList()
         }
         livePath = path
-        val provider = (transcriptKind ?: _uiState.value.agent?.kind)?.let(AgentProviders::forKind) ?: ClaudeProvider
-        if (provider.transcriptReader() == null) return
-        val conversation = Conversations.get(hostId, path, provider.kind, dispatchers.default)
+        val kind = transcriptKind ?: _uiState.value.agent?.kind ?: "claude"
+        if (kind !in FOLLOWED) return
+        val conversation = Conversations.get(hostId, path, kind, dispatchers.default)
         liveConversation = conversation
         conversation.follow(tmux)
         // Until a new path or a new channel replaces this one.
@@ -684,10 +621,19 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
-    private fun transcriptPathOf(stat: String): String? = try {
-        JSONObject(stat.trim()).optString("transcript_path").ifEmpty { null }
-    } catch (_: Exception) {
-        null
+    /**
+     * Tells the host the person has seen what the agent did, so the list
+     * shows it Idle rather than Done: when the page is in front of them and
+     * the agent has finished, as it is opened or as the turn ends.
+     */
+    private suspend fun markSeen(tmux: TmuxControl, agent: AgentPane? = _uiState.value.agent) {
+        if (agent == null || agent.phase != AgentPhase.DONE) return
+        val conversation = agent.conversation ?: return
+        try {
+            AttacheCli.seen(tmux, agent.kind, conversation)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
     }
 
     private fun quote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
@@ -698,7 +644,9 @@ class AgentChatViewModel @Inject constructor(
         private const val CONFIRM_MS = 15_000L
         private const val PANEL_WATCH_MS = 30_000L
         private const val PANEL_POLL_MS = 1_000L
-        private const val STAT_EVERY = 3
+
+        /** The agents attache-cli reads conversations for. */
+        private val FOLLOWED = setOf("claude", "agy")
         private const val CLEAR_WINDOW_MS = 120_000L
         private val PANEL_KEYS = setOf("Up", "Down", "Left", "Right", "Enter", "Escape", "Tab")
     }

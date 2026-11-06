@@ -23,7 +23,6 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,13 +31,16 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.attache.tmux.TmuxControl
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 
 /** What has been read of a conversation so far. */
 data class ConversationView(
     val items: List<ChatItem> = emptyList(),
     val status: AgentStatus? = null,
-    /** The file offset of the earliest line read; history lies above it. */
+    /** The file offset the rows start at; history lies above it. */
     val historyStart: Long? = null,
     val state: TranscriptStatus = TranscriptStatus.LOADING,
 )
@@ -52,8 +54,8 @@ data class ConversationView(
  * Followed rather than caught up on return: catching up from an offset needs
  * to know the file was only appended to since, which a rewind may not
  * honour; a follow that never stopped sees whatever the file does, as the
- * open page always has. What it costs is one `tail -f` on the host per kept
- * conversation, sending only what its agent writes.
+ * open page always has. What it costs is one `attache-cli follow` on the host
+ * per kept conversation, sending only what its agent writes.
  *
  * Kept for as long as the connection lasts: when its channel closes, a
  * conversation forgets itself, and the next visit reads it anew.
@@ -86,8 +88,12 @@ object Conversations {
     }
 }
 
-/** One transcript, read and followed on a scope of its own rather than a
- * page's, so that it outlives the page. */
+/**
+ * One conversation, followed by `attache-cli follow` on a scope of its own
+ * rather than a page's, so that it outlives the page. attache-cli reads the
+ * transcript on the host and sends rows: the first read, then each change,
+ * from the first row that changed.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class LiveConversation internal constructor(
     internal val key: String,
@@ -95,25 +101,33 @@ class LiveConversation internal constructor(
     private val kind: String,
     dispatcher: CoroutineDispatcher,
 ) {
-    /** Parsing a megabyte of JSON is not for the main thread, and a
-     * transcript is not thread-safe: one lane for all of it. */
+    /** Events are applied in order, off the main thread: one lane. */
     private val lane = dispatcher.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + lane)
 
     private val _view = MutableStateFlow(ConversationView())
     val view: StateFlow<ConversationView> = _view.asStateFlow()
 
-    // The reader being shown and where its earliest line starts. On the lane only.
-    private var transcript: AgentTranscript? = null
-    private var historyStart: Long? = null
+    // What the current follow has sent. On the lane only.
+    private var items: List<ChatItem> = emptyList()
+    private var status: AgentStatus? = null
+    private var start: Long? = null
+
+    /** Set to read from further back on the next follow (earlier history). */
+    @Volatile private var before: Long? = null
 
     private var job: Job? = null
     private var control: TmuxControl? = null
 
-    /** Follows the file over [tmux], unless that is already happening. */
+    /** Follows the conversation over [tmux], unless that is already happening. */
     @Synchronized
     fun follow(tmux: TmuxControl) {
         if (job?.isActive == true && control === tmux) return
+        restart(tmux)
+    }
+
+    @Synchronized
+    private fun restart(tmux: TmuxControl) {
         // Before the cancel: the old loop, ending, must not take a channel
         // it no longer follows for this conversation's.
         control = tmux
@@ -129,70 +143,98 @@ class LiveConversation internal constructor(
     }
 
     private suspend fun followLoop(tmux: TmuxControl) {
+        val cli = tmux.cli()
+        if (cli == null) {
+            _view.update { it.copy(state = TranscriptStatus.MISSING) }
+            return
+        }
         while (true) {
-            val reader = (AgentProviders.forKind(kind) ?: ClaudeProvider).transcriptReader() ?: return
-            val splitter = LineSplitter()
-            var started = false
-            var publishJob: Job? = null
-            val ok = coroutineScope {
-                val ok = tmux.follow(TranscriptFollower.command(path)) { chunk ->
-                    val lines = splitter.feed(chunk)
-                    if (lines.isEmpty() && splitter.startOffset == null) return@follow
-                    // What was shown stays until the new read has something
-                    // to show: after a reconnect, the old rows, not a spinner.
-                    if (!started) {
-                        started = true
-                        transcript = reader
-                        historyStart = splitter.startOffset
+            val lines = JsonLines()
+            // What was shown stays until the new read has something to show:
+            // after a reconnect, or while earlier history loads, the old rows.
+            var fresh = true
+            val ok = tmux.follow(AttacheCli.followCommand(cli, kind, path, before)) { chunk ->
+                for (line in lines.feed(chunk)) {
+                    val event = try {
+                        JSONObject(line)
+                    } catch (_: Exception) {
+                        continue
                     }
-                    lines.forEach(reader::accept)
-                    // Coalesced: an agent mid-turn appends several times a
-                    // second, and the list need not redraw for each.
-                    publishJob?.cancel()
-                    publishJob = launch {
-                        delay(PUBLISH_DELAY_MS)
-                        publish(reader)
+                    when (event.optString("t")) {
+                        "waiting" -> if (items.isEmpty()) _view.update { it.copy(state = TranscriptStatus.LOADING) }
+
+                        "hello" -> {
+                            start = event.optLong("start")
+                            fresh = true
+                        }
+
+                        "items" -> {
+                            val from = event.optInt("from")
+                            val rows = event.optJSONArray("items") ?: JSONArray()
+                            val parsed = (0 until rows.length()).mapNotNull { i -> rows.optJSONObject(i)?.let(AttacheCli::item) }
+                            items = if (fresh) parsed else items.take(from) + parsed
+                            fresh = false
+                            before = null
+                            publish()
+                        }
+
+                        "status" -> {
+                            status = AttacheCli.status(event)
+                            if (!fresh) publish()
+                        }
                     }
                 }
-                publishJob?.join()
-                ok
             }
-            if (!ok || !started) _view.update { it.copy(state = TranscriptStatus.MISSING) }
-            // The channel is gone; otherwise the file went away, so try
-            // again shortly.
+            if (!ok && items.isEmpty()) _view.update { it.copy(state = TranscriptStatus.MISSING) }
+            // The channel is gone; otherwise attache-cli ended on its own, so
+            // try again shortly.
             if (tmux.isClosed) return
             delay(RETRY_MS)
         }
     }
 
-    private fun publish(reader: AgentTranscript) {
-        _view.value = ConversationView(reader.snapshot, reader.status, historyStart, TranscriptStatus.LIVE)
+    private fun publish() {
+        _view.value = ConversationView(items, status, start, TranscriptStatus.LIVE)
     }
 
     /**
-     * Puts the history just before what is shown in front of it. False when
-     * it could not be read.
+     * Reads from further back: a new follow from before where this one
+     * started, which sends every row again with the earlier ones in front.
      */
-    suspend fun loadEarlier(tmux: TmuxControl): Boolean = withContext(lane) {
-        val reader = transcript ?: return@withContext true
-        val end = historyStart?.takeIf { it > 0 } ?: return@withContext true
-        // At least one line always comes back, so each load gets further up
-        // however long the records are.
-        val text = tmux.run(TranscriptFollower.earlierCommand(path, end))
-        val start = text?.substringBefore('\n')?.removePrefix(TranscriptFollower.HEADER)?.trim()?.toLongOrNull()
-            ?: return@withContext false
-        // The file was followed anew while this was in flight.
-        if (reader !== transcript) return@withContext true
-        reader.prepend(text.substringAfter('\n', "").split('\n').filter { it.isNotBlank() })
-        historyStart = minOf(start, end)
-        publish(reader)
-        true
+    suspend fun loadEarlier(tmux: TmuxControl): Boolean {
+        val from = withContext(lane) { start }?.takeIf { it > 0 } ?: return true
+        before = from
+        restart(tmux)
+        return true
     }
 
     internal fun close() = scope.cancel()
 
     private companion object {
-        const val PUBLISH_DELAY_MS = 120L
         const val RETRY_MS = 3_000L
+    }
+}
+
+/**
+ * Bytes in, complete lines out. The unfinished tail is kept as raw bytes and
+ * never decoded on its own: a read can end in the middle of a multi-byte
+ * character, and decoding half of it turns it into a replacement character
+ * that no later read can repair.
+ */
+class JsonLines {
+    private val pending = ByteArrayOutputStream()
+
+    fun feed(chunk: ByteArray): List<String> {
+        val lines = mutableListOf<String>()
+        var from = 0
+        for (i in chunk.indices) {
+            if (chunk[i] != '\n'.code.toByte()) continue
+            pending.write(chunk, from, i - from)
+            from = i + 1
+            pending.toByteArray().toString(Charsets.UTF_8).takeIf { it.isNotBlank() }?.let(lines::add)
+            pending.reset()
+        }
+        pending.write(chunk, from, chunk.size - from)
+        return lines
     }
 }

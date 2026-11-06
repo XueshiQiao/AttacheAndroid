@@ -32,7 +32,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.attache.tmux.TmuxControl
 import org.connectbot.data.EntityIds
 import org.connectbot.di.CoroutineDispatchers
@@ -86,32 +85,22 @@ class AgentListViewModel @Inject constructor(
 
     fun reconnect() = link.reconnect()
 
-    private var polls = 0
-    private var sessions: List<AgentSession> = emptyList()
-
     /**
      * Polled rather than subscribed: three seconds is fast enough to see an
-     * agent start waiting, and a `list-panes` every three seconds is a few
-     * hundred bytes on a link that is relayed through Europe on 5G.
+     * agent start waiting. Each poll is one `attache-cli agents` on the
+     * control channel, a few KB, 0.08 s on the host with 26 agents.
      */
     private suspend fun poll(tmux: TmuxControl) {
         while (true) {
             try {
-                val lines = tmux.query(AgentPanes.LIST_COMMAND)
-                val panes = withContext(dispatchers.default) { AgentPanes.parse(lines) }
-                // The panes first, with what the agents said last time: the
-                // scripts take most of a second with a dozen agy screens to
-                // read, and the list need not wait for them to be shown.
-                agents.value = AgentPanes.merge(panes, sessions)
-                // What the agents say for themselves, every other poll: it
-                // runs a script on the host, half a second of it reading
-                // agy's screens, and states move slower than that.
-                if (polls++ % 2 == 0) {
-                    sessions = readSessions(tmux)
-                    agents.value = AgentPanes.merge(panes, sessions)
+                val found = AttacheCli.agents(tmux)
+                if (found == null) {
+                    pollError.value = "attache-cli could not be installed or run on this host"
+                } else {
+                    agents.value = found
+                    AgentDirectory.put(hostId, found)
+                    pollError.value = null
                 }
-                AgentDirectory.put(hostId, agents.value)
-                pollError.value = null
             } catch (e: CancellationException) {
                 // Either this poll was cancelled, or the control channel
                 // closed under it, which also surfaces as a cancellation; the
@@ -128,17 +117,4 @@ class AgentListViewModel @Inject constructor(
     private companion object {
         const val POLL_MS = 3_000L
     }
-}
-
-/** Every agent's own report of its live sessions, or none if the host would
- * not run the script; the tmux options still stand in then. */
-internal suspend fun readSessions(
-    tmux: TmuxControl,
-    providers: List<AgentProvider> = AgentProviders.all,
-    pane: String? = null,
-): List<AgentSession> = try {
-    HostScripts.read(tmux::query, providers, pane)
-} catch (e: Exception) {
-    if (e is kotlinx.coroutines.CancellationException) throw e
-    emptyList()
 }
