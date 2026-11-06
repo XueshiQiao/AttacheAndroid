@@ -18,6 +18,7 @@
 package org.attache.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -374,14 +375,17 @@ private fun MdBlock.indentOf(): Int = when (this) {
     else -> 0
 }
 
-/** How narrow a column may be squeezed before the table scrolls instead. */
-private val TABLE_COLUMN_FLOOR = 72.dp
+/** How narrow a column may be squeezed before the table scrolls instead:
+ * about ten Chinese characters a line. At 72dp a four-column table of
+ * sentences fitted every phone by wrapping each cell into a tall sliver,
+ * and nothing ever scrolled. */
+private val TABLE_COLUMN_FLOOR = 160.dp
 
 /**
  * A table as a grid. Columns take the width their longest cell wants;
  * when that is wider than the screen the wide columns give way and wrap,
- * and only once every column is down to [TABLE_COLUMN_FLOOR] does the
- * table scroll sideways.
+ * and once they are down to [TABLE_COLUMN_FLOOR] the table scrolls
+ * sideways — which on a phone is most tables of sentences.
  */
 @Composable
 private fun MarkdownTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
@@ -410,9 +414,13 @@ private fun MarkdownTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
                     }
                 },
                 // The gaps between cells show this through, as the rules.
+                // The outer edge is stroked on top as well: the cells are
+                // square, so at a rounded corner they reach past the 1dp
+                // gap and the clip cut the frame away with them.
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(line),
+                    .background(line)
+                    .border(1.dp, line, RoundedCornerShape(8.dp)),
             ) { measurables, _ ->
                 val columns = table.header.size
                 val rows = measurables.size / columns
