@@ -215,6 +215,9 @@ fun AgentChatScreen(
     // going back to the list first.
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
+    LaunchedEffect(drawer.targetValue) {
+        if (drawer.targetValue == DrawerValue.Open) viewModel.refreshAllAgents()
+    }
     val visits by RecentAgents.visits.collectAsStateWithLifecycle()
     val recents = remember(visits, state.allAgents) {
         RecentAgents.offer(visits[viewModel.hostId].orEmpty(), state.allAgents, current = viewModel.paneId)

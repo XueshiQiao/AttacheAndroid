@@ -17,6 +17,9 @@
 
 package org.attache.chat
 
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * What a coding agent in a pane is doing, in the order the chat mode's list
  * shows them: the one the person has to act on first.
@@ -36,6 +39,9 @@ data class AgentPane(
     /** When the hook last wrote `@agent_state`, epoch seconds; null if never. */
     val sinceEpochSec: Long?,
     val title: String,
+    /** From the agent's own report, when it gave one. */
+    val transcriptPath: String? = null,
+    val model: String? = null,
 )
 
 /**
@@ -141,6 +147,29 @@ object AgentPanes {
             own.phase != null -> own.phase
             else -> pane.phase
         }
-        pane.copy(phase = phase, sinceEpochSec = own.sinceEpochSec ?: pane.sinceEpochSec)
+        pane.copy(
+            phase = phase,
+            sinceEpochSec = own.sinceEpochSec ?: pane.sinceEpochSec,
+            transcriptPath = own.transcriptPath,
+            model = own.model,
+        )
     }.sortedWith(compareBy<AgentPane>({ it.phase.ordinal }, { -(it.sinceEpochSec ?: 0L) }))
+}
+
+/**
+ * The agent list each host's list page read last, kept in memory. The list
+ * is what a chat page is opened from, so the chat page starts from the row
+ * that was tapped, transcript and all, instead of asking every agent again;
+ * and its agent switcher shows this list rather than polling every agent on
+ * the host, a dozen agy screens read each time, while a conversation is
+ * being read.
+ */
+object AgentDirectory {
+    private val byHost = ConcurrentHashMap<UUID, List<AgentPane>>()
+
+    fun put(host: UUID, agents: List<AgentPane>) {
+        byHost[host] = agents
+    }
+
+    fun get(host: UUID): List<AgentPane> = byHost[host].orEmpty()
 }

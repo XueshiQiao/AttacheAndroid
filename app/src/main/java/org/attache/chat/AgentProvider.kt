@@ -64,8 +64,12 @@ interface AgentProvider {
      * what the agent knows of its live sessions as one JSON object a line;
      * null when it keeps nothing worth reading. It runs inside tmux, so it
      * may call tmux itself; `#` is doubled for it by [HostScripts].
+     *
+     * With [pane] (`%42`, checked by the caller), only that pane's session
+     * is reported, and nothing is spent on the others: the chat page asks
+     * about the one agent it shows, every two seconds.
      */
-    fun sessionsScript(): String? = null
+    fun sessionsScript(pane: String? = null): String? = null
 
     fun parseSession(line: JSONObject): AgentSession? = null
 
@@ -116,9 +120,10 @@ object HostScripts {
     /** The `run-shell` command that leaves the scripts' output in tmux
      * buffer [buffer], quoted for tmux's parser. `run-shell` expands formats
      * in its argument first, so `#` is doubled to stay `#`. */
-    fun sessionsCommand(buffer: String, providers: List<AgentProvider> = AgentProviders.all): String? {
+    fun sessionsCommand(buffer: String, providers: List<AgentProvider> = AgentProviders.all, pane: String? = null): String? {
         require(BUFFER.matches(buffer)) { "not a buffer name" }
-        val parts = providers.mapNotNull { p -> p.sessionsScript()?.let { "printf '%s\\n' '$MARK${p.kind}'; $it" } }
+        require(pane == null || PANE.matches(pane)) { "not a pane id" }
+        val parts = providers.mapNotNull { p -> p.sessionsScript(pane)?.let { "printf '%s\\n' '$MARK${p.kind}'; $it" } }
         if (parts.isEmpty()) return null
         val script = "{ " + parts.joinToString("; ") + "; } 2>/dev/null | tmux load-buffer -b $buffer -"
         return "run-shell " + quote(script.replace("#", "##"))
@@ -129,11 +134,15 @@ object HostScripts {
      * command, its reply lines). Throws what [query] throws; the buffer is
      * deleted whatever happens, as it is visible in `choose-buffer`.
      */
-    suspend fun read(query: suspend (String) -> List<String>, providers: List<AgentProvider> = AgentProviders.all): List<AgentSession> {
+    suspend fun read(
+        query: suspend (String) -> List<String>,
+        providers: List<AgentProvider> = AgentProviders.all,
+        pane: String? = null,
+    ): List<AgentSession> {
         // Per call, not per app: the phone and the tablet can poll the same
         // server at once.
         val buffer = "attache-agents-" + Random.nextLong().toULong().toString(16)
-        val command = sessionsCommand(buffer, providers) ?: return emptyList()
+        val command = sessionsCommand(buffer, providers, pane) ?: return emptyList()
         try {
             query(command)
             return parse(query("show-buffer -b $buffer"), providers)
@@ -149,6 +158,7 @@ object HostScripts {
     }
 
     private val BUFFER = Regex("^[a-z0-9-]+$")
+    private val PANE = Regex("^%\\d+$")
 
     fun parse(lines: List<String>, providers: List<AgentProvider> = AgentProviders.all): List<AgentSession> {
         val out = ArrayList<AgentSession>()

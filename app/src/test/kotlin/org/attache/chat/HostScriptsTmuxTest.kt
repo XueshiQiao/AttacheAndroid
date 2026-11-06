@@ -52,7 +52,7 @@ class HostScriptsTmuxTest {
 
         override fun recognizes(command: String) = false
 
-        override fun sessionsScript() = "printf '{\"pane\":\"%%1\",\"note\":\"it'\\''s # here\"}\\n'; " +
+        override fun sessionsScript(pane: String?) = "printf '{\"pane\":\"%%1\",\"note\":\"it'\\''s # here\"}\\n'; " +
             "printf '{\"pane\":\"%s\"}\\n' \"\$(tmux display-message -p -t probe '#{pane_id}')\""
 
         override fun parseSession(line: JSONObject) = AgentSession(kind, line.optString("pane"), sessionName = line.optString("note").ifEmpty { null })

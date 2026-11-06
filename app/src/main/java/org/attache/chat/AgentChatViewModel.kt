@@ -232,6 +232,19 @@ class AgentChatViewModel @Inject constructor(
 
     init {
         RecentAgents.visit(hostId, paneId)
+        // The row this page was opened from: the list read it moments ago,
+        // so the transcript is followed at once rather than after the
+        // agent's script has been run again.
+        val known = AgentDirectory.get(hostId)
+        val row = known.firstOrNull { it.paneId == paneId }
+        _uiState.update { it.copy(agent = row ?: it.agent, allAgents = known) }
+        if (row != null) {
+            sessionModel = row.model
+            row.transcriptPath?.let {
+                transcriptKind = row.kind
+                transcriptPath.value = it
+            }
+        }
         viewModelScope.launch {
             link.connection.collect { c -> _uiState.update { it.copy(connection = c) } }
         }
@@ -242,7 +255,6 @@ class AgentChatViewModel @Inject constructor(
                 openTiming?.let { if (it.control == 0L) it.control = it.now() }
                 coroutineScope {
                     launch { watchPane(tmux) }
-                    launch { watchAgents(tmux) }
                     launch { transcriptPath.collectLatest { path -> follow(tmux, path) } }
                 }
             }
@@ -460,20 +472,28 @@ class AgentChatViewModel @Inject constructor(
 
     /** The other agents, for the drawer and the recent list. The same
      * read-only `list-panes` the agent list sends, a little less often. */
-    private suspend fun watchAgents(tmux: TmuxControl) {
-        while (true) {
+    private var agentsRefresh: Job? = null
+
+    /**
+     * The agent switcher's list, read anew when it is opened, and only then:
+     * it is every agent on the host, a dozen agy screens read each time, on
+     * the channel this page's own reads are waiting on. Until it answers the
+     * switcher shows what the list page read.
+     */
+    fun refreshAllAgents() {
+        val tmux = control ?: return
+        if (agentsRefresh?.isActive == true) return
+        agentsRefresh = viewModelScope.launch {
             try {
                 val lines = tmux.query(AgentPanes.LIST_COMMAND)
                 val sessions = readSessions(tmux)
                 val agents = withContext(dispatchers.default) { AgentPanes.merge(AgentPanes.parse(lines), sessions) }
+                AgentDirectory.put(hostId, agents)
                 _uiState.update { it.copy(allAgents = agents) }
-            } catch (e: CancellationException) {
-                currentCoroutineContext().ensureActive()
-                return
             } catch (e: Exception) {
+                if (e is CancellationException) currentCoroutineContext().ensureActive()
                 Timber.w(e, "agent list refresh failed")
             }
-            delay(AGENTS_POLL_MS)
         }
     }
 
@@ -537,7 +557,8 @@ class AgentChatViewModel @Inject constructor(
         // what says the agent is waiting on the person, and the approval
         // dock should not lag it. Only this agent's provider is asked.
         val provider = parsed?.let { AgentProviders.forKind(it.kind) }
-        val ownSessions = provider?.let { readSessions(tmux, listOf(it)) }.orEmpty()
+        // This pane's agent only, and only this pane of it.
+        val ownSessions = provider?.let { readSessions(tmux, listOf(it), paneId) }.orEmpty()
         openTiming?.let { if (it.sessions == 0L) it.sessions = it.now() }
         val agent = parsed?.let { AgentPanes.merge(listOf(it), ownSessions).first() }
         val session = ownSessions.firstOrNull { it.paneId == paneId }
@@ -558,7 +579,16 @@ class AgentChatViewModel @Inject constructor(
             // one a previous agent wrote, and a Claude payload left in a pane
             // now running agy would otherwise put the old Claude conversation
             // on this agent's page.
-            payloadStatus = agent?.let { AgentStatuses.forAgent(AgentStatuses.parse(stat), it.kind) }
+            val payload = agent?.let { AgentStatuses.forAgent(AgentStatuses.parse(stat), it.kind) }
+            // The payload is written by the status line of the process in the
+            // pane. A session handed to a background process (ClaudeProvider)
+            // leaves the last one behind for good, naming the old transcript:
+            // its cache countdown ran out an hour later and read "cache cold"
+            // over a conversation in full flow. It counts only while it names
+            // the transcript being followed.
+            val payloadPath = transcriptPathOf(stat)
+            val current = transcriptPath.value
+            payloadStatus = payload.takeUnless { current != null && payloadPath != null && payloadPath != current }
             if (transcriptPath.value == null && payloadStatus?.source == "claude") {
                 transcriptPathOf(stat)?.let {
                     transcriptKind = "claude"
@@ -756,7 +786,6 @@ class AgentChatViewModel @Inject constructor(
         private const val CONFIRM_MS = 15_000L
         private const val PANEL_WATCH_MS = 30_000L
         private const val PANEL_POLL_MS = 1_000L
-        private const val AGENTS_POLL_MS = 4_000L
         private const val STAT_EVERY = 3
         private const val CLEAR_WINDOW_MS = 120_000L
         private val PANEL_KEYS = setOf("Up", "Down", "Left", "Right", "Enter", "Escape", "Tab")

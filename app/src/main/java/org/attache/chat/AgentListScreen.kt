@@ -48,6 +48,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,6 +69,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import org.connectbot.ui.LocalTerminalManager
@@ -135,11 +139,21 @@ fun AgentListScreen(
         terminalManager?.let { viewModel.setTerminalManager(it) }
     }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    LifecycleStartEffect(viewModel) {
+        viewModel.setShown(true)
+        onStopOrDispose { viewModel.setShown(false) }
+    }
     var showAppearance by remember { mutableStateOf(false) }
     if (showAppearance) ChatAppearanceDialog(onDismiss = { showAppearance = false })
+    // TEMPORARY (measurement build): the first list's timing, once.
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(state.timing) {
+        state.timing?.let { snackbar.showSnackbar(it, withDismissAction = true, duration = SnackbarDuration.Indefinite) }
+    }
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbar) },
         // The bottom is kept clear by the list itself (bottomSafeInset).
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {

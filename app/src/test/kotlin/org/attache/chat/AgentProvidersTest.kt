@@ -186,4 +186,47 @@ class AgentProvidersTest {
             home.deleteRecursively()
         }
     }
+
+    private fun claudeScript(home: File, pane: String? = null): List<String> {
+        val process = ProcessBuilder("/bin/sh", "-c", ClaudeProvider.sessionsScript(pane)).apply {
+            environment()["HOME"] = home.absolutePath
+        }.start()
+        val out = process.inputStream.readBytes().toString(Charsets.UTF_8).lines().filter { it.isNotBlank() }
+        process.waitFor()
+        return out
+    }
+
+    @Test
+    fun aPaneAskedAboutGetsOnlyItsOwnSession() {
+        val home = kotlin.io.path.createTempDirectory("attache-home").toFile()
+        try {
+            val sessions = File(home, ".claude/sessions").apply { mkdirs() }
+            val one = ProcessHandle.current().pid()
+            val two = ProcessHandle.current().parent().get().pid()
+            File(sessions, "$one.json").writeText("""{"pid":$one,"sessionId":"a","cwd":"/w","tmux":"Dev:@4.%14","status":"idle"}""")
+            File(sessions, "$two.json").writeText("""{"pid":$two,"sessionId":"b","cwd":"/w","tmux":"Dev:@5.%145","status":"busy"}""")
+            assertEquals(2, claudeScript(home).size)
+            // %14 is a prefix of %145, and must not take it.
+            val only = claudeScript(home, "%14").map { ClaudeProvider.parseSession(org.json.JSONObject(it))!! }
+            assertEquals(listOf("%14"), only.map { it.paneId })
+            assertEquals(emptyList<String>(), claudeScript(home, "%999"))
+        } finally {
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aPaneIdIsCheckedBeforeItGoesIntoAScript() {
+        assertTrue(AgyProvider.sessionsScript("%110").contains("[ \"\$id\" = '%110' ] || continue"))
+        assertFalse(AgyProvider.sessionsScript(null).contains("[ \"\$id\" ="))
+        assertTrue(runCatching { HostScripts.sessionsCommand("attache-agents-1", pane = "%1'; rm") }.isFailure)
+    }
+
+    @Test
+    fun theListCarriesWhatTheAgentReportedSoAChatCanStartFromIt() {
+        val pane = AgentPane("%145", "Dev", "@4", "w", "/w", "claude", AgentPhase.IDLE, null, "t")
+        val merged = AgentPanes.merge(listOf(pane), listOf(AgentSession("claude", "%145", transcriptPath = "/h/x.jsonl", model = "m"))).single()
+        assertEquals("/h/x.jsonl", merged.transcriptPath)
+        assertEquals("m", merged.model)
+    }
 }

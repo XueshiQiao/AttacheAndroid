@@ -53,16 +53,40 @@ object ClaudeProvider : AgentProvider {
      * pane's file, and the session, folder and state from the file of the
      * process that is running it.
      */
-    override fun sessionsScript() = "for f in \"\$HOME\"/.claude/sessions/*.json; do p=\$(basename \"\$f\" .json); " +
-        "case \$p in ''|*[!0-9]*) continue;; esac; kill -0 \"\$p\" 2>/dev/null || continue; " +
-        "s=\$f; j=\$(grep -o -E '\"parkedJobId\":\"[A-Za-z0-9_-]+\"' \"\$f\" | cut -d'\"' -f4); " +
-        "[ -n \"\$j\" ] && for g in \"\$HOME\"/.claude/sessions/*.json; do q=\$(basename \"\$g\" .json); " +
-        "case \$q in ''|*[!0-9]*) continue;; esac; " +
-        "grep -qF \"\\\"jobId\\\":\\\"\$j\\\"\" \"\$g\" && kill -0 \"\$q\" 2>/dev/null && { s=\$g; break; }; done; " +
-        "printf '{\"pid\":%s,\"home\":\"%s\"' \"\$p\" \"\$HOME\"; " +
-        "{ grep -o -E '\"tmux\":\"([^\"\\\\]|\\\\.)*\"' \"\$f\"; " +
-        "grep -o -E '\"(sessionId|cwd|status|statusUpdatedAt)\":(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)' \"\$s\"; } | " +
-        "while IFS= read -r kv; do printf ',%s' \"\$kv\"; done; printf '}\\n'; done"
+    override fun sessionsScript(pane: String?) = "set --; for f in \"\$HOME\"/.claude/sessions/*.json; do p=\${f##*/}; p=\${p%.json}; " +
+        "case \$p in ''|*[!0-9]*) continue;; esac; kill -0 \"\$p\" 2>/dev/null && set -- \"\$@\" \"\$f\"; done; " +
+        "[ \$# -eq 0 ] || awk -v home=\"\$HOME\" -v pane='${pane.orEmpty()}' '$SESSIONS_AWK' \"\$@\""
+
+    /**
+     * Every live session file at once, in one process: one `awk` where a
+     * loop of `basename`, `grep` and `cut` per file took 0.19 s for sixteen
+     * files on this machine, the chat page running it every two seconds.
+     * Prints the pane's fields from the pane's file, and the session, folder
+     * and state from the file of the process running it (see above). No
+     * single quote anywhere: it is single-quoted for the shell.
+     */
+    private val SESSIONS_AWK = """
+        function val(s, k) {
+          if (match(s, "\"" k "\":\"([^\"\\\\]|\\\\.)*\"")) return substr(s, RSTART, RLENGTH);
+          if (match(s, "\"" k "\":[0-9]+")) return substr(s, RSTART, RLENGTH);
+          return "";
+        }
+        function raw(s, k,   v) { v = val(s, k); sub(/^"[^"]*":"?/, "", v); sub(/"${'$'}/, "", v); return v }
+        { if (!(FILENAME in t)) order[++n] = FILENAME; t[FILENAME] = t[FILENAME] ${'$'}0 }
+        END {
+          for (i = 1; i <= n; i++) { j = raw(t[order[i]], "jobId"); if (j != "") job[j] = order[i] }
+          for (i = 1; i <= n; i++) {
+            f = order[i]; tm = val(t[f], "tmux");
+            if (tm == "" || (pane != "" && index(tm, "." pane "\"") == 0)) continue;
+            src = f; pk = raw(t[f], "parkedJobId"); if (pk != "" && (pk in job)) src = job[pk];
+            p = f; sub(/.*\//, "", p); sub(/[.]json${'$'}/, "", p);
+            out = "{\"pid\":" p ",\"home\":\"" home "\"," tm;
+            split("sessionId cwd status statusUpdatedAt", ks, " ");
+            for (k = 1; k <= 4; k++) { v = val(t[src], ks[k]); if (v != "") out = out "," v }
+            print out "}";
+          }
+        }
+    """.trimIndent().replace("\n", " ")
 
     override fun parseSession(line: JSONObject): AgentSession? {
         val tmux = TMUX.matchEntire(line.optString("tmux")) ?: return null
@@ -129,13 +153,14 @@ object AgyProvider : AgentProvider {
 
     override fun recognizes(command: String) = command == "agy" || command == "antigravity"
 
-    override fun sessionsScript() = "m=\$(grep -o -E '\"model\": *\"[^\"]*\"' \"\$HOME/.gemini/antigravity-cli/settings.json\" 2>/dev/null | head -n 1); " +
+    override fun sessionsScript(pane: String?) = "m=\$(grep -o -E '\"model\": *\"[^\"]*\"' \"\$HOME/.gemini/antigravity-cli/settings.json\" 2>/dev/null | head -n 1); " +
         "[ -n \"\$m\" ] || m='\"model\":null'; " +
         "a=\$(pgrep -x agy | paste -s -d , -); " +
         "L=\$([ -n \"\$a\" ] && lsof -nPw -a -p \"\$a\" -Fpn 2>/dev/null | " +
         "awk '/^p/ { p = substr(\$0, 2) } /^n.*\\/presence\\/[^\\/]*[.]lock\$/ { n = \$0; sub(/.*\\//, \"\", n); sub(/[.]lock\$/, \"\", n); print p, n }'); " +
         "tmux list-panes -a -F '#{pane_id} #{pane_pid} #{session_name}:#{window_id} #{pane_current_command}' | " +
         "while read -r id pp where cmd; do [ \"\$cmd\" = agy ] || continue; " +
+        (if (pane != null) "[ \"\$id\" = '$pane' ] || continue; " else "") +
         "c=\$(printf '%s\\n' \"\$L\" | awk -v w=\" \$pp \$(pgrep -P \"\$pp\" | tr '\\n' ' ')\" 'index(w, \" \" \$1 \" \") { print \$2 }'); " +
         "[ \"\$(printf '%s\\n' \"\$c\" | grep -c .)\" = 1 ] || c=; " +
         "s=\$(tmux capture-pane -p -J -t \"\$id\" | awk 'NF' | tail -n 12); " +
