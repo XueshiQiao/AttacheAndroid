@@ -1,1 +1,1 @@
-Built from XueshiQiao/Attache cli/ (0.2.1) by cli/build-all.sh; copy dist/* here to update (dist/version.txt comes with it).
+Built from XueshiQiao/Attache cli/ (0.2.3) by cli/build-all.sh; copy dist/* here to update (dist/version.txt comes with it).

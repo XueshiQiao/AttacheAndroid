@@ -109,6 +109,8 @@ data class AgentChatUiState(
     val earlierNotLoaded: Boolean = false,
     val transcript: TranscriptStatus = TranscriptStatus.LOADING,
     val prompt: ApprovalPrompt? = null,
+    /** A question Claude asked (`AskUserQuestion`), while it waits. */
+    val question: QuestionPrompt? = null,
     val pending: List<PendingMessage> = emptyList(),
     /** Images picked for the next message, uploading or uploaded. */
     val images: List<PendingImageAttachment> = emptyList(),
@@ -420,6 +422,38 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Picks an answer to the question on screen (for a multiple choice, ticks
+     * it). attache-cli moves the cursor there, reads the screen again, and
+     * presses Enter only if the cursor arrived on that very question. What
+     * the card shows next comes from the next screen read, not from here.
+     */
+    fun choose(option: QuestionPrompt.Option) {
+        if (option.typed) return
+        chooseRow(option.number.toString())
+    }
+
+    /** A multiple choice's Submit row: that question is answered, on to the
+     * next. */
+    fun submitChoices() {
+        if (_uiState.value.question?.submitRow != true) return
+        chooseRow("submit")
+    }
+
+    private fun chooseRow(row: String) {
+        val tmux = control ?: return
+        val shown = _uiState.value.question ?: return
+        viewModelScope.launch {
+            try {
+                val result = AttacheCli.choose(tmux, paneId, row, shown.fingerprint)
+                if (!result.sent) _uiState.update { it.copy(notice = AttacheCli.refusal(result.why)) }
+            } catch (e: Exception) {
+                if (e is CancellationException) currentCoroutineContext().ensureActive()
+                _uiState.update { it.copy(notice = "Not sent: ${e.message}") }
+            }
+        }
+    }
+
     /** The other agents, for the drawer and the recent list. The same
      * read-only `list-panes` the agent list sends, a little less often. */
     private var agentsRefresh: Job? = null
@@ -498,7 +532,7 @@ class AgentChatViewModel @Inject constructor(
                 false
             }
             if (!stillThere) {
-                _uiState.update { it.copy(paneGone = true, prompt = null) }
+                _uiState.update { it.copy(paneGone = true, prompt = null, question = null) }
                 return
             }
         }
@@ -525,8 +559,8 @@ class AgentChatViewModel @Inject constructor(
     /**
      * What attache-cli read off the screen. The approval dock and the panel
      * dock follow the agent's phase as before: a menu is answered only while
-     * Claude says it waits, and a panel is offered only while it neither
-     * waits nor works (the multi-question form stays with the terminal).
+     * Claude says it waits, and so is a question; a panel is offered only
+     * while it neither waits nor works.
      */
     private fun onScreen(reading: ScreenReading) {
         lastScreen = reading
@@ -534,6 +568,7 @@ class AgentChatViewModel @Inject constructor(
             val phase = s.agent?.phase
             s.copy(
                 prompt = if (phase == AgentPhase.NEEDS_YOU) reading.approval else null,
+                question = if (phase == AgentPhase.NEEDS_YOU) reading.question else null,
                 activity = if (phase == AgentPhase.WORKING) reading.activity else null,
                 panel = if (s.agent != null && phase != AgentPhase.NEEDS_YOU && phase != AgentPhase.WORKING) reading.panel else null,
             )

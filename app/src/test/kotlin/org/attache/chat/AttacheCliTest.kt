@@ -212,4 +212,43 @@ class AttacheCliTest {
         assertEquals(InputResult(false, "unreachable"), AttacheCli.parseInput(emptyList()))
         assertEquals(InputResult(false, "unreachable"), AttacheCli.parseInput(null))
     }
+
+    @Test
+    fun aQuestionIsReadWithItsTabsTicksAndSubmitRow() {
+        // The shape attache-cli 0.2.3 prints for a multiple choice, the
+        // second of two questions.
+        val reading = AttacheCli.screen(
+            JSONObject(
+                """{"prompt":false,"approval":null,"panel":null,"activity":null,"question":{"header":"",""" +
+                    """"question":"Which sides?","tabs":[{"title":"Position","answered":true},{"title":"Sides","answered":false}],""" +
+                    """"multi":true,"review":false,"answers":[],"cursor":1,"submit_row":true,"fingerprint":"00000000000000ab",""" +
+                    """"options":[{"number":1,"label":"Left","description":"The left edge","typed":false,"checked":true},""" +
+                    """{"number":2,"label":"Right","description":"","typed":false,"checked":false},""" +
+                    """{"number":3,"label":"Type something.","description":"","typed":true,"checked":false}]}}""",
+            ),
+        )
+        val q = reading.question!!
+        assertEquals("Which sides?", q.question)
+        assertEquals(listOf(QuestionPrompt.Tab("Position", true), QuestionPrompt.Tab("Sides", false)), q.tabs)
+        assertTrue(q.multi && q.submitRow && !q.review)
+        assertEquals(listOf(true, false, false), q.options.map { it.checked })
+        assertEquals(listOf(false, false, true), q.options.map { it.typed })
+        assertEquals("The left edge", q.options[0].description)
+    }
+
+    @Test
+    fun aQuestionWithoutAFingerprintCannotBeAnswered() {
+        val reading = AttacheCli.screen(
+            JSONObject("""{"question":{"question":"Q","fingerprint":"XYZ","options":[{"number":1,"label":"A"}]}}"""),
+        )
+        assertNull(reading.question)
+        val review = AttacheCli.screen(
+            JSONObject(
+                """{"question":{"question":"Review your answers","review":true,"fingerprint":"0123456789abcdef",""" +
+                    """"answers":[{"question":"Which sides?","answer":"Left"}],"options":[{"number":1,"label":"Submit answers"},{"number":2,"label":"Cancel"}]}}""",
+            ),
+        ).question!!
+        assertTrue(review.review)
+        assertEquals(listOf("Which sides?" to "Left"), review.answers)
+    }
 }

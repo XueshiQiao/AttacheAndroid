@@ -130,6 +130,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -352,8 +353,16 @@ fun AgentChatScreen(
                 }
                 if (state.agent?.phase == AgentPhase.NEEDS_YOU) {
                     val prompt = state.prompt
+                    val question = state.question
                     if (prompt != null) {
                         PromptDock(prompt, onAnswer = viewModel::answer)
+                    } else if (question != null) {
+                        QuestionDock(
+                            question,
+                            onChoose = viewModel::choose,
+                            onSubmitChoices = viewModel::submitChoices,
+                            onOpenTerminal = openTerminal,
+                        )
                     } else {
                         UnreadablePromptDock(onOpenTerminal = openTerminal)
                     }
@@ -847,6 +856,152 @@ private fun PromptDock(prompt: ApprovalPrompt, onAnswer: (ApprovalPrompt.Option)
             },
             dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/**
+ * A question Claude asked: where in the questions this is when there are
+ * several (ticked when answered, then Review), the question, and an answer a
+ * row. A multiple choice ticks a row per tap and moves on with its own
+ * button; the review lists the answers given, to submit or cancel. Answers
+ * that need typing point to the terminal rather than doing nothing here.
+ */
+@Composable
+private fun QuestionDock(
+    question: QuestionPrompt,
+    onChoose: (QuestionPrompt.Option) -> Unit,
+    onSubmitChoices: () -> Unit,
+    onOpenTerminal: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(color = colors.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    "● Claude is asking",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.primary,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+                if (question.tabs.isNotEmpty()) {
+                    // The current tab shows on the host only in colour, so the
+                    // first one still open is taken for it, as attache-cli does.
+                    val current = if (question.review) question.tabs.size else question.tabs.indexOfFirst { !it.answered }.let { if (it < 0) question.tabs.size else it }
+                    question.tabs.forEachIndexed { k, tab ->
+                        QuestionStep("${k + 1} ${tab.title}" + if (tab.answered) " ✓" else "", current = k == current, done = tab.answered)
+                    }
+                    QuestionStep("Review", current = question.review, done = false)
+                } else if (question.header.isNotEmpty()) {
+                    QuestionStep(question.header, current = true, done = false)
+                }
+            }
+            Text(question.question, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            if (question.review) {
+                for ((asked, answer) in question.answers) {
+                    Column {
+                        Text(asked, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                        Text("→ $answer", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+            for (option in question.options) {
+                if (option.typed) continue
+                QuestionAnswerRow(option, checkbox = if (question.multi) option.checked else null, onClick = { onChoose(option) })
+            }
+            val typed = question.options.filter { it.typed }.map { it.label.trimEnd('.') }
+            if (typed.isNotEmpty() || (question.multi && question.submitRow)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (typed.isNotEmpty()) {
+                        Text(
+                            "Other answers: ${typed.joinToString(" · ")} — in the terminal",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(onClick = onOpenTerminal)
+                                .padding(vertical = 6.dp),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (question.multi && question.submitRow) {
+                        Button(onClick = onSubmitChoices) {
+                            Text(if (question.tabs.isEmpty()) "Done" else "Next question")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A step of the questions: "1 Card position ✓", the current one lit. */
+@Composable
+private fun QuestionStep(text: String, current: Boolean, done: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (current) colors.primary.copy(alpha = 0.22f) else colors.surface.copy(alpha = 0.6f),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+            color = when {
+                current -> colors.onSecondaryContainer
+                done -> colors.onSurfaceVariant
+                else -> colors.onSurfaceVariant.copy(alpha = 0.7f)
+            },
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+        )
+    }
+}
+
+/** One answer: the whole row is the button, its description beneath. */
+@Composable
+private fun QuestionAnswerRow(option: QuestionPrompt.Option, checkbox: Boolean?, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = colors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                checkbox?.let { if (it) "☑" else "☐" } ?: "${option.number}",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (checkbox == true) colors.primary else colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(24.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    option.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (option.description.isEmpty()) FontWeight.Normal else FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (option.description.isNotEmpty()) {
+                    Text(
+                        option.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
     }
 }
 

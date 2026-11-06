@@ -50,6 +50,8 @@ data class ScreenReading(
      * it and is pressed only on that very panel. */
     val panelFingerprint: String?,
     val activity: AgentActivity?,
+    /** A question Claude asked (`AskUserQuestion`). */
+    val question: QuestionPrompt? = null,
 )
 
 object AttacheCli {
@@ -142,6 +144,17 @@ object AttacheCli {
         return parseInput(lines(tmux, "input $pane --key $key --if $condition"))
     }
 
+    /**
+     * Picks row [row] of the question on screen: an answer's number, or
+     * `submit` for a multiple choice's Submit row. attache-cli moves the
+     * cursor there with arrows, reads the screen again, and presses Enter
+     * only if the cursor arrived on that very question ([fingerprint]).
+     */
+    suspend fun choose(tmux: TmuxControl, pane: String, row: String, fingerprint: String): InputResult {
+        require(PANE.matches(pane) && ROW.matches(row) && FINGERPRINT.matches(fingerprint)) { "not a pane, a row or a fingerprint" }
+        return parseInput(lines(tmux, "input $pane --choose $row --if question:$fingerprint"))
+    }
+
     /** What `input` printed; a host that printed nothing (attache-cli
      * missing, or one from before protocol 2) sent nothing either. */
     fun parseInput(lines: List<String>?): InputResult {
@@ -187,7 +200,41 @@ object AttacheCli {
         val panel = o.optJSONArray("panel")?.let { p -> (0 until p.length()).map { p.optString(it) } }
         val activity = o.optJSONObject("activity")?.let { AgentActivity(it.optString("verb"), it.optStringOrNull("detail")) }
         val panelFingerprint = o.optStringOrNull("panel_fingerprint")?.takeIf { FINGERPRINT.matches(it) }
-        return ScreenReading(o.optBoolean("prompt"), approval, panel, panelFingerprint, activity)
+        val question = o.optJSONObject("question")?.let(::question)
+        return ScreenReading(o.optBoolean("prompt"), approval, panel, panelFingerprint, activity, question)
+    }
+
+    /** A `question` in a screen reading; null without a fingerprint or rows,
+     * since then nothing on it can be answered. */
+    fun question(q: JSONObject): QuestionPrompt? {
+        val opts = q.optJSONArray("options") ?: JSONArray()
+        val tabs = q.optJSONArray("tabs") ?: JSONArray()
+        val answers = q.optJSONArray("answers") ?: JSONArray()
+        return QuestionPrompt(
+            header = q.optString("header"),
+            question = q.optString("question"),
+            tabs = (0 until tabs.length()).mapNotNull { i ->
+                tabs.optJSONObject(i)?.let { QuestionPrompt.Tab(it.optString("title"), it.optBoolean("answered")) }
+            },
+            multi = q.optBoolean("multi"),
+            review = q.optBoolean("review"),
+            answers = (0 until answers.length()).mapNotNull { i ->
+                answers.optJSONObject(i)?.let { it.optString("question") to it.optString("answer") }
+            },
+            options = (0 until opts.length()).mapNotNull { i ->
+                val o = opts.optJSONObject(i) ?: return@mapNotNull null
+                if (!o.has("number")) return@mapNotNull null
+                QuestionPrompt.Option(
+                    number = o.optInt("number"),
+                    label = o.optString("label"),
+                    description = o.optString("description"),
+                    typed = o.optBoolean("typed"),
+                    checked = o.optBoolean("checked"),
+                )
+            },
+            submitRow = q.optBoolean("submit_row"),
+            fingerprint = q.optString("fingerprint"),
+        ).takeIf { it.options.isNotEmpty() && FINGERPRINT.matches(it.fingerprint) }
     }
 
     /** Why attache-cli did not send, in words for a notice. */
@@ -202,6 +249,7 @@ object AttacheCli {
         "question_changed" -> "The question changed"
         "no_such_option" -> "That answer is not on the menu"
         "panel_closed" -> "The panel has closed"
+        "typed_answer" -> "That answer needs typing, in the terminal"
         "not_working" -> "It has already stopped"
         "not_claude" -> "Only Claude's screen can be answered from here"
         "busy" -> "Another device is typing into this pane"
@@ -313,6 +361,7 @@ object AttacheCli {
     private val ID = Regex("^[A-Za-z0-9_-]{1,128}$")
     private val KEY = Regex("^(Enter|Escape|Up|Down|Left|Right|Tab|[1-8])$")
     private val FINGERPRINT = Regex("^[0-9a-f]{16}$")
+    private val ROW = Regex("^([1-9][0-9]?|submit)$")
     private val CONDITION = Regex("^(approval:[0-9a-f]{16}|panel(:[0-9a-f]{16})?|working)$")
 
     /** Single-quoted for sh. */
