@@ -167,7 +167,8 @@ fun AgentChatScreen(
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.notice) {
         state.notice?.let {
-            snackbar.showSnackbar(it)
+            // TEMPORARY (measurement build): the timing line stays long enough to read.
+            snackbar.showSnackbar(it, duration = if (it.startsWith("Open ms:")) SnackbarDuration.Indefinite else SnackbarDuration.Short, withDismissAction = it.startsWith("Open ms:"))
             viewModel.clearNotice()
         }
     }

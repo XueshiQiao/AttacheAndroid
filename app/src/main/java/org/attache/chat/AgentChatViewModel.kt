@@ -202,6 +202,24 @@ class AgentChatViewModel @Inject constructor(
      * the old one. */
     @Volatile private var carryOver: List<ChatItem> = emptyList()
 
+    // TEMPORARY (measurement build): how long opening a conversation takes,
+    // step by step, shown once as a notice. Times are from the page opening.
+    private class OpenTiming {
+        val start = System.nanoTime()
+        var control = 0L
+        var pane = 0L
+        var sessions = 0L
+        var channel = 0L
+        var header = 0L
+        var lastChunk = 0L
+        var bytes = 0L
+        var lines = 0
+        var parseNs = 0L
+        fun now() = (System.nanoTime() - start) / 1_000_000
+    }
+
+    @Volatile private var openTiming: OpenTiming? = OpenTiming()
+
     /** After a slash command the screen is watched for a panel for a while,
      * since a panel changes nothing tmux or the transcript would report. */
     @Volatile private var panelWatchUntilMs = 0L
@@ -221,6 +239,7 @@ class AgentChatViewModel @Inject constructor(
             link.control.collectLatest { tmux ->
                 control = tmux
                 if (tmux == null) return@collectLatest
+                openTiming?.let { if (it.control == 0L) it.control = it.now() }
                 coroutineScope {
                     launch { watchPane(tmux) }
                     launch { watchAgents(tmux) }
@@ -507,6 +526,7 @@ class AgentChatViewModel @Inject constructor(
             _uiState.update { it.copy(paneGone = true, prompt = null) }
             return
         }
+        openTiming?.let { if (it.pane == 0L) it.pane = it.now() }
         val mine = rows.firstOrNull { it.startsWith(paneId + AgentPanes.SEP) }
         if (mine == null) {
             _uiState.update { it.copy(paneGone = true, prompt = null) }
@@ -518,6 +538,7 @@ class AgentChatViewModel @Inject constructor(
         // dock should not lag it. Only this agent's provider is asked.
         val provider = parsed?.let { AgentProviders.forKind(it.kind) }
         val ownSessions = provider?.let { readSessions(tmux, listOf(it)) }.orEmpty()
+        openTiming?.let { if (it.sessions == 0L) it.sessions = it.now() }
         val agent = parsed?.let { AgentPanes.merge(listOf(it), ownSessions).first() }
         val session = ownSessions.firstOrNull { it.paneId == paneId }
         session?.transcriptPath?.let {
@@ -619,11 +640,23 @@ class AgentChatViewModel @Inject constructor(
                 historyStart = null
                 var publishJob: Job? = null
                 coroutineScope {
+                    openTiming?.let { if (it.channel == 0L) it.channel = it.now() }
                     val ok = tmux.follow(TranscriptFollower.command(path)) { chunk ->
+                        val timing = openTiming
+                        if (timing != null) {
+                            timing.bytes += chunk.size
+                            timing.lastChunk = timing.now()
+                        }
                         val lines = splitter.feed(chunk)
                         if (lines.isEmpty() && splitter.startOffset == null) return@follow
+                        if (timing != null && timing.header == 0L) timing.header = timing.now()
                         if (historyStart == null) historyStart = splitter.startOffset
+                        val parseStart = System.nanoTime()
                         lines.forEach(transcript::accept)
+                        if (timing != null) {
+                            timing.parseNs += System.nanoTime() - parseStart
+                            timing.lines += lines.size
+                        }
                         // Coalesced: an agent mid-turn appends several times
                         // a second, and the list need not redraw for each.
                         publishJob?.cancel()
@@ -682,6 +715,16 @@ class AgentChatViewModel @Inject constructor(
 
     private fun publish(transcript: AgentTranscript) {
         val items = carryOver + transcript.snapshot
+        openTiming?.let { t ->
+            openTiming = null
+            _uiState.update {
+                it.copy(
+                    notice = "Open ms: link ${t.control} · pane ${t.pane} · sessions ${t.sessions} · channel ${t.channel} · " +
+                        "first byte ${t.header} · last byte ${t.lastChunk} (${t.bytes / 1000} KB, ${t.lines} lines) · " +
+                        "parse ${t.parseNs / 1_000_000} · shown ${t.now()}",
+                )
+            }
+        }
         transcriptStatus = transcript.status
         val status = currentStatus()
         _uiState.update { s ->
