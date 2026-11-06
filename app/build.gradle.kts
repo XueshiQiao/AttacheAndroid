@@ -647,6 +647,9 @@ dependencies {
     implementation(libs.timber)
     implementation(libs.slf4j.api)
     implementation(libs.re2j)
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.ext.gfm.tables)
+    implementation(libs.commonmark.ext.gfm.strikethrough)
     implementation(libs.reorderable)
 
     val composeBom = platform(libs.androidx.compose.bom)
