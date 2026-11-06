@@ -200,14 +200,6 @@ class AgentChatViewModel @Inject constructor(
      * the old one. */
     @Volatile private var carryOver: List<ChatItem> = emptyList()
 
-    // TEMPORARY (measurement build): how long until the conversation was
-    // on screen, and whether it came from memory, shown once as a notice.
-    private val openedAt = System.nanoTime()
-
-    @Volatile private var openReported = false
-
-    @Volatile private var openFromMemory = false
-
     /** After a slash command the screen is watched for a panel for a while,
      * since a panel changes nothing tmux or the transcript would report. */
     @Volatile private var panelWatchUntilMs = 0L
@@ -645,7 +637,6 @@ class AgentChatViewModel @Inject constructor(
         if (provider.transcriptReader() == null) return
         val conversation = Conversations.get(hostId, path, provider.kind, dispatchers.default)
         liveConversation = conversation
-        if (!openReported && conversation.view.value.items.isNotEmpty()) openFromMemory = true
         conversation.follow(tmux)
         // Until a new path or a new channel replaces this one.
         conversation.view.collect(::publish)
@@ -678,11 +669,6 @@ class AgentChatViewModel @Inject constructor(
             return
         }
         val items = carryOver + view.items
-        if (!openReported) {
-            openReported = true
-            val ms = (System.nanoTime() - openedAt) / 1_000_000
-            _uiState.update { it.copy(notice = "Open ms: shown $ms · ${if (openFromMemory) "from memory" else "read from the Mac"}") }
-        }
         transcriptStatus = view.status
         val status = currentStatus()
         _uiState.update { s ->

@@ -46,8 +46,6 @@ data class AgentListUiState(
     val connection: ChatConnection = ChatConnection.CONNECTING,
     val agents: List<AgentPane> = emptyList(),
     val error: String? = null,
-    /** TEMPORARY (measurement build): how long the first list took. */
-    val timing: String? = null,
 )
 
 /** The chat mode's first screen: every agent in tmux, by what it needs. */
@@ -63,20 +61,10 @@ class AgentListViewModel @Inject constructor(
     private val agents = MutableStateFlow(AgentDirectory.get(hostId))
     private val pollError = MutableStateFlow<String?>(null)
 
-    // TEMPORARY (measurement build): ms after the page opened that the
-    // tmux channel came, the first pane list, and the first agent reports.
-    private val openedAt = System.nanoTime()
-    private val timing = MutableStateFlow<String?>(null)
-    private var controlMs = 0L
-    private var panesMs = 0L
-
-    private fun sinceOpen() = (System.nanoTime() - openedAt) / 1_000_000
-
     val uiState: StateFlow<AgentListUiState> =
         combine(link.hostName, link.connection, agents, link.error, pollError) { host, connection, list, linkError, error ->
             AgentListUiState(host, connection, list, error ?: linkError)
-        }.combine(timing) { state, t -> state.copy(timing = t) }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, AgentListUiState())
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, AgentListUiState())
 
     /** Whether the list is on screen. It polls only then: behind a chat page
      * it would run every agent's script on the channel the chat page is
@@ -90,12 +78,7 @@ class AgentListViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             link.control.combine(shown) { tmux, visible -> tmux.takeIf { visible } }
-                .collectLatest { tmux ->
-                    if (tmux != null) {
-                        if (controlMs == 0L) controlMs = sinceOpen()
-                        poll(tmux)
-                    }
-                }
+                .collectLatest { tmux -> if (tmux != null) poll(tmux) }
         }
     }
 
@@ -116,7 +99,6 @@ class AgentListViewModel @Inject constructor(
             try {
                 val lines = tmux.query(AgentPanes.LIST_COMMAND)
                 val panes = withContext(dispatchers.default) { AgentPanes.parse(lines) }
-                if (panesMs == 0L) panesMs = sinceOpen()
                 // The panes first, with what the agents said last time: the
                 // scripts take most of a second with a dozen agy screens to
                 // read, and the list need not wait for them to be shown.
@@ -127,9 +109,6 @@ class AgentListViewModel @Inject constructor(
                 if (polls++ % 2 == 0) {
                     sessions = readSessions(tmux)
                     agents.value = AgentPanes.merge(panes, sessions)
-                    if (timing.value == null) {
-                        timing.value = "Open ms: channel $controlMs · panes $panesMs · agents ${sinceOpen()}"
-                    }
                 }
                 AgentDirectory.put(hostId, agents.value)
                 pollError.value = null

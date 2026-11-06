@@ -48,9 +48,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -145,15 +142,9 @@ fun AgentListScreen(
     }
     var showAppearance by remember { mutableStateOf(false) }
     if (showAppearance) ChatAppearanceDialog(onDismiss = { showAppearance = false })
-    // TEMPORARY (measurement build): the first list's timing, once.
-    val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(state.timing) {
-        state.timing?.let { snackbar.showSnackbar(it, withDismissAction = true, duration = SnackbarDuration.Indefinite) }
-    }
 
     Scaffold(
         modifier = modifier,
-        snackbarHost = { SnackbarHost(snackbar) },
         // The bottom is kept clear by the list itself (bottomSafeInset).
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
