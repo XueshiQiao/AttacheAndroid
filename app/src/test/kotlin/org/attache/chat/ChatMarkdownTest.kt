@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,10 +69,36 @@ class ChatMarkdownTest {
     }
 
     @Test
-    fun aTableKeepsItsSourceAndAListItsShape() {
-        val out = blocks("| a | b |\n|---|---|\n| 1 | 2 |\n\n1. 第一\n   - 里面\n2. 第二")
-        assertEquals(MdBlock.Preformatted("| a | b |\n|---|---|\n| 1 | 2 |"), out[0])
+    fun aTableIsLaidOutAndAListKeepsItsShape() {
+        val out = blocks("| 文件 | 改动 |\n|---|:-:|\n| `a.kt` | **加了**一行 |\n\n1. 第一\n   - 里面\n2. 第二")
+        val table = out[0] as MdBlock.Table
+        assertEquals(listOf("文件", "改动"), table.header.map { it.text })
+        assertEquals(listOf(listOf("a.kt", "加了一行")), table.rows.map { row -> row.map { it.text } })
+        assertEquals(listOf("加了"), table.rows[0][1].bold())
+        assertEquals(listOf(TextAlign.Start, TextAlign.Center), table.align)
         assertEquals(listOf("1." to 0, "•" to 1, "2." to 0), out.drop(1).map { (it as MdBlock.Bullet).marker to it.indent })
+    }
+
+    @Test
+    fun aShortRowIsFilledAndABreakInACellBreaks() {
+        val table = blocks("| a | b | c |\n|---|---|---|\n| 1<br>2 |").single() as MdBlock.Table
+        assertEquals(listOf("1\n2", "", ""), table.rows.single().map { it.text })
+    }
+
+    @Test
+    fun columnsThatFitKeepTheirWidth() {
+        assertEquals(listOf(40, 60), TableWidths.fit(intArrayOf(40, 60), 300, 72).toList())
+    }
+
+    @Test
+    fun theWideColumnsGiveWayAndTheNarrowOnesDoNot() {
+        // 300 across: the 50 keeps its width, the two long ones split 250.
+        assertEquals(listOf(50, 125, 125), TableWidths.fit(intArrayOf(50, 400, 900), 300, 72).toList())
+    }
+
+    @Test
+    fun pastTheFloorTheTableScrolls() {
+        assertEquals(listOf(72, 72, 72, 72), TableWidths.fit(intArrayOf(500, 500, 500, 500), 200, 72).toList())
     }
 
     @Test

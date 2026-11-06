@@ -17,8 +17,10 @@
 
 package org.attache.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -38,7 +40,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -47,14 +52,18 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
 import org.commonmark.ext.gfm.tables.TableBlock
+import org.commonmark.ext.gfm.tables.TableCell
+import org.commonmark.ext.gfm.tables.TableRow
 import org.commonmark.ext.gfm.tables.TablesExtension
 import org.commonmark.node.BlockQuote
 import org.commonmark.node.BulletList
@@ -75,7 +84,6 @@ import org.commonmark.node.Paragraph
 import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.ThematicBreak
-import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.parser.Parser
 import org.commonmark.node.Text as MdText
 
@@ -88,8 +96,16 @@ internal sealed interface MdBlock {
 
     data class Bullet(val marker: String, val text: AnnotatedString, val indent: Int) : MdBlock
 
-    /** Code and tables both keep their columns, so both are monospace. */
+    /** Code keeps its columns, so it is monospace. */
     data class Preformatted(val text: String, val indent: Int = 0) : MdBlock
+
+    /** Every row has as many cells as [header], one [align] per column. */
+    data class Table(
+        val header: List<AnnotatedString>,
+        val rows: List<List<AnnotatedString>>,
+        val align: List<TextAlign>,
+        val indent: Int = 0,
+    ) : MdBlock
 
     data class Quote(val blocks: List<MdBlock>) : MdBlock
 
@@ -115,28 +131,28 @@ internal data class MdColors(val codeBackground: Color, val link: Color)
 internal object ChatMarkdown {
     private val parser = Parser.builder()
         .extensions(listOf(TablesExtension.create(), StrikethroughExtension.create()))
-        .includeSourceSpans(IncludeSourceSpans.BLOCKS)
         .build()
 
     private val BARE_URL = Regex("https?://[^\\s<>()\\[\\]{}\"'`，。；：、！？（）「」【】]+[^\\s<>()\\[\\]{}\"'`，。；：、！？（）「」【】.,;:!?]")
     private val OPENS = setOf("http", "https", "mailto")
+    private val BREAK = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
 
     fun blocks(text: String, colors: MdColors): List<MdBlock> {
         val out = ArrayList<MdBlock>()
         val prepared = CjkEmphasis.prepare(text)
-        children(parser.parse(prepared), 0, out, colors, prepared.lines())
+        children(parser.parse(prepared), 0, out, colors)
         return out
     }
 
-    private fun children(parent: Node, indent: Int, out: MutableList<MdBlock>, colors: MdColors, lines: List<String>) {
+    private fun children(parent: Node, indent: Int, out: MutableList<MdBlock>, colors: MdColors) {
         var node = parent.firstChild
         while (node != null) {
-            block(node, indent, out, colors, lines)
+            block(node, indent, out, colors)
             node = node.next
         }
     }
 
-    private fun block(node: Node, indent: Int, out: MutableList<MdBlock>, colors: MdColors, lines: List<String>) {
+    private fun block(node: Node, indent: Int, out: MutableList<MdBlock>, colors: MdColors) {
         when (node) {
             is Paragraph -> out += MdBlock.Paragraph(inline(node, colors), indent)
 
@@ -156,11 +172,11 @@ internal object ChatMarkdown {
                             out += MdBlock.Bullet(marker, inline(first, colors), indent)
                         } else {
                             out += MdBlock.Bullet(marker, AnnotatedString(""), indent)
-                            if (first != null) block(first, indent + 1, out, colors, lines)
+                            if (first != null) block(first, indent + 1, out, colors)
                         }
                         var rest = first?.next
                         while (rest != null) {
-                            block(rest, indent + 1, out, colors, lines)
+                            block(rest, indent + 1, out, colors)
                             rest = rest.next
                         }
                     }
@@ -174,22 +190,44 @@ internal object ChatMarkdown {
 
             is ThematicBreak -> out += MdBlock.Rule
 
-            is BlockQuote -> out += MdBlock.Quote(ArrayList<MdBlock>().also { children(node, 0, it, colors, lines) })
+            is BlockQuote -> out += MdBlock.Quote(ArrayList<MdBlock>().also { children(node, 0, it, colors) })
 
-            // As written: its columns are lined up in the source, and a
-            // phone is too narrow for a laid-out table anyway.
-            is TableBlock -> out += MdBlock.Preformatted(source(node, lines), indent)
+            is TableBlock -> out += table(node, indent, colors)
 
             is HtmlBlock -> out += MdBlock.Paragraph(AnnotatedString(node.literal.trim()), indent)
 
-            else -> children(node, indent, out, colors, lines)
+            else -> children(node, indent, out, colors)
         }
     }
 
-    private fun source(node: Node, lines: List<String>): String = node.sourceSpans.joinToString("\n") { span ->
-        lines.getOrNull(span.lineIndex)?.let { line ->
-            line.substring(span.columnIndex.coerceAtMost(line.length), (span.columnIndex + span.length).coerceAtMost(line.length))
-        }.orEmpty()
+    /** Laid out rather than shown as typed: the source only lines up when
+     * every cell is ASCII, and Claude does not pad Chinese cells, so a
+     * table came out as a run of pipes. */
+    private fun table(node: TableBlock, indent: Int, colors: MdColors): MdBlock.Table {
+        val rows = ArrayList<List<TableCell>>()
+        fun collect(parent: Node) {
+            var child = parent.firstChild
+            while (child != null) {
+                if (child is TableRow) {
+                    rows += generateSequence(child.firstChild) { it.next }.filterIsInstance<TableCell>().toList()
+                } else {
+                    collect(child)
+                }
+                child = child.next
+            }
+        }
+        collect(node)
+        val header = rows.first()
+        val columns = header.size
+        fun texts(row: List<TableCell>) = List(columns) { c -> row.getOrNull(c)?.let { inline(it, colors) } ?: AnnotatedString("") }
+        val align = header.map {
+            when (it.alignment) {
+                TableCell.Alignment.CENTER -> TextAlign.Center
+                TableCell.Alignment.RIGHT -> TextAlign.End
+                else -> TextAlign.Start
+            }
+        }
+        return MdBlock.Table(texts(header), rows.drop(1).map(::texts), align, indent)
     }
 
     /** A block's inline content: code, emphasis, strikethrough and links. */
@@ -223,7 +261,9 @@ internal object ChatMarkdown {
                     // would be a gap that was never there.
                     is SoftLineBreak, is HardLineBreak -> append('\n')
 
-                    is HtmlInline -> append(child.literal)
+                    // A cell cannot hold a line break, so agents write
+                    // `<br>` in tables to get one.
+                    is HtmlInline -> if (BREAK.matches(child.literal)) append('\n') else append(child.literal)
 
                     else -> visit(child)
                 }
@@ -301,6 +341,8 @@ private fun MarkdownBlocks(blocks: List<MdBlock>) {
 
                 is MdBlock.Preformatted -> CodeBlock(block.text, Modifier.padding(start = under(block.indent)))
 
+                is MdBlock.Table -> MarkdownTable(block, Modifier.padding(start = under(block.indent)))
+
                 is MdBlock.Quote -> Row(Modifier.height(IntrinsicSize.Min)) {
                     Box(
                         Modifier
@@ -328,7 +370,96 @@ private fun MdBlock.indentOf(): Int = when (this) {
     is MdBlock.Paragraph -> indent
     is MdBlock.Bullet -> indent
     is MdBlock.Preformatted -> indent
+    is MdBlock.Table -> indent
     else -> 0
+}
+
+/** How narrow a column may be squeezed before the table scrolls instead. */
+private val TABLE_COLUMN_FLOOR = 72.dp
+
+/**
+ * A table as a grid. Columns take the width their longest cell wants;
+ * when that is wider than the screen the wide columns give way and wrap,
+ * and only once every column is down to [TABLE_COLUMN_FLOOR] does the
+ * table scroll sideways.
+ */
+@Composable
+private fun MarkdownTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
+    val line = MaterialTheme.colorScheme.outlineVariant
+    val head = MaterialTheme.colorScheme.surfaceVariant
+    val cell = MaterialTheme.colorScheme.surface
+    val style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp)
+    val floor = with(LocalDensity.current) { TABLE_COLUMN_FLOOR.roundToPx() }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val available = constraints.maxWidth
+        Box(Modifier.horizontalScroll(rememberScrollState())) {
+            Layout(
+                content = {
+                    (listOf(table.header) + table.rows).forEachIndexed { r, row ->
+                        row.forEachIndexed { c, text ->
+                            Text(
+                                text,
+                                style = style,
+                                fontWeight = if (r == 0) FontWeight.SemiBold else null,
+                                textAlign = table.align[c],
+                                modifier = Modifier
+                                    .background(if (r == 0) head else cell)
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+                },
+                // The gaps between cells show this through, as the rules.
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(line),
+            ) { measurables, _ ->
+                val columns = table.header.size
+                val rows = measurables.size / columns
+                val gap = 1.dp.roundToPx().coerceAtLeast(1)
+                val natural = IntArray(columns) { c -> (0 until rows).maxOf { r -> measurables[r * columns + c].maxIntrinsicWidth(Constraints.Infinity) } }
+                val widths = if (available == Constraints.Infinity) natural else TableWidths.fit(natural, available - gap * (columns + 1), floor)
+                // Asked first so every cell in a row can be measured at the
+                // row's full height, which is what fills its background.
+                val heights = IntArray(rows) { r -> (0 until columns).maxOf { c -> measurables[r * columns + c].minIntrinsicHeight(widths[c]) } }
+                val placeables = measurables.mapIndexed { i, m -> m.measure(Constraints.fixed(widths[i % columns], heights[i / columns])) }
+                layout(widths.sum() + gap * (columns + 1), heights.sum() + gap * (rows + 1)) {
+                    var y = gap
+                    for (r in 0 until rows) {
+                        var x = gap
+                        for (c in 0 until columns) {
+                            placeables[r * columns + c].place(x, y)
+                            x += widths[c] + gap
+                        }
+                        y += heights[r] + gap
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal object TableWidths {
+    /**
+     * Column widths for [available], from the width each column's longest
+     * cell wants. Columns that want no more than an even share keep what
+     * they want; the rest split what is left evenly, but none goes below
+     * [floor] — past that the sum exceeds [available] and the table scrolls.
+     */
+    fun fit(natural: IntArray, available: Int, floor: Int): IntArray {
+        if (natural.sum() <= available) return natural
+        val open = natural.indices.toMutableList()
+        var left = available
+        while (true) {
+            val share = left / open.size
+            val settled = open.filter { natural[it] <= share }
+            if (settled.isEmpty()) break
+            for (c in settled) left -= natural[c]
+            open.removeAll(settled)
+        }
+        val share = left / open.size
+        return IntArray(natural.size) { c -> if (c in open) maxOf(share, minOf(floor, natural[c])) else natural[c] }
+    }
 }
 
 @Composable

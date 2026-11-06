@@ -996,74 +996,83 @@ internal fun Composer(
     val uploading = images.any { it.remotePath == null }
     val canSend = enabled && !uploading && (text.isNotBlank() || images.isNotEmpty())
     Column(Modifier.fillMaxWidth()) {
-        // The terminal mode's tool keys that mean something here.
+        // The terminal mode's tool keys that mean something here. Recent
+        // first, where a thumb reaches it; Files apart at the far end,
+        // because it is what came from the host rather than what goes to it.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .horizontalScroll(rememberScrollState())
+                .fillMaxWidth()
                 .padding(start = 6.dp, end = 6.dp, top = 4.dp),
         ) {
-            ToolChip("Image", Icons.Filled.Image, enabled, onPickImages)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+            ) {
+                // The terminal mode's recent windows, as agents: the last chats
+                // opened, a tap away.
+                Box {
+                    ToolChip("Recent", Icons.Filled.History, recents.isNotEmpty()) { recentOpen = true }
+                    DropdownMenu(expanded = recentOpen, onDismissRequest = { recentOpen = false }) {
+                        val nowMs = System.currentTimeMillis()
+                        for ((agent, atMs) in recents) {
+                            DropdownMenuItem(
+                                leadingIcon = {
+                                    Box(
+                                        Modifier
+                                            .size(8.dp)
+                                            .background(phaseColor(agent.phase), CircleShape),
+                                    )
+                                },
+                                text = {
+                                    Column {
+                                        Text(agent.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(
+                                            "${agent.sessionName} · ${agent.windowName} · ${age((nowMs - atMs) / 1000)} ago",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    recentOpen = false
+                                    onPickRecent(agent)
+                                },
+                            )
+                        }
+                    }
+                }
+                Box {
+                    ToolChip("Commands", null, enabled) { commandsOpen = true }
+                    DropdownMenu(expanded = commandsOpen, onDismissRequest = { commandsOpen = false }) {
+                        for (command in AGENT_SLASH_COMMANDS) {
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(command.text, fontWeight = FontWeight.SemiBold)
+                                        Text(
+                                            command.summary + (command.only?.let { " · $it only" } ?: ""),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    commandsOpen = false
+                                    // Into the box rather than sent, so arguments
+                                    // can follow and nothing runs by accident.
+                                    text = command.text + " "
+                                },
+                            )
+                        }
+                    }
+                }
+                ToolChip("Image", Icons.Filled.Image, enabled, onPickImages)
+            }
             ToolChip("Files", Icons.Filled.Folder, true, onOpenFiles)
-            // The terminal mode's recent windows, as agents: the last chats
-            // opened, a tap away.
-            Box {
-                ToolChip("Recent", Icons.Filled.History, recents.isNotEmpty()) { recentOpen = true }
-                DropdownMenu(expanded = recentOpen, onDismissRequest = { recentOpen = false }) {
-                    val nowMs = System.currentTimeMillis()
-                    for ((agent, atMs) in recents) {
-                        DropdownMenuItem(
-                            leadingIcon = {
-                                Box(
-                                    Modifier
-                                        .size(8.dp)
-                                        .background(phaseColor(agent.phase), CircleShape),
-                                )
-                            },
-                            text = {
-                                Column {
-                                    Text(agent.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(
-                                        "${agent.sessionName} · ${agent.windowName} · ${age((nowMs - atMs) / 1000)} ago",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                    )
-                                }
-                            },
-                            onClick = {
-                                recentOpen = false
-                                onPickRecent(agent)
-                            },
-                        )
-                    }
-                }
-            }
-            Box {
-                ToolChip("Commands", null, enabled) { commandsOpen = true }
-                DropdownMenu(expanded = commandsOpen, onDismissRequest = { commandsOpen = false }) {
-                    for (command in AGENT_SLASH_COMMANDS) {
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(command.text, fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        command.summary + (command.only?.let { " · $it only" } ?: ""),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                            onClick = {
-                                commandsOpen = false
-                                // Into the box rather than sent, so arguments
-                                // can follow and nothing runs by accident.
-                                text = command.text + " "
-                            },
-                        )
-                    }
-                }
-            }
         }
         if (images.isNotEmpty()) {
             Row(
