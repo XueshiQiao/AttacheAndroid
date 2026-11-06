@@ -156,4 +156,34 @@ class AgentProvidersTest {
             home.deleteRecursively()
         }
     }
+
+    /** As 2.1.311 left them, 2026-11-06, after a session moved to a
+     * background process: the pane's file frozen at `busy`, the running
+     * session in a file with no pane. */
+    @Test
+    fun aSessionHandedToABackgroundProcessIsReadFromThatProcess() {
+        val home = kotlin.io.path.createTempDirectory("attache-home").toFile()
+        try {
+            val sessions = File(home, ".claude/sessions").apply { mkdirs() }
+            val viewer = ProcessHandle.current().pid()
+            val runner = ProcessHandle.current().parent().get().pid()
+            File(sessions, "$viewer.json").writeText(
+                """{"pid":$viewer,"sessionId":"old","cwd":"/w","tmux":"Dev:@4.%145","status":"busy","statusUpdatedAt":1,"parkedJobId":"c94cb7d8"}""",
+            )
+            File(sessions, "$runner.json").writeText(
+                """{"pid":$runner,"sessionId":"new","cwd":"/w","kind":"bg","jobId":"c94cb7d8","status":"idle","statusUpdatedAt":2}""",
+            )
+            val process = ProcessBuilder("/bin/sh", "-c", ClaudeProvider.sessionsScript()).apply {
+                environment()["HOME"] = home.absolutePath
+            }.start()
+            val out = process.inputStream.readBytes().toString(Charsets.UTF_8).lines().filter { it.isNotBlank() }
+            process.waitFor()
+            val s = out.mapNotNull { ClaudeProvider.parseSession(org.json.JSONObject(it)) }.single()
+            assertEquals("%145", s.paneId)
+            assertEquals(AgentPhase.IDLE, s.phase)
+            assertEquals("${home.absolutePath}/.claude/projects/-w/new.jsonl", s.transcriptPath)
+        } finally {
+            home.deleteRecursively()
+        }
+    }
 }

@@ -42,10 +42,26 @@ object ClaudeProvider : AgentProvider {
 
     override fun recognizes(command: String) = command == "claude" || VERSION_COMMAND.matches(command)
 
+    /**
+     * A session can be handed to a background process while its pane stays
+     * open: measured on 2.1.311, 2026-11-06, a session mid-turn moved to a
+     * `claude bg-spare` process with a new session id and a new transcript
+     * (the old one ends in a `continued-in` record naming it). The pane's
+     * process stays as a viewer; its file gains `parkedJobId` and is never
+     * written again, `busy` for good. The background process's file carries
+     * the same id as `jobId`, and no `tmux`. So the pane comes from the
+     * pane's file, and the session, folder and state from the file of the
+     * process that is running it.
+     */
     override fun sessionsScript() = "for f in \"\$HOME\"/.claude/sessions/*.json; do p=\$(basename \"\$f\" .json); " +
         "case \$p in ''|*[!0-9]*) continue;; esac; kill -0 \"\$p\" 2>/dev/null || continue; " +
+        "s=\$f; j=\$(grep -o -E '\"parkedJobId\":\"[A-Za-z0-9_-]+\"' \"\$f\" | cut -d'\"' -f4); " +
+        "[ -n \"\$j\" ] && for g in \"\$HOME\"/.claude/sessions/*.json; do q=\$(basename \"\$g\" .json); " +
+        "case \$q in ''|*[!0-9]*) continue;; esac; " +
+        "grep -qF \"\\\"jobId\\\":\\\"\$j\\\"\" \"\$g\" && kill -0 \"\$q\" 2>/dev/null && { s=\$g; break; }; done; " +
         "printf '{\"pid\":%s,\"home\":\"%s\"' \"\$p\" \"\$HOME\"; " +
-        "grep -o -E '\"(sessionId|cwd|status|tmux|statusUpdatedAt)\":(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)' \"\$f\" | " +
+        "{ grep -o -E '\"tmux\":\"([^\"\\\\]|\\\\.)*\"' \"\$f\"; " +
+        "grep -o -E '\"(sessionId|cwd|status|statusUpdatedAt)\":(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)' \"\$s\"; } | " +
         "while IFS= read -r kv; do printf ',%s' \"\$kv\"; done; printf '}\\n'; done"
 
     override fun parseSession(line: JSONObject): AgentSession? {
