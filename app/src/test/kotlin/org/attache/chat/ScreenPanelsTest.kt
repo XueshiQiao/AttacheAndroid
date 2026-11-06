@@ -53,6 +53,23 @@ class ScreenPanelsTest {
         assertNull(ScreenPanels.detect(idle))
     }
 
+    /** A named session (`/rename`) writes its name into the rule above the
+     * box. Captured 2026-11-06 right after `/clear`, which is the moment the
+     * screen is watched — before this case the box went unrecognised and the
+     * empty prompt was shown as a panel. */
+    @Test
+    fun aBoxUnderANamedRuleHasNoPanel() {
+        val named = listOf(
+            "",
+            "─".repeat(80) + " Herdr 手机端通信与显示 ─",
+            "❯ ",
+            rule,
+            "  ~/Code/Attache  main  |  Opus 5.5  |  5h ███  used 15%",
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent",
+        )
+        assertNull(ScreenPanels.detect(named))
+    }
+
     @Test
     fun aWorkingScreenHasNoPanel() {
         val working = listOf("✻ Jitterbugging… (13s · ↓ 649 tokens · esc to interrupt)", "") + idle.drop(2)

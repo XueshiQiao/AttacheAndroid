@@ -54,8 +54,9 @@ object ScreenPanels {
         return false
     }
 
-    private fun isRule(line: String): Boolean {
-        val t = line.trim()
-        return t.length >= 20 && t.all { it == '─' }
-    }
+    /** A run of rule characters from the left edge, with anything after it:
+     * a named session writes its name into the rule above the box
+     * (`──── Herdr 手机端通信与显示 ─`), and a rule that had to be all `─`
+     * missed that box and called the bare prompt a panel. */
+    private fun isRule(line: String): Boolean = line.trim().takeWhile { it == '─' }.length >= 20
 }
