@@ -50,7 +50,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -139,6 +141,11 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import kotlin.math.abs
 import org.attache.tmux.AGENT_SLASH_COMMANDS
 import org.attache.tmux.AttacheFileInboxDialog
 import org.attache.tmux.AttacheFileStorage
@@ -411,10 +418,11 @@ private fun subtitle(state: AgentChatUiState): String {
 @Composable
 internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEarlier: () -> Unit) {
     // Newest at the bottom: a reversed layout, so index 0 is the last row.
-    val rows = remember(state.items, state.pending, state.earlierNotLoaded) {
+    val working = state.agent?.phase == AgentPhase.WORKING && !state.agentExited
+    val rows = remember(state.items, state.pending, state.earlierNotLoaded, working) {
         buildList<Any> {
             if (state.earlierNotLoaded) add(EarlierMarker)
-            addAll(ToolGroups.group(PendingMessages.interleave(state.items, state.pending)))
+            addAll(WorkRuns.attach(PendingMessages.interleave(state.items, state.pending), working))
         }.asReversed()
     }
     val listState = rememberLazyListState()
@@ -463,6 +471,10 @@ internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEa
 
                     is ChatItem.AgentText -> MarkdownText(row.text, Modifier.fillMaxWidth())
 
+                    is MarkedText -> MarkedReply(row, listState)
+
+                    is LooseRun -> LooseRunRow(row, listState)
+
                     is ChatItem.Thinking -> ThinkingRow(row.text)
 
                     is ChatItem.CommandOutput -> CommandOutputCard(row)
@@ -507,6 +519,9 @@ private fun rowKey(row: Any): String = when (row) {
     is ChatItem -> row.key
     is PendingMessage -> "pending-${row.id}"
     is ToolGroup -> row.key
+    // The line's own key: the same item before and after a run hangs on it.
+    is MarkedText -> row.text.key
+    is LooseRun -> row.key
     else -> "earlier"
 }
 
@@ -560,6 +575,137 @@ private fun ToolGroupCard(group: ToolGroup) {
 }
 
 private object EarlierMarker
+
+/**
+ * A line of the agent's with its run of thinking and tools as a badge after
+ * its last word: "4 · 1✗", a wheel while it goes on. A tap opens the run
+ * beneath the line, and the line stays where it was tapped, so a second tap
+ * shuts it again (`holdInPlace`).
+ */
+@Composable
+private fun MarkedReply(row: MarkedText, list: LazyListState) {
+    var open by rememberSaveable(row.key) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var top by remember { mutableFloatStateOf(0f) }
+    val toggle: () -> Unit = {
+        val before = top
+        open = !open
+        scope.launch { holdInPlace(list, before) { top } }
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { top = it.positionInRoot().y },
+    ) {
+        MarkdownText(row.text.text, Modifier.fillMaxWidth(), badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle))
+        row.running?.takeIf { !open }?.let { RunningLine(it) }
+        if (open) RunSteps(row.run)
+    }
+}
+
+/** A run nothing was said beside: the badge on a line of its own. */
+@Composable
+private fun LooseRunRow(row: LooseRun, list: LazyListState) {
+    var open by rememberSaveable(row.key) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var top by remember { mutableFloatStateOf(0f) }
+    val toggle: () -> Unit = {
+        val before = top
+        open = !open
+        scope.launch { holdInPlace(list, before) { top } }
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { top = it.positionInRoot().y },
+    ) {
+        runBadge(row.steps, row.thoughts, row.failed, row.live, toggle).content()
+        row.running?.takeIf { !open }?.let { RunningLine(it) }
+        if (open) RunSteps(row.run)
+    }
+}
+
+private fun runBadge(steps: Int, thoughts: Int, failed: Int, live: Boolean, onTap: () -> Unit): MdBadge {
+    val count = if (steps > 0) "$steps" else "$thoughts"
+    val label = count + if (failed > 0) " · ${failed}✗" else ""
+    return MdBadge(widthEm = 0.62f * label.length + 1.2f + if (live) 1f else 0f) {
+        Surface(
+            onClick = onTap,
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(horizontal = 7.dp),
+            ) {
+                if (live) {
+                    CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(
+                    buildAnnotatedString {
+                        append(count)
+                        if (failed > 0) {
+                            append(" · ")
+                            withStyle(SpanStyle(color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)) {
+                                append("${failed}✗")
+                            }
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** The step still out, under its line, while the run goes on. */
+@Composable
+private fun RunningLine(step: ChatItem.ToolStep) {
+    Text(
+        "…  ${step.name}  ${step.summary}",
+        style = MaterialTheme.typography.labelMedium,
+        fontFamily = FontFamily.Monospace,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+/** A run opened: its thinking and its tool steps, as they were drawn before. */
+@Composable
+private fun RunSteps(run: List<ChatItem>) {
+    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (item in ToolGroups.group(run)) {
+            when (item) {
+                is ChatItem.Thinking -> ThinkingRow(item.text)
+                is ToolGroup -> ToolGroupCard(item)
+            }
+        }
+    }
+}
+
+/**
+ * Puts the line back where it was tapped. The list is laid out from the
+ * bottom, so a line that opens grows its run downward by pushing itself up;
+ * the list is scrolled back by what it moved. Which way a scroll moves a
+ * reversed list is checked rather than assumed: if the first correction made
+ * it worse, it is undone and done the other way.
+ */
+private suspend fun holdInPlace(list: LazyListState, before: Float, now: () -> Float) {
+    withFrameNanos {}
+    withFrameNanos {}
+    val moved = now() - before
+    if (abs(moved) < 1f) return
+    list.scrollBy(-moved)
+    withFrameNanos {}
+    withFrameNanos {}
+    if (abs(now() - before) > abs(moved)) list.scrollBy(2 * moved)
+}
 
 @Composable
 private fun UserBubble(text: String, modifier: Modifier = Modifier, caption: String? = null, faded: Boolean = false) {

@@ -45,7 +45,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -58,6 +62,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
@@ -296,15 +301,38 @@ internal object ChatMarkdown {
     }
 }
 
+/** Something set after the last word of a reply: [widthEm] wide, in the
+ * text's own line, as a placeholder the text flows around. */
+internal class MdBadge(val widthEm: Float, val content: @Composable () -> Unit)
+
 @Composable
-internal fun MarkdownText(text: String, modifier: Modifier = Modifier) {
+internal fun MarkdownText(text: String, modifier: Modifier = Modifier, badge: MdBadge? = null) {
     val colors = MdColors(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.primary)
     val blocks = remember(text, colors) { ChatMarkdown.blocks(text, colors) }
-    SelectionContainer(modifier) { MarkdownBlocks(blocks) }
+    SelectionContainer(modifier) { MarkdownBlocks(blocks, badge) }
+}
+
+private const val BADGE = "badge"
+
+/** [text] with the badge after its last word. */
+private fun withBadge(text: AnnotatedString, badge: MdBadge?): Pair<AnnotatedString, Map<String, InlineTextContent>> {
+    if (badge == null) return text to emptyMap()
+    val joined = buildAnnotatedString {
+        append(text)
+        append(" ")
+        appendInlineContent(BADGE, "[…]")
+    }
+    val content = InlineTextContent(Placeholder(badge.widthEm.em, 1.35.em, PlaceholderVerticalAlign.TextCenter)) {
+        badge.content()
+    }
+    return joined to mapOf(BADGE to content)
 }
 
 @Composable
-private fun MarkdownBlocks(blocks: List<MdBlock>) {
+private fun MarkdownBlocks(blocks: List<MdBlock>, badge: MdBadge? = null) {
+    // The badge goes after the last word when the reply ends in words; after
+    // a code block, a table or a rule it gets a line of its own.
+    val inLast = badge != null && (blocks.lastOrNull() is MdBlock.Paragraph || blocks.lastOrNull() is MdBlock.Bullet)
     // Chinese sets dense: a taller line, and paragraphs held apart by more
     // than the line gap, or a reply reads as one long block.
     val body = MaterialTheme.typography.bodyLarge.copy(lineHeight = 26.sp)
@@ -326,8 +354,12 @@ private fun MarkdownBlocks(blocks: List<MdBlock>) {
                 else -> 14.dp
             }
             if (gap > 0.dp) Spacer(Modifier.height(gap))
+            val last = i == blocks.lastIndex && inLast
             when (block) {
-                is MdBlock.Paragraph -> Text(block.text, style = body, modifier = Modifier.padding(start = under(block.indent)))
+                is MdBlock.Paragraph -> {
+                    val (shown, inline) = withBadge(block.text, if (last) badge else null)
+                    Text(shown, style = body, inlineContent = inline, modifier = Modifier.padding(start = under(block.indent)))
+                }
 
                 is MdBlock.Heading -> Text(
                     block.text,
@@ -337,7 +369,8 @@ private fun MarkdownBlocks(blocks: List<MdBlock>) {
 
                 is MdBlock.Bullet -> Row(Modifier.padding(start = (block.indent * 16).dp)) {
                     Text(block.marker, style = body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(22.dp))
-                    Text(block.text, style = body)
+                    val (shown, inline) = withBadge(block.text, if (last) badge else null)
+                    Text(shown, style = body, inlineContent = inline)
                 }
 
                 is MdBlock.Preformatted -> CodeBlock(block.text, Modifier.padding(start = under(block.indent)))
@@ -359,6 +392,10 @@ private fun MarkdownBlocks(blocks: List<MdBlock>) {
 
                 MdBlock.Rule -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
+        }
+        if (badge != null && !inLast) {
+            Spacer(Modifier.height(6.dp))
+            badge.content()
         }
     }
 }
