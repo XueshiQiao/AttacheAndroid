@@ -303,7 +303,7 @@ internal object ChatMarkdown {
 
 /** Something set after the last word of a reply: [widthEm] wide, in the
  * text's own line, as a placeholder the text flows around. */
-internal class MdBadge(val widthEm: Float, val content: @Composable () -> Unit)
+internal class MdBadge(val widthEm: Float, val heightEm: Float = 1.35f, val content: @Composable () -> Unit)
 
 @Composable
 internal fun MarkdownText(text: String, modifier: Modifier = Modifier, badge: MdBadge? = null) {
@@ -322,7 +322,7 @@ private fun withBadge(text: AnnotatedString, badge: MdBadge?): Pair<AnnotatedStr
         append(" ")
         appendInlineContent(BADGE, "[…]")
     }
-    val content = InlineTextContent(Placeholder(badge.widthEm.em, 1.35.em, PlaceholderVerticalAlign.TextCenter)) {
+    val content = InlineTextContent(Placeholder(badge.widthEm.em, badge.heightEm.em, PlaceholderVerticalAlign.TextCenter)) {
         badge.content()
     }
     return joined to mapOf(BADGE to content)

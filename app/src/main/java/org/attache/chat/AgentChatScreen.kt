@@ -146,6 +146,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import kotlin.math.abs
+import kotlin.math.roundToInt
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalDensity
 import org.attache.tmux.AGENT_SLASH_COMMANDS
 import org.attache.tmux.AttacheFileInboxDialog
 import org.attache.tmux.AttacheFileStorage
@@ -318,6 +321,11 @@ fun AgentChatScreen(
                     .padding(top = padding.calculateTopPadding())
                     .padding(bottom = bottomSafeInset()),
             ) {
+                // Said above the conversation, which stays readable: a
+                // dropped connection used to look exactly like a quiet one.
+                if (state.linkLost || state.connection == ChatConnection.CONNECTING) {
+                    LinkBanner(lost = state.linkLost, onReconnect = viewModel::reconnect)
+                }
                 Box(Modifier.weight(1f)) {
                     when {
                         state.connection == ChatConnection.NEEDS_TERMINAL -> Centered(
@@ -375,7 +383,7 @@ fun AgentChatScreen(
                     }
                 }
                 Composer(
-                    enabled = state.connection == ChatConnection.READY && !state.paneGone && !state.agentExited &&
+                    enabled = state.connection == ChatConnection.READY && !state.linkLost && !state.paneGone && !state.agentExited &&
                         state.agent?.phase != AgentPhase.NEEDS_YOU && state.panel == null,
                     agentName = state.agent?.kind?.replaceFirstChar { it.uppercase() } ?: "the agent",
                     images = state.images,
@@ -426,6 +434,12 @@ internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEa
         }.asReversed()
     }
     val listState = rememberLazyListState()
+    // Room let out below the last row so a run shut at the bottom of the
+    // list can stay where it was tapped (`RowHold`); taken in again when the
+    // page gets new rows.
+    var slackPx by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(rows.size) { slackPx = 0f }
+    val hold = remember(listState) { RowHold(listState, { slackPx }, { slackPx = it }) }
     val scope = rememberCoroutineScope()
 
     // Whether to follow new rows is decided when the person's own scroll
@@ -446,7 +460,7 @@ internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEa
         LazyColumn(
             state = listState,
             reverseLayout = true,
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp + with(LocalDensity.current) { slackPx.toDp() }),
             // Bottom: a short conversation sits by the input box, as in any
             // chat, rather than at the top of an empty screen.
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
@@ -471,9 +485,9 @@ internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEa
 
                     is ChatItem.AgentText -> MarkdownText(row.text, Modifier.fillMaxWidth())
 
-                    is MarkedText -> MarkedReply(row, listState)
+                    is MarkedText -> MarkedReply(row, hold)
 
-                    is LooseRun -> LooseRunRow(row, listState)
+                    is LooseRun -> LooseRunRow(row, hold)
 
                     is ChatItem.Thinking -> ThinkingRow(row.text)
 
@@ -582,20 +596,73 @@ private object EarlierMarker
  * beneath the line, and the line stays where it was tapped, so a second tap
  * shuts it again (`holdInPlace`).
  */
+/** The connection is down or coming up, said in one line with a way to
+ * push it. */
 @Composable
-private fun MarkedReply(row: MarkedText, list: LazyListState) {
-    var open by rememberSaveable(row.key) { mutableStateOf(false) }
+private fun LinkBanner(lost: Boolean, onReconnect: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                if (lost) "Connection lost — reconnecting…" else "Connecting…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onReconnect) { Text("Reconnect") }
+        }
+    }
+}
+
+/** Open or shut, and how to switch while the line stays put. */
+private class FoldSwitch(val open: Boolean, val toggle: () -> Unit, val measure: Modifier)
+
+@Composable
+private fun rememberFold(key: String, hold: RowHold): FoldSwitch {
+    var open by rememberSaveable(key) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var top by remember { mutableFloatStateOf(0f) }
+    // The heights it was last laid out at, shut and open: what a switch
+    // will change the line's height by, known before it happens.
+    var shutHeight by remember { mutableIntStateOf(0) }
+    var openHeight by remember { mutableIntStateOf(0) }
     val toggle: () -> Unit = {
         val before = top
+        val change = when {
+            open && shutHeight > 0 -> shutHeight - openHeight
+            !open && openHeight > 0 -> openHeight - shutHeight
+            else -> null
+        }
         open = !open
-        scope.launch { holdInPlace(list, before) { top } }
+        // Known: the list is moved in the same frame the line changes, so it
+        // is drawn once, already in place — corrected a frame later, the
+        // whole page visibly jumped and came back. Not yet known (a first
+        // opening): corrected after it is laid out. Either way checked once
+        // laid out, for whatever the estimate missed.
+        if (change != null) hold.keepTopNow(change.toFloat())
+        scope.launch { hold.keep(before) { top } }
     }
+    val measure = Modifier.onGloballyPositioned {
+        top = it.positionInRoot().y
+        if (open) openHeight = it.size.height else shutHeight = it.size.height
+    }
+    return FoldSwitch(open, toggle, measure)
+}
+
+@Composable
+private fun MarkedReply(row: MarkedText, hold: RowHold) {
+    val fold = rememberFold(row.key, hold)
+    val open = fold.open
+    val toggle = fold.toggle
     Column(
         Modifier
             .fillMaxWidth()
-            .onGloballyPositioned { top = it.positionInRoot().y },
+            .then(fold.measure),
     ) {
         MarkdownText(row.text.text, Modifier.fillMaxWidth(), badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle))
         row.running?.takeIf { !open }?.let { RunningLine(it) }
@@ -605,21 +672,17 @@ private fun MarkedReply(row: MarkedText, list: LazyListState) {
 
 /** A run nothing was said beside: the badge on a line of its own. */
 @Composable
-private fun LooseRunRow(row: LooseRun, list: LazyListState) {
-    var open by rememberSaveable(row.key) { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    var top by remember { mutableFloatStateOf(0f) }
-    val toggle: () -> Unit = {
-        val before = top
-        open = !open
-        scope.launch { holdInPlace(list, before) { top } }
-    }
+private fun LooseRunRow(row: LooseRun, hold: RowHold) {
+    val fold = rememberFold(row.key, hold)
+    val open = fold.open
+    val toggle = fold.toggle
     Column(
         Modifier
             .fillMaxWidth()
-            .onGloballyPositioned { top = it.positionInRoot().y },
+            .then(fold.measure),
     ) {
-        runBadge(row.steps, row.thoughts, row.failed, row.live, toggle).content()
+        val badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle)
+        Box(Modifier.size(width = (badge.widthEm * 16).dp, height = 26.dp)) { badge.content() }
         row.running?.takeIf { !open }?.let { RunningLine(it) }
         if (open) RunSteps(row.run)
     }
@@ -628,16 +691,19 @@ private fun LooseRunRow(row: LooseRun, list: LazyListState) {
 private fun runBadge(steps: Int, thoughts: Int, failed: Int, live: Boolean, onTap: () -> Unit): MdBadge {
     val count = if (steps > 0) "$steps" else "$thoughts"
     val label = count + if (failed > 0) " · ${failed}✗" else ""
-    return MdBadge(widthEm = 0.62f * label.length + 1.2f + if (live) 1f else 0f) {
+    // As tall as a line of the text and a good deal wider than its digits:
+    // the owner found the first one too small to hit.
+    return MdBadge(widthEm = 0.6f * label.length + 2.4f + if (live) 1f else 0f, heightEm = 1.55f) {
         Surface(
             onClick = onTap,
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxSize(),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(horizontal = 7.dp),
+                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
             ) {
                 if (live) {
                     CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
@@ -653,7 +719,7 @@ private fun runBadge(steps: Int, thoughts: Int, failed: Int, live: Boolean, onTa
                             }
                         }
                     },
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
@@ -690,21 +756,65 @@ private fun RunSteps(run: List<ChatItem>) {
 }
 
 /**
- * Puts the line back where it was tapped. The list is laid out from the
- * bottom, so a line that opens grows its run downward by pushing itself up;
- * the list is scrolled back by what it moved. Which way a scroll moves a
- * reversed list is checked rather than assumed: if the first correction made
- * it worse, it is undone and done the other way.
+ * Puts a line back where it was tapped, opened or shut. The list is laid out
+ * from the bottom, so a line that opens grows its run by pushing itself up,
+ * and one that shuts drops. The list is scrolled back by what it moved; which
+ * way a scroll moves a reversed list is checked rather than assumed (made
+ * worse, it is undone and done the other way). At the end of the list —
+ * where the person usually is — a dropped line cannot be scrolled back up:
+ * room is let out below the last row instead, which lifts everything back.
  */
-private suspend fun holdInPlace(list: LazyListState, before: Float, now: () -> Float) {
-    withFrameNanos {}
-    withFrameNanos {}
-    val moved = now() - before
-    if (abs(moved) < 1f) return
-    list.scrollBy(-moved)
-    withFrameNanos {}
-    withFrameNanos {}
-    if (abs(now() - before) > abs(moved)) list.scrollBy(2 * moved)
+internal class RowHold(
+    private val list: LazyListState,
+    private val room: () -> Float,
+    private val setRoom: (Float) -> Unit,
+) {
+    private fun addRoom(px: Float) = setRoom(room() + px)
+
+    /**
+     * In the same frame as a line grows by [grow] px (shrinks, when
+     * negative): moves the list so the line's top stays where it is. Growing
+     * pushes it up, so the list goes down — first by taking back room let
+     * out below, then by scrolling; shrinking drops it, so the list goes up
+     * by scrolling, and at the end of the list by letting out room below.
+     */
+    fun keepTopNow(grow: Float) {
+        if (abs(grow) < 1f) return
+        var offset = list.firstVisibleItemScrollOffset.toFloat()
+        if (grow > 0) {
+            val fromRoom = minOf(room(), grow)
+            if (fromRoom > 0f) setRoom(room() - fromRoom)
+            offset += grow - fromRoom
+        } else {
+            val up = -grow
+            val byScroll = minOf(offset, up)
+            offset -= byScroll
+            if (up - byScroll > 0f) addRoom(up - byScroll)
+        }
+        list.requestScrollToItem(list.firstVisibleItemIndex, offset.roundToInt())
+    }
+
+    suspend fun keep(before: Float, now: () -> Float) {
+        settle()
+        val moved = now() - before
+        if (abs(moved) < 1f) return
+        list.scrollBy(-moved)
+        settle()
+        if (abs(now() - before) > abs(moved)) {
+            list.scrollBy(2 * moved)
+            settle()
+        }
+        val left = now() - before
+        if (left > 1f) {
+            addRoom(left)
+            settle()
+        }
+    }
+
+    private suspend fun settle() {
+        withFrameNanos {}
+        withFrameNanos {}
+    }
 }
 
 @Composable

@@ -92,6 +92,24 @@ class ChatLink(
         }
     }
 
+    /**
+     * The channel stopped answering though the connection still says it is
+     * up — a network that went away under it, a phone that slept: the socket
+     * can take minutes to notice. Ends it as lost and connects again.
+     */
+    fun declareDead() {
+        val terminalManager = manager ?: return
+        _control.value = null
+        _connection.value = ChatConnection.CONNECTING
+        scope.launch {
+            withContext(dispatchers.io) {
+                terminalManager.bridgesFlow.value.find { it.host.id == hostId }
+                    ?.dispatchDisconnect(org.connectbot.service.DisconnectReason.NETWORK_LOST)
+            }
+            ensureBridge(terminalManager)
+        }
+    }
+
     fun reconnect() {
         val terminalManager = manager ?: return
         _connection.value = ChatConnection.CONNECTING

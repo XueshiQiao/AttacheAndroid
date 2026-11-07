@@ -29,6 +29,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -100,6 +101,8 @@ internal object PendingMessages {
 
 data class AgentChatUiState(
     val connection: ChatConnection = ChatConnection.CONNECTING,
+    /** The channel stopped answering; a new one is being made. */
+    val linkLost: Boolean = false,
     val agent: AgentPane? = null,
     /** The pane is still there but no agent runs in it any more. */
     val agentExited: Boolean = false,
@@ -206,10 +209,38 @@ class AgentChatViewModel @Inject constructor(
             link.control.collectLatest { tmux ->
                 control = tmux
                 if (tmux == null) return@collectLatest
+                _uiState.update { it.copy(linkLost = false) }
                 coroutineScope {
+                    launch { heartbeat(tmux) }
                     launch { watchPane(tmux) }
                     launch { transcriptPath.collectLatest { path -> follow(tmux, path) } }
                 }
+            }
+        }
+    }
+
+    /**
+     * Asks the channel something trivial every 15 s. A connection that died
+     * quietly (the network went, the phone slept) still has its channel
+     * object, so nothing else here noticed, and the page showed a live
+     * conversation that could not be reached. No answer in 6 s: the page
+     * says the connection was lost and a new one is made.
+     */
+    private suspend fun heartbeat(tmux: TmuxControl) {
+        while (true) {
+            delay(HEARTBEAT_MS)
+            val answered = try {
+                withTimeout(HEARTBEAT_TIMEOUT_MS) { tmux.query("display-message -p ok") }
+                true
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
+                false
+            }
+            if (!answered) {
+                Timber.w("chat: the tmux channel stopped answering; reconnecting")
+                _uiState.update { it.copy(linkLost = true) }
+                link.declareDead()
+                return
             }
         }
     }
@@ -706,6 +737,9 @@ class AgentChatViewModel @Inject constructor(
     private fun quote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     companion object {
+        private const val HEARTBEAT_MS = 15_000L
+        private const val HEARTBEAT_TIMEOUT_MS = 6_000L
+
         const val PANE_ARG = "pane"
         private const val MIRROR_POLL_MS = 2_000L
         private const val WATCH_RETRY_MS = 3_000L
