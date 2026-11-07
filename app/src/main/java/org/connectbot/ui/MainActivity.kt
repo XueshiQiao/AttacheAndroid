@@ -85,6 +85,9 @@ class MainActivity : AppCompatActivity() {
     private var notificationReconnect = false
     private var pendingHostConnection: Host? by mutableStateOf(null)
 
+    // An agent notification that was tapped: the host and the pane to open.
+    private var pendingAgent: Pair<String, String>? by mutableStateOf(null)
+
     // Holds the host waiting for permission result; not compose state so it doesn't trigger navigation.
     private var hostAwaitingPermission: Host? = null
     internal var makingShortcut by mutableStateOf(false)
@@ -296,6 +299,24 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            // A tapped agent notification opens that agent's chat over its
+            // host's agent list, so Back leads where it would had the person
+            // got there by hand.
+            LaunchedEffect(pendingAgent, appUiState, isAuthenticated) {
+                val (host, pane) = pendingAgent ?: return@LaunchedEffect
+                if (appUiState is AppUiState.Ready && (!authOnLaunchEnabled || isAuthenticated)) {
+                    // Wait one frame so ConnectBotNavHost has attached its NavGraph.
+                    kotlinx.coroutines.delay(16L)
+                    pendingAgent = null
+                    runCatching {
+                        navController.navigate("${NavDestinations.CHAT}/$host") {
+                            popUpTo(navController.graph.startDestinationId)
+                        }
+                        navController.navigate("${NavDestinations.CHAT}/$host/${pane.removePrefix("%")}")
+                    }.onFailure { e -> Timber.e(e, "Failed to open the agent from its notification") }
+                }
+            }
+
             if (showPermissionRationale) {
                 ConnectBotTheme {
                     NotificationPermissionRationaleDialog(
@@ -398,6 +419,9 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
+        val agentHost = intent?.getStringExtra(org.attache.chat.AgentNotifications.EXTRA_HOST)
+        val agentPane = intent?.getStringExtra(org.attache.chat.AgentNotifications.EXTRA_PANE)
+        if (agentHost != null && agentPane != null) pendingAgent = agentHost to agentPane
         notificationSessionId = intent?.getStringExtra(ConnectionNotifier.EXTRA_SESSION_ID)
         notificationReconnect = intent?.getBooleanExtra(ConnectionNotifier.EXTRA_RECONNECT, false) == true
         if (intent?.action == DISCONNECT_ACTION) {

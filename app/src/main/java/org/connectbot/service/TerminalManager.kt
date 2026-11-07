@@ -329,6 +329,8 @@ class TerminalManager :
 
         TailscaleManager.init(this)
 
+        org.attache.chat.AgentWatcher(applicationContext, scope, bridgesFlow).start()
+
         scope.launch(dispatchers.main) { CryptoProviderState.ensureLoaded(this@TerminalManager, dispatchers) }
     }
 

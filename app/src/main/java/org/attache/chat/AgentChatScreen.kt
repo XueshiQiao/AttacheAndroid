@@ -227,9 +227,14 @@ fun AgentChatScreen(
     // away, as the terminal mode's sidebar is: switching should not mean
     // going back to the list first.
     // Only a page in front of the person counts as seeing what the agent did.
+    val appContext = context.applicationContext
     LifecycleResumeEffect(viewModel) {
         viewModel.setOnScreen(true)
-        onPauseOrDispose { viewModel.setOnScreen(false) }
+        AgentNotifications.setOnScreen(appContext, viewModel.hostId, viewModel.paneId, true)
+        onPauseOrDispose {
+            viewModel.setOnScreen(false)
+            AgentNotifications.setOnScreen(appContext, viewModel.hostId, viewModel.paneId, false)
+        }
     }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()

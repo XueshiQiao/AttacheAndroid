@@ -17,6 +17,11 @@
 
 package org.attache.chat
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -62,9 +67,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -139,6 +146,19 @@ fun AgentListScreen(
     LifecycleStartEffect(viewModel) {
         viewModel.setShown(true)
         onStopOrDispose { viewModel.setShown(false) }
+    }
+    // Agents that finish or wait are told in notifications; the terminal
+    // mode asks for the permission on connecting, and the chat mode must
+    // too, or a person who only uses it is never told anything.
+    val context = LocalContext.current
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsAsked &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationsAsked = true
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
     var showAppearance by remember { mutableStateOf(false) }
     if (showAppearance) ChatAppearanceDialog(onDismiss = { showAppearance = false })
@@ -340,3 +360,6 @@ internal fun age(seconds: Long): String = when {
     seconds < 86_400 -> "${seconds / 3_600}h"
     else -> "${seconds / 86_400}d"
 }
+
+/** Asked once per run of the app, not on every visit to the list. */
+private var notificationsAsked = false
