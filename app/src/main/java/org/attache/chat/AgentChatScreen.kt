@@ -146,6 +146,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import kotlin.math.abs
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.testTag
 import kotlin.math.roundToInt
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.platform.LocalDensity
@@ -435,10 +437,11 @@ internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEa
     }
     val listState = rememberLazyListState()
     // Room let out below the last row so a run shut at the bottom of the
-    // list can stay where it was tapped (`RowHold`); taken in again when the
-    // page gets new rows.
+    // list can stay where it was tapped (`RowHold`).
     var slackPx by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(rows.size) { slackPx = 0f }
+    // Only when the page is about to move to the newest row anyway: taken in
+    // while the person reads further up, it dropped what they were reading.
+    LaunchedEffect(rows.size) { if (follow.stick) slackPx = 0f }
     val hold = remember(listState) { RowHold(listState, { slackPx }, { slackPx = it }) }
     val scope = rememberCoroutineScope()
 
@@ -620,38 +623,60 @@ private fun LinkBanner(lost: Boolean, onReconnect: () -> Unit) {
 }
 
 /** Open or shut, and how to switch while the line stays put. */
-private class FoldSwitch(val open: Boolean, val toggle: () -> Unit, val measure: Modifier)
+private class FoldSwitch(
+    /** The steps are on the page. */
+    val open: Boolean,
+    /** The steps are being laid out, unseen, to learn their height first. */
+    val measuring: Boolean,
+    val toggle: () -> Unit,
+    val measure: Modifier,
+    /** On the steps: reports their height, and takes none while measuring. */
+    val steps: Modifier,
+)
 
+/**
+ * The page must be drawn once per switch, already in place (owner's rule:
+ * the tapped line never moves). A frame-by-frame test caught the first
+ * opening drawing the line 258dp higher for one frame, then putting it back:
+ * the steps' height was only known once they were on the page. So opening
+ * lays the steps out first without placing them, and only then puts them on
+ * the page in the same frame as the list is moved by their height. Shutting
+ * knows their height already and does both at once.
+ */
 @Composable
 private fun rememberFold(key: String, hold: RowHold): FoldSwitch {
     var open by rememberSaveable(key) { mutableStateOf(false) }
+    var measuring by remember { mutableStateOf(false) }
+    var stepsHeight by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var top by remember { mutableFloatStateOf(0f) }
-    // The heights it was last laid out at, shut and open: what a switch
-    // will change the line's height by, known before it happens.
-    var shutHeight by remember { mutableIntStateOf(0) }
-    var openHeight by remember { mutableIntStateOf(0) }
-    val toggle: () -> Unit = {
-        val before = top
-        val change = when {
-            open && shutHeight > 0 -> shutHeight - openHeight
-            !open && openHeight > 0 -> openHeight - shutHeight
-            else -> null
+    LaunchedEffect(measuring, stepsHeight) {
+        if (measuring && stepsHeight > 0) {
+            val before = top
+            measuring = false
+            open = true
+            hold.keepTopNow(stepsHeight.toFloat())
+            hold.keep(before) { top }
         }
-        open = !open
-        // Known: the list is moved in the same frame the line changes, so it
-        // is drawn once, already in place — corrected a frame later, the
-        // whole page visibly jumped and came back. Not yet known (a first
-        // opening): corrected after it is laid out. Either way checked once
-        // laid out, for whatever the estimate missed.
-        if (change != null) hold.keepTopNow(change.toFloat())
-        scope.launch { hold.keep(before) { top } }
     }
-    val measure = Modifier.onGloballyPositioned {
-        top = it.positionInRoot().y
-        if (open) openHeight = it.size.height else shutHeight = it.size.height
+    val toggle: () -> Unit = {
+        if (open) {
+            val before = top
+            open = false
+            hold.keepTopNow(-stepsHeight.toFloat())
+            scope.launch { hold.keep(before) { top } }
+        } else if (!measuring) {
+            stepsHeight = 0
+            measuring = true
+        }
     }
-    return FoldSwitch(open, toggle, measure)
+    val measure = Modifier.onGloballyPositioned { top = it.positionInRoot().y }
+    val steps = Modifier.layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        if (placeable.height != stepsHeight) stepsHeight = placeable.height
+        if (measuring) layout(placeable.width, 0) {} else layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    }
+    return FoldSwitch(open, measuring, toggle, measure, steps)
 }
 
 @Composable
@@ -662,11 +687,12 @@ private fun MarkedReply(row: MarkedText, hold: RowHold) {
     Column(
         Modifier
             .fillMaxWidth()
+            .testTag("line:${row.key}")
             .then(fold.measure),
     ) {
-        MarkdownText(row.text.text, Modifier.fillMaxWidth(), badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle))
-        row.running?.takeIf { !open }?.let { RunningLine(it) }
-        if (open) RunSteps(row.run)
+        MarkdownText(row.text.text, Modifier.fillMaxWidth(), badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle, tag = "fold:${row.key}"))
+        row.running?.let { RunningLine(it) }
+        if (open || fold.measuring) RunSteps(row.run, fold.steps)
     }
 }
 
@@ -681,14 +707,14 @@ private fun LooseRunRow(row: LooseRun, hold: RowHold) {
             .fillMaxWidth()
             .then(fold.measure),
     ) {
-        val badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle)
+        val badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle, tag = "fold:${row.key}")
         Box(Modifier.size(width = (badge.widthEm * 16).dp, height = 26.dp)) { badge.content() }
-        row.running?.takeIf { !open }?.let { RunningLine(it) }
-        if (open) RunSteps(row.run)
+        row.running?.let { RunningLine(it) }
+        if (open || fold.measuring) RunSteps(row.run, fold.steps)
     }
 }
 
-private fun runBadge(steps: Int, thoughts: Int, failed: Int, live: Boolean, onTap: () -> Unit): MdBadge {
+private fun runBadge(steps: Int, thoughts: Int, failed: Int, live: Boolean, onTap: () -> Unit, tag: String = ""): MdBadge {
     val count = if (steps > 0) "$steps" else "$thoughts"
     val label = count + if (failed > 0) " · ${failed}✗" else ""
     // As tall as a line of the text and a good deal wider than its digits:
@@ -698,7 +724,7 @@ private fun runBadge(steps: Int, thoughts: Int, failed: Int, live: Boolean, onTa
             onClick = onTap,
             shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag(tag),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -744,8 +770,8 @@ private fun RunningLine(step: ChatItem.ToolStep) {
 
 /** A run opened: its thinking and its tool steps, as they were drawn before. */
 @Composable
-private fun RunSteps(run: List<ChatItem>) {
-    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun RunSteps(run: List<ChatItem>, modifier: Modifier = Modifier) {
+    Column(modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (item in ToolGroups.group(run)) {
             when (item) {
                 is ChatItem.Thinking -> ThinkingRow(item.text)
@@ -780,18 +806,31 @@ internal class RowHold(
      */
     fun keepTopNow(grow: Float) {
         if (abs(grow) < 1f) return
-        var offset = list.firstVisibleItemScrollOffset.toFloat()
         if (grow > 0) {
-            val fromRoom = minOf(room(), grow)
+            // Room let out below only lifts the page while the list sits at
+            // its end; elsewhere it is off screen and moves nothing.
+            val fromRoom = if (!list.canScrollBackward) minOf(room(), grow) else 0f
             if (fromRoom > 0f) setRoom(room() - fromRoom)
-            offset += grow - fromRoom
+            val rest = grow - fromRoom
+            // The row at the bottom of the view sinks further under its edge,
+            // applied in the next layout, at the new heights. A raw delta
+            // would scroll by the old heights and, at the end of the list,
+            // carry the bottom row past the very line that is opening — the
+            // line then grew downward, off the screen (caught by the test).
+            if (rest > 0f) {
+                list.requestScrollToItem(
+                    list.firstVisibleItemIndex,
+                    list.firstVisibleItemScrollOffset + rest.roundToInt(),
+                )
+            }
         } else {
+            // Shrinking: scrolled back at once, which moves the bottom row
+            // away from the line, never past it; what cannot be scrolled (at
+            // the end of the list) is let out as room below.
             val up = -grow
-            val byScroll = minOf(offset, up)
-            offset -= byScroll
-            if (up - byScroll > 0f) addRoom(up - byScroll)
+            val scrolled = abs(list.dispatchRawDelta(-up))
+            if (up - scrolled > 0.5f) addRoom(up - scrolled)
         }
-        list.requestScrollToItem(list.firstVisibleItemIndex, offset.roundToInt())
     }
 
     suspend fun keep(before: Float, now: () -> Float) {
