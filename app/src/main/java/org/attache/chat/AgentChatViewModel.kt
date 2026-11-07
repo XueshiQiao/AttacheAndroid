@@ -184,15 +184,6 @@ class AgentChatViewModel @Inject constructor(
 
     @Volatile private var livePath: String? = null
 
-    /** The conversation before a `/clear`, kept above the new one with a
-     * divider, since the new file starts empty and the person just watched
-     * the old one. */
-    @Volatile private var carryOver: List<ChatItem> = emptyList()
-
-    /** The last slash command sent, for keeping the old conversation above
-     * a `/clear`. */
-    private var lastSlash: String? = null
-    private var lastSlashAtMs = 0L
 
     init {
         RecentAgents.visit(hostId, paneId)
@@ -285,10 +276,6 @@ class AgentChatViewModel @Inject constructor(
         _uiState.update { it.copy(pending = it.pending + pending, images = emptyList()) }
         viewModelScope.launch {
             try {
-                if (body.startsWith("/")) {
-                    lastSlash = body.substringBefore(' ')
-                    lastSlashAtMs = System.currentTimeMillis()
-                }
                 // attache-cli types it: copy mode left first, a `/` or `!`
                 // command typed key by key, anything else as one bracketed
                 // paste, then Enter, holding the pane so a message from the
@@ -644,12 +631,10 @@ class AgentChatViewModel @Inject constructor(
             _uiState.update { it.copy(transcript = if (path == null) TranscriptStatus.LOADING else TranscriptStatus.MISSING) }
             return
         }
-        val previous = _uiState.value.items
-        val cleared = lastSlash == "/clear" && System.currentTimeMillis() - lastSlashAtMs < CLEAR_WINDOW_MS
-        carryOver = if (livePath != null && livePath != path && cleared && previous.isNotEmpty()) {
-            previous + ChatItem.Note("clear-$path", "New conversation (/clear)")
-        } else {
-            emptyList()
+        // Another conversation in the same pane (a `/clear` starts a new
+        // file) shows only itself: the one before it leaves the page at once.
+        if (livePath != null && livePath != path) {
+            _uiState.update { it.copy(items = emptyList(), transcript = TranscriptStatus.LOADING, earlierNotLoaded = false) }
         }
         livePath = path
         val kind = transcriptKind ?: _uiState.value.agent?.kind ?: "claude"
@@ -684,10 +669,10 @@ class AgentChatViewModel @Inject constructor(
 
     private fun publish(view: ConversationView) {
         if (view.items.isEmpty() && view.state != TranscriptStatus.LIVE) {
-            _uiState.update { it.copy(transcript = view.state, items = carryOver, earlierNotLoaded = false) }
+            _uiState.update { it.copy(transcript = view.state, items = emptyList(), earlierNotLoaded = false) }
             return
         }
-        val items = carryOver + view.items
+        val items = view.items
         transcriptStatus = view.status
         val status = currentStatus()
         _uiState.update { s ->
@@ -728,7 +713,6 @@ class AgentChatViewModel @Inject constructor(
 
         /** The agents attache-cli reads conversations for. */
         private val FOLLOWED = setOf("claude", "agy")
-        private const val CLEAR_WINDOW_MS = 120_000L
         private val PANEL_KEYS = setOf("Up", "Down", "Left", "Right", "Enter", "Escape", "Tab")
     }
 }
