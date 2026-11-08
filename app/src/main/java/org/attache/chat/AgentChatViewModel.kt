@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -182,6 +183,19 @@ class AgentChatViewModel @Inject constructor(
         if (value) control?.let { tmux -> viewModelScope.launch { markSeen(tmux) } }
     }
 
+    /** The subscriptions' usage, for the drawer's bottom section: what this
+     * host said last at once, then followed while the drawer is open. */
+    private val _usage = MutableStateFlow(UsageDirectory.get(hostId))
+    val usage: StateFlow<Map<String, ProviderUsage>> = _usage.asStateFlow()
+    private val usageShown = MutableStateFlow(false)
+
+    /** Whether the drawer is open. Usage is followed only then: each opening
+     * also has the host run `aiusage`, so the numbers are minutes old at most
+     * when looked at, and nothing runs for a drawer nobody opens. */
+    fun setUsageShown(value: Boolean) {
+        usageShown.value = value
+    }
+
     // The conversation shown, kept by [Conversations] beyond this page.
     @Volatile private var liveConversation: LiveConversation? = null
 
@@ -204,6 +218,17 @@ class AgentChatViewModel @Inject constructor(
         }
         viewModelScope.launch {
             link.connection.collect { c -> _uiState.update { it.copy(connection = c) } }
+        }
+        viewModelScope.launch {
+            link.control.combine(usageShown) { tmux, shown -> tmux.takeIf { shown } }
+                .collectLatest { tmux ->
+                    if (tmux != null) {
+                        followUsage(tmux) { p ->
+                            _usage.update { it + (p.provider to p) }
+                            UsageDirectory.put(hostId, _usage.value)
+                        }
+                    }
+                }
         }
         viewModelScope.launch {
             link.control.collectLatest { tmux ->

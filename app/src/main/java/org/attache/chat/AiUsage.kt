@@ -17,19 +17,17 @@
 
 package org.attache.chat
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,16 +43,31 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import org.attache.tmux.TmuxControl
 import org.json.JSONObject
 
 /**
@@ -71,6 +84,12 @@ data class ProviderUsage(
     /** The last ask failed and nothing has succeeded since. */
     val error: String?,
 ) {
+    /** The provider's own week: the first weekly window it reports, which
+     * is the whole account's (Claude's "Weekly", Gemini's "Gemini weekly")
+     * and not a model's or a third party's share of it. */
+    val weekly: UsageWindow?
+        get() = windows.firstOrNull { it.kind == "weekly" }
+
     val label: String
         get() = when (provider) {
             "claude" -> "Claude"
@@ -90,6 +109,7 @@ data class ProviderUsage(
                 UsageWindow(
                     id = w.optString("id"),
                     title = w.optString("title"),
+                    kind = w.optString("kind"),
                     usedPercent = w.optDoubleOrNull("used_percent"),
                     resetsAt = w.optLongOrNull("resets_at"),
                     windowSeconds = w.optDoubleOrNull("window_seconds"),
@@ -113,6 +133,8 @@ data class ProviderUsage(
 data class UsageWindow(
     val id: String,
     val title: String,
+    /** `session` (5 hours), `weekly` or `other`. */
+    val kind: String,
     val usedPercent: Double?,
     val resetsAt: Long?,
     val windowSeconds: Double?,
@@ -150,180 +172,222 @@ internal fun shownProviders(usage: Map<String, ProviderUsage>): List<ProviderUsa
     .filter { it.windows.isNotEmpty() }
     .sortedBy { PROVIDER_ORDER.indexOf(it.provider).let { i -> if (i < 0) PROVIDER_ORDER.size else i } }
 
-/** The height of the collapsed bar, which the list keeps clear below its
- * last row. */
-internal val UsageBarHeight = 44.dp
-
 /**
- * The quota bar pinned to the bottom of the agent list: one line, each
- * provider's fullest window, and a tap opens every window above it. The
- * panel lies over the list rather than pushing it up, so opening it never
- * moves the row under a finger; a tap on the list behind it closes it.
+ * Follows `attache-cli usage --watch` on [tmux] until cancelled or the
+ * channel closes, handing each provider's line to [onUsage]. The host does
+ * all of the asking — attache-cli runs AIUsageKit's `aiusage`, which shares
+ * one answer with the desktop app — so the phone only listens. A failure is
+ * never surfaced: usage is a side panel, and the next attempt comes soon.
  */
-@Composable
-fun UsageBar(
-    usage: Map<String, ProviderUsage>,
-    nowSec: Long,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val shown = shownProviders(usage)
-    if (shown.isEmpty()) return
-    Column(modifier.fillMaxWidth()) {
-        if (expanded) {
-            Surface(
-                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shadowElevation = 6.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.6f).dp),
-            ) {
-                Column(
-                    Modifier
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    for (p in shown) ProviderBlock(p, nowSec)
+internal suspend fun followUsage(tmux: TmuxControl, onUsage: (ProviderUsage) -> Unit) {
+    while (true) {
+        val cli = tmux.cli() ?: return
+        val lines = JsonLines()
+        try {
+            tmux.follow(AttacheCli.usageWatchCommand(cli)) { chunk ->
+                for (line in lines.feed(chunk)) {
+                    val event = try {
+                        JSONObject(line)
+                    } catch (_: Exception) {
+                        continue
+                    }
+                    ProviderUsage.parse(event)?.let(onUsage)
                 }
             }
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            return
+        } catch (_: Exception) {
         }
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = if (expanded) 0.dp else 6.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle),
-        ) {
+        if (tmux.isClosed) return
+        delay(USAGE_RETRY_MS)
+    }
+}
+
+private const val USAGE_RETRY_MS = 30_000L
+
+/** Each provider's own colour, as on the desktop rail; Grok's light stone
+ * turns to a slate on a light sheet, where it would not show. */
+@Composable
+private fun providerColor(provider: String): Color = when (provider) {
+    "claude" -> Color(0xFFD97857)
+    "antigravity" -> Color(0xFF669EF5)
+    else -> if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color(0xFF6B7280) else Color(0xFFD1D6E0)
+}
+
+/**
+ * The usage section at the bottom of the agent drawer, where the desktop
+ * keeps its rail's: fixed under the list, which scrolls above it, on a
+ * Material 3 filled card (the owner's pick of six ways to set it off from
+ * the list, 2026-11-08; a divider read as too hard). Folded,
+ * it is one row per provider with that provider's weekly window; a tap
+ * unfolds every window, and a tap on its heading folds it back. Unfolded it
+ * takes room from the list instead of covering it, and scrolls on its own
+ * past about half the screen.
+ */
+@Composable
+fun UsageSection(usage: Map<String, ProviderUsage>, modifier: Modifier = Modifier) {
+    val shown = shownProviders(usage)
+    if (shown.isEmpty()) return
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val nowSec by produceState(System.currentTimeMillis() / 1000) {
+        // The countdowns are whole minutes.
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis() / 1000
+        }
+    }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 16.dp + bottomSafeInset()),
+    ) {
+        Column(Modifier.animateContentSize()) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier
-                    .height(UsageBarHeight)
-                    .padding(horizontal = 16.dp),
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 2.dp),
             ) {
-                for (p in shown) {
-                    val top = p.windows.maxByOrNull { it.usedAt(nowSec) ?: -1.0 }
-                    val used = top?.usedAt(nowSec)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier
-                                .size(8.dp)
-                                .background(top?.let { gaugeColor(it, nowSec) } ?: Color.Gray, CircleShape),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(p.label, style = MaterialTheme.typography.labelLarge)
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            used?.let { "${it.toInt()}%" } ?: "–",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
+                Text("Usage", style = MaterialTheme.typography.labelMedium, color = muted)
+                // A refresh that failed keeps the last good numbers on screen;
+                // this says they are not current.
+                if (shown.any { it.error != null }) {
+                    Text(
+                        "  · refresh failed",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp,
+                    contentDescription = if (expanded) "Show less usage" else "Show all usage",
+                    tint = muted,
+                )
+            }
+            if (!expanded) {
+                Column(Modifier.clickable { expanded = true }) {
+                    for (p in shown) {
+                        val week = p.weekly ?: continue
+                        UsageRow(
+                            name = p.label,
+                            detail = "Weekly",
+                            window = week,
+                            color = providerColor(p.provider),
+                            nowSec = nowSec,
+                            dot = true,
                         )
                     }
                 }
-                Spacer(Modifier.weight(1f))
-                if (shown.any { it.error != null }) {
-                    Text("!", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+            } else {
+                Column(
+                    Modifier
+                        .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.45f).dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    for (p in shown) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                        ) {
+                            Dot(providerColor(p.provider))
+                            Spacer(Modifier.width(10.dp))
+                            Text(p.label, style = MaterialTheme.typography.titleSmall)
+                            p.plan?.let {
+                                Spacer(Modifier.width(8.dp))
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = muted)
+                            }
+                        }
+                        for (w in p.windows) {
+                            UsageRow(name = w.title, detail = null, window = w, color = providerColor(p.provider), nowSec = nowSec, dot = false)
+                        }
+                    }
                 }
-                Icon(
-                    if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp,
-                    contentDescription = if (expanded) "Hide usage" else "Show usage",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
+            Spacer(Modifier.height(8.dp))
         }
-    }
-}
-
-/** Green while spending slower than the clock, amber when ahead of it,
- * red from 90% used. */
-internal fun gaugeColor(w: UsageWindow, nowSec: Long): Color {
-    val fraction = ((w.usedAt(nowSec) ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f)
-    val elapsed = w.elapsedAt(nowSec)
-    return when {
-        fraction >= 0.9f -> Color(0xFFE5484D)
-        elapsed != null && w.usedAt(nowSec) != null && fraction > elapsed + 0.02f -> Color(0xFFF5A524)
-        else -> Color(0xFF30A46C)
     }
 }
 
 @Composable
-private fun ProviderBlock(p: ProviderUsage, nowSec: Long) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun Dot(color: Color) {
+    Box(
+        Modifier
+            .size(8.dp)
+            .background(color, CircleShape),
+    )
+}
+
+/**
+ * One window: its name and figures, then its bar. The bar and the gap in
+ * it are the reading, as the bar and the tick are on the desktop: colour
+ * short of the gap is spending slower than the clock, colour past it will
+ * run out before the reset.
+ */
+@Composable
+private fun UsageRow(name: String, detail: String?, window: UsageWindow, color: Color, nowSec: Long, dot: Boolean) {
+    val used = window.usedAt(nowSec)
+    val elapsed = window.elapsedAt(nowSec)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(p.label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            p.plan?.let {
-                Spacer(Modifier.width(6.dp))
-                Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (dot) {
+                Dot(color)
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            detail?.let {
+                Spacer(Modifier.width(8.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = muted)
             }
             Spacer(Modifier.weight(1f))
-            // How old the numbers are, and that the last refresh failed:
-            // the bars still show the last good reading.
-            val stale = p.storedAt?.let { (nowSec - it).let { a -> if (a < 60) "updated just now" else "updated ${age(a)} ago" } }.orEmpty()
-            val note = if (p.error != null) listOf(stale, "refresh failed").filter { it.isNotEmpty() }.joinToString(" · ") else stale
-            if (note.isNotEmpty()) {
-                Text(
-                    note,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (p.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            val left = window.resetsAt?.let { it - nowSec }?.takeIf { it > 0 }
+            Text(
+                listOfNotNull(used?.let { "${it.toInt()}%" }, left?.let(::countdown)).joinToString(" · "),
+                style = MaterialTheme.typography.labelMedium,
+                color = muted,
+            )
         }
-        for (w in p.windows) UsageGauge(w, nowSec)
+        Spacer(Modifier.height(7.dp))
+        UsageBar(((used ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f), elapsed, color)
     }
 }
 
 /**
- * One window: the bar is how much was spent, the tick is how much of the
- * window has gone by. The comparison is the reading, as on the desktop's
- * rail: a bar short of the tick is spending slower than the clock, a bar
- * past it will run out before the reset.
+ * The used part in the provider's colour running straight into the grey
+ * track, and the whole bar cut by a small gap where the clock is (the
+ * owner's design, 2026-11-08, in place of Material 3's gap between the two
+ * parts, which meant nothing). Colour past the gap is spending ahead of
+ * the clock.
  */
 @Composable
-private fun UsageGauge(w: UsageWindow, nowSec: Long) {
-    val used = w.usedAt(nowSec)
-    val elapsed = w.elapsedAt(nowSec)
-    val fraction = ((used ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f)
-    val barColor = gaugeColor(w, nowSec)
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                w.title,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            val left = w.resetsAt?.let { it - nowSec }?.takeIf { it > 0 }
-            Text(
-                listOfNotNull(used?.let { "${it.toInt()}%" }, left?.let { "resets in ${countdown(it)}" }).joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+private fun UsageBar(used: Float, elapsed: Float?, color: Color) {
+    val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(4.dp),
+    ) {
+        val h = size.height
+        val w = size.width
+        val gap = 3.dp.toPx()
+        val fx = used * w
+        val pieces = if (elapsed == null) {
+            listOf(0f to w)
+        } else {
+            val ex = elapsed * w
+            listOf(0f to ex - gap / 2, ex + gap / 2 to w)
         }
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(fraction)
-                    .background(barColor),
-            )
-            elapsed?.let {
-                Box(
-                    Modifier
-                        .offset(x = (maxWidth - 2.dp) * it)
-                        .width(2.dp)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.onSurface),
-                )
+        for ((l, r) in pieces) {
+            if (r - l < 1f) continue
+            clipPath(Path().apply { addRoundRect(RoundRect(l, 0f, r, h, CornerRadius(h / 2))) }) {
+                drawRect(color, topLeft = Offset.Zero, size = Size(fx, h))
+                drawRect(track, topLeft = Offset(fx, 0f), size = Size(w - fx, h))
             }
         }
     }

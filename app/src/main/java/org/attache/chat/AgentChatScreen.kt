@@ -241,7 +241,9 @@ fun AgentChatScreen(
     val drawerScope = rememberCoroutineScope()
     LaunchedEffect(drawer.targetValue) {
         if (drawer.targetValue == DrawerValue.Open) viewModel.refreshAllAgents()
+        viewModel.setUsageShown(drawer.targetValue == DrawerValue.Open)
     }
+    val usage by viewModel.usage.collectAsStateWithLifecycle()
     val visits by RecentAgents.visits.collectAsStateWithLifecycle()
     val recents = remember(visits, state.allAgents) {
         RecentAgents.offer(visits[viewModel.hostId].orEmpty(), state.allAgents, current = viewModel.paneId)
@@ -254,7 +256,17 @@ fun AgentChatScreen(
         drawerState = drawer,
         drawerContent = {
             ModalDrawerSheet(modifier = Modifier.widthIn(max = 320.dp)) {
-                AgentDrawer(agents = state.allAgents, current = viewModel.paneId, onPick = switchTo)
+                // The usage section sits under the list, as the desktop's
+                // sits under its rail, and keeps the bottom inset itself.
+                val withUsage = shownProviders(usage).isNotEmpty()
+                AgentDrawer(
+                    agents = state.allAgents,
+                    current = viewModel.paneId,
+                    onPick = switchTo,
+                    keepBottomInset = !withUsage,
+                    modifier = Modifier.weight(1f),
+                )
+                if (withUsage) UsageSection(usage)
             }
         },
     ) {
@@ -1670,10 +1682,19 @@ private const val THINKING_PREVIEW = 4
 
 /** Every agent, by what it needs, with the one on screen marked. */
 @Composable
-internal fun AgentDrawer(agents: List<AgentPane>, current: String, onPick: (AgentPane) -> Unit) {
+internal fun AgentDrawer(
+    agents: List<AgentPane>,
+    current: String,
+    onPick: (AgentPane) -> Unit,
+    keepBottomInset: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
     val nowSec = System.currentTimeMillis() / 1000
     val groups = agents.groupBy { it.phase }
-    LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp + bottomSafeInset())) {
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp + if (keepBottomInset) bottomSafeInset() else 0.dp),
+    ) {
         item {
             Text(
                 "Agents",

@@ -46,7 +46,6 @@ data class AgentListUiState(
     val connection: ChatConnection = ChatConnection.CONNECTING,
     val agents: List<AgentPane> = emptyList(),
     val error: String? = null,
-    val usage: Map<String, ProviderUsage> = emptyMap(),
 )
 
 /** The chat mode's first screen: every agent in tmux, by what it needs. */
@@ -61,13 +60,11 @@ class AgentListViewModel @Inject constructor(
     // What this host's list was when last read, shown at once on return.
     private val agents = MutableStateFlow(AgentDirectory.get(hostId))
     private val pollError = MutableStateFlow<String?>(null)
-    private val usage = MutableStateFlow(UsageDirectory.get(hostId))
 
     val uiState: StateFlow<AgentListUiState> =
         combine(link.hostName, link.connection, agents, link.error, pollError) { host, connection, list, linkError, error ->
             AgentListUiState(host, connection, list, error ?: linkError)
-        }.combine(usage) { state, u -> state.copy(usage = u) }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, AgentListUiState())
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, AgentListUiState())
 
     /** Whether the list is on screen. It polls only then: behind a chat page
      * it would run every agent's script on the channel the chat page is
@@ -82,10 +79,6 @@ class AgentListViewModel @Inject constructor(
         viewModelScope.launch {
             link.control.combine(shown) { tmux, visible -> tmux.takeIf { visible } }
                 .collectLatest { tmux -> if (tmux != null) poll(tmux) }
-        }
-        viewModelScope.launch {
-            link.control.combine(shown) { tmux, visible -> tmux.takeIf { visible } }
-                .collectLatest { tmux -> if (tmux != null) watchUsage(tmux) }
         }
     }
 
@@ -140,42 +133,7 @@ class AgentListViewModel @Inject constructor(
         }
     }
 
-    /**
-     * The subscriptions' usage, from `attache-cli usage --watch` on a channel
-     * of its own. The host does all of it — AIUsageKit asks each provider's
-     * CLI there every five minutes and shares one answer with the desktop
-     * app — so the phone only listens, and only while the list is shown.
-     * A failure here is never the list's error: usage is a side panel.
-     */
-    private suspend fun watchUsage(tmux: TmuxControl) {
-        while (true) {
-            val cli = tmux.cli() ?: return
-            val lines = JsonLines()
-            try {
-                tmux.follow(AttacheCli.usageWatchCommand(cli)) { chunk ->
-                    for (line in lines.feed(chunk)) {
-                        val event = try {
-                            JSONObject(line)
-                        } catch (_: Exception) {
-                            continue
-                        }
-                        val p = ProviderUsage.parse(event) ?: continue
-                        usage.value = usage.value + (p.provider to p)
-                        UsageDirectory.put(hostId, usage.value)
-                    }
-                }
-            } catch (e: CancellationException) {
-                currentCoroutineContext().ensureActive()
-                return
-            } catch (_: Exception) {
-            }
-            if (tmux.isClosed) return
-            delay(USAGE_RETRY_MS)
-        }
-    }
-
     private companion object {
-        const val USAGE_RETRY_MS = 30_000L
         const val RETRY_MS = 3_000L
     }
 }

@@ -63,7 +63,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,7 +70,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -217,34 +215,10 @@ fun AgentListScreen(
                     action = "Reconnect" to viewModel::reconnect,
                 )
 
-                ChatConnection.READY -> {
-                    val hasUsage = shownProviders(state.usage).isNotEmpty()
-                    var usageOpen by rememberSaveable { mutableStateOf(false) }
-                    if (state.agents.isEmpty()) {
-                        CenteredMessage("No agents are running in tmux.")
-                    } else {
-                        AgentList(state.agents, keepClear = if (hasUsage) UsageBarHeight else 0.dp, onOpenAgent)
-                    }
-                    if (hasUsage) {
-                        // A tap on the list behind the open panel closes it
-                        // instead of opening an agent.
-                        if (usageOpen) {
-                            Box(
-                                Modifier
-                                    .fillMaxSize()
-                                    .clickable(interactionSource = null, indication = null) { usageOpen = false },
-                            )
-                        }
-                        UsageBar(
-                            state.usage,
-                            usageNow(),
-                            expanded = usageOpen,
-                            onToggle = { usageOpen = !usageOpen },
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = bottomSafeInset()),
-                        )
-                    }
+                ChatConnection.READY -> if (state.agents.isEmpty()) {
+                    CenteredMessage("No agents are running in tmux.")
+                } else {
+                    AgentList(state.agents, onOpenAgent)
                 }
             }
         }
@@ -262,7 +236,7 @@ private fun subtitle(state: AgentListUiState): String = when (state.connection) 
 }
 
 @Composable
-private fun AgentList(agents: List<AgentPane>, keepClear: Dp, onOpen: (AgentPane) -> Unit) {
+private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit) {
     // One clock for every row, ticking once a minute: the ages are whole
     // minutes, so a faster tick would redraw the list to change nothing.
     val nowSec by produceState(System.currentTimeMillis() / 1000) {
@@ -273,7 +247,7 @@ private fun AgentList(agents: List<AgentPane>, keepClear: Dp, onOpen: (AgentPane
     }
     val groups = agents.groupBy { it.phase }
     LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp + keepClear + bottomSafeInset()),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp + bottomSafeInset()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         for (phase in AgentPhase.entries) {
@@ -387,18 +361,6 @@ internal fun age(seconds: Long): String = when {
     seconds < 3_600 -> "${seconds / 60}m"
     seconds < 86_400 -> "${seconds / 3_600}h"
     else -> "${seconds / 86_400}d"
-}
-
-/** The usage bar's clock: its countdowns are whole minutes. */
-@Composable
-private fun usageNow(): Long {
-    val now by produceState(System.currentTimeMillis() / 1000) {
-        while (true) {
-            delay(60_000)
-            value = System.currentTimeMillis() / 1000
-        }
-    }
-    return now
 }
 
 /** Asked once per run of the app, not on every visit to the list. */
