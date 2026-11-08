@@ -245,6 +245,7 @@ fun AgentChatScreen(
         viewModel.setUsageShown(drawer.targetValue == DrawerValue.Open)
     }
     val usage by viewModel.usage.collectAsStateWithLifecycle()
+    val usageDesktop by viewModel.usageDesktop.collectAsStateWithLifecycle()
     val visits by RecentAgents.visits.collectAsStateWithLifecycle()
     val recents = remember(visits, state.allAgents) {
         RecentAgents.offer(visits[viewModel.hostId].orEmpty(), state.allAgents, current = viewModel.paneId)
@@ -259,7 +260,7 @@ fun AgentChatScreen(
             ModalDrawerSheet(modifier = Modifier.widthIn(max = 320.dp)) {
                 // The usage section sits under the list, as the desktop's
                 // sits under its rail, and keeps the bottom inset itself.
-                val withUsage = shownProviders(usage).isNotEmpty()
+                val withUsage = shownProviders(usage).isNotEmpty() || usageDesktop == "not_running"
                 AgentDrawer(
                     agents = state.allAgents,
                     current = viewModel.paneId,
@@ -267,7 +268,7 @@ fun AgentChatScreen(
                     keepBottomInset = !withUsage,
                     modifier = Modifier.weight(1f),
                 )
-                if (withUsage) UsageSection(usage)
+                if (withUsage) UsageSection(usage, usageDesktop)
             }
         },
     ) {

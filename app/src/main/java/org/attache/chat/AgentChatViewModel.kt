@@ -187,6 +187,12 @@ class AgentChatViewModel @Inject constructor(
      * host said last at once, then followed while the drawer is open. */
     private val _usage = MutableStateFlow(UsageDirectory.get(hostId))
     val usage: StateFlow<Map<String, ProviderUsage>> = _usage.asStateFlow()
+
+    /** What attache-cli last heard from the Mac desktop app, which does the
+     * asking: `ok`, `not_running`, `failed`, `unsupported`, or null before
+     * the first answer (or from an attache-cli older than 0.3.3). */
+    private val _usageDesktop = MutableStateFlow<String?>(null)
+    val usageDesktop: StateFlow<String?> = _usageDesktop.asStateFlow()
     private val usageShown = MutableStateFlow(false)
 
     /** Whether the drawer is open. Usage is followed only then: each opening
@@ -223,10 +229,14 @@ class AgentChatViewModel @Inject constructor(
             link.control.combine(usageShown) { tmux, shown -> tmux.takeIf { shown } }
                 .collectLatest { tmux ->
                     if (tmux != null) {
-                        followUsage(tmux) { p ->
-                            _usage.update { it + (p.provider to p) }
-                            UsageDirectory.put(hostId, _usage.value)
-                        }
+                        followUsage(
+                            tmux,
+                            onUsage = { p ->
+                                _usage.update { it + (p.provider to p) }
+                                UsageDirectory.put(hostId, _usage.value)
+                            },
+                            onDesktop = { _usageDesktop.value = it },
+                        )
                     }
                 }
         }

@@ -174,12 +174,19 @@ internal fun shownProviders(usage: Map<String, ProviderUsage>): List<ProviderUsa
 
 /**
  * Follows `attache-cli usage --watch` on [tmux] until cancelled or the
- * channel closes, handing each provider's line to [onUsage]. The host does
- * all of the asking — attache-cli runs AIUsageKit's `aiusage`, which shares
- * one answer with the desktop app — so the phone only listens. A failure is
- * never surfaced: usage is a side panel, and the next attempt comes soon.
+ * channel closes, handing each provider's line to [onUsage] and what the
+ * desktop app said to [onDesktop]: `ok`, `not_running`, `failed` or
+ * `unsupported` (attache-cli 0.3.3). The asking is the Mac desktop app's —
+ * Claude's login is in the macOS keychain, which an SSH login cannot read
+ * (XueshiQiao/Attache#39), so attache-cli has the app refresh AIUsageKit's
+ * cache — and the phone only listens. A broken channel is never surfaced:
+ * usage is a side panel, and the next attempt comes soon.
  */
-internal suspend fun followUsage(tmux: TmuxControl, onUsage: (ProviderUsage) -> Unit) {
+internal suspend fun followUsage(
+    tmux: TmuxControl,
+    onUsage: (ProviderUsage) -> Unit,
+    onDesktop: (String) -> Unit,
+) {
     while (true) {
         val cli = tmux.cli() ?: return
         val lines = JsonLines()
@@ -191,7 +198,11 @@ internal suspend fun followUsage(tmux: TmuxControl, onUsage: (ProviderUsage) -> 
                     } catch (_: Exception) {
                         continue
                     }
-                    ProviderUsage.parse(event)?.let(onUsage)
+                    if (event.optString("t") == "usage_desktop") {
+                        onDesktop(event.optString("state"))
+                    } else {
+                        ProviderUsage.parse(event)?.let(onUsage)
+                    }
                 }
             }
         } catch (e: CancellationException) {
@@ -224,11 +235,16 @@ private fun providerColor(provider: String): Color = when (provider) {
  * unfolds every window, and a tap on its heading folds it back. Unfolded it
  * takes room from the list instead of covering it, and scrolls on its own
  * past about half the screen.
+ *
+ * Usage is the one thing the phone may depend on the Mac desktop app for
+ * (the owner's rule, 2026-11-08), so [desktop] `not_running` is said here
+ * plainly: beside the last numbers, or alone when there are none.
  */
 @Composable
-fun UsageSection(usage: Map<String, ProviderUsage>, modifier: Modifier = Modifier) {
+fun UsageSection(usage: Map<String, ProviderUsage>, desktop: String?, modifier: Modifier = Modifier) {
     val shown = shownProviders(usage)
-    if (shown.isEmpty()) return
+    val appMissing = desktop == "not_running"
+    if (shown.isEmpty() && !appMissing) return
     var expanded by rememberSaveable { mutableStateOf(false) }
     val nowSec by produceState(System.currentTimeMillis() / 1000) {
         // The countdowns are whole minutes.
@@ -258,8 +274,14 @@ fun UsageSection(usage: Map<String, ProviderUsage>, modifier: Modifier = Modifie
             ) {
                 Text("Usage", style = MaterialTheme.typography.labelMedium, color = muted)
                 // A refresh that failed keeps the last good numbers on screen;
-                // this says they are not current.
-                if (shown.any { it.error != null }) {
+                // this says they are not current, and why when it is known.
+                if (appMissing && shown.isNotEmpty()) {
+                    Text(
+                        "  · Attaché not running on the Mac",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (desktop == "failed" || shown.any { it.error != null }) {
                     Text(
                         "  · refresh failed",
                         style = MaterialTheme.typography.labelMedium,
@@ -273,7 +295,14 @@ fun UsageSection(usage: Map<String, ProviderUsage>, modifier: Modifier = Modifie
                     tint = muted,
                 )
             }
-            if (!expanded) {
+            if (shown.isEmpty()) {
+                Text(
+                    "Open Attaché on this Mac to see usage.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = muted,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
+                )
+            } else if (!expanded) {
                 Column(Modifier.clickable { expanded = true }) {
                     for (p in shown) {
                         val week = p.weekly ?: continue
