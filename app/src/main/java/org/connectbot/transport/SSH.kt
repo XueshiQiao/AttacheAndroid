@@ -816,6 +816,7 @@ open class SSH : AbsTransport {
                     upload = { bytes, ext, onProgress -> uploadImage(bytes, ext, onProgress) },
                     download = { remotePath, output, onProgress -> downloadFile(remotePath, output, onProgress) },
                     appContext = manager?.applicationContext,
+                    hostKey = host?.id?.toString(),
                 )
                 synchronized(tmuxLock) {
                     if (locallyClosed) return@launch

@@ -268,6 +268,9 @@ class TmuxControl(
     private val download: suspend (String, java.io.OutputStream, (Long, Long) -> Unit) -> Boolean = { _, _, _ -> false },
     /** Application context so pushed files download in the background service even when UI is backgrounded. */
     private val appContext: android.content.Context? = null,
+    /** Which host this is, so the list of files it pushed is kept apart from
+     * every other host's: a path from one computer means nothing on another. */
+    private val hostKey: String? = null,
 ) {
     private val _state = MutableStateFlow(TmuxState())
     val state: StateFlow<TmuxState> = _state.asStateFlow()
@@ -609,6 +612,7 @@ class TmuxControl(
         // Every refresh checks again and sees the same unanswered token; a
         // file still waiting on the person must not be answered for them.
         if (_pushOffers.value.any { it.remotePath == trimmed }) return
+        if (appContext != null && hostKey != null) AttacheFileStorage.recordPushedPath(appContext, hostKey, trimmed)
         if (AttacheFileStorage.isAlreadyInstalledOrOlderAttacheApk(trimmed)) {
             Timber.i("Skipping auto-download of already-installed Attaché APK: %s", trimmed)
             if (!pushToken.isNullOrEmpty()) {
@@ -711,6 +715,7 @@ class TmuxControl(
         val perlScript = if (recentArtifactsOnly) {
             """
             use File::Find;
+            use Cwd qw(abs_path);
             my ${'$'}d = ${'$'}ARGV[0];
             ${'$'}d =~ s{^~(?=/|${'$'})}{${'$'}ENV{HOME}};
             my @roots = (${'$'}d);
@@ -722,6 +727,9 @@ class TmuxControl(
             for my ${'$'}root (@roots) {
               next unless -d ${'$'}root;
               my ${'$'}maxDepth = (${'$'}root eq "/tmp" || ${'$'}root eq "${'$'}ENV{HOME}/Downloads") ? 2 : 5;
+              # File::Find does not enter a root that is a symlink, and on
+              # macOS /tmp is one (to /private/tmp): nothing in it was listed.
+              ${'$'}root = abs_path(${'$'}root) // ${'$'}root;
               find({
                 preprocess => sub {
                   my ${'$'}rel = ${'$'}File::Find::dir;
@@ -775,6 +783,27 @@ class TmuxControl(
         }
         val quotedPerl = "'" + perlScript.replace("'", "'\"'\"'") + "'"
         val output = exec("perl -e $quotedPerl $quotedDir") ?: return rawDir to emptyList()
+        return parseRemoteListing(output, rawDir)
+    }
+
+    /**
+     * The files this computer pushed with `attache-send` lately, newest first,
+     * wherever they are on it — the list a declined or cancelled push can be
+     * fetched again from. Files no longer on the computer are left out.
+     */
+    suspend fun listPushedFiles(): List<RemoteFileEntry> {
+        val ctx = appContext ?: return emptyList()
+        val key = hostKey ?: return emptyList()
+        val paths = AttacheFileStorage.getPushedPaths(ctx, key)
+        if (paths.isEmpty()) return emptyList()
+        val perlScript = "for my ${'$'}p (@ARGV) { my @s = stat(${'$'}p); next unless @s && -f _; " +
+            "(my ${'$'}n = ${'$'}p) =~ s{.*/}{}; print join(\"\\x01\", ${'$'}p, ${'$'}n, ${'$'}s[7], ${'$'}s[9], \"F\"), \"\\n\"; }"
+        val quote = { text: String -> "'" + text.replace("'", "'\"'\"'") + "'" }
+        val output = exec("perl -e ${quote(perlScript)} ${paths.joinToString(" ") { quote(it) }}") ?: return emptyList()
+        return parseRemoteListing(output, "").second
+    }
+
+    private fun parseRemoteListing(output: String, rawDir: String): Pair<String, List<RemoteFileEntry>> {
         var resolvedDir = rawDir
         val entries = mutableListOf<RemoteFileEntry>()
         for (line in output.lineSequence()) {

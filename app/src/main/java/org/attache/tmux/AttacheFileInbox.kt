@@ -142,6 +142,8 @@ object AttacheFileStorage {
     private const val KEY_LAST_HANDLED_PUSH_TOKEN = "last_handled_push_token"
     private const val KEY_HANDLED_PUSH_TOKENS = "handled_push_tokens"
     private const val MAX_HANDLED_PUSH_TOKENS = 64
+    private const val KEY_PUSHED_PATHS_PREFIX = "pushed_paths_"
+    private const val MAX_PUSHED_PATHS = 30
     const val DEFAULT_LOCAL_SUBDIR = "Attache"
     const val DEFAULT_REMOTE_BIN_DIR = "~/.local/bin"
 
@@ -160,6 +162,21 @@ object AttacheFileStorage {
 
     @Synchronized
     fun getLastHandledPushToken(context: Context): String = prefs(context).getString(KEY_LAST_HANDLED_PUSH_TOKEN, null)?.trim().orEmpty()
+
+    /** Remembers [path] as pushed by host [hostKey], newest first. */
+    @Synchronized
+    fun recordPushedPath(context: Context, hostKey: String, path: String) {
+        val key = KEY_PUSHED_PATHS_PREFIX + hostKey
+        val existing = getPushedPaths(context, hostKey).filter { it != path }
+        prefs(context).edit()
+            .putString(key, (listOf(path) + existing).take(MAX_PUSHED_PATHS).joinToString("\n"))
+            .apply()
+    }
+
+    @Synchronized
+    fun getPushedPaths(context: Context, hostKey: String): List<String> = prefs(context)
+        .getString(KEY_PUSHED_PATHS_PREFIX + hostKey, null).orEmpty()
+        .lineSequence().map { it.trim() }.filter { it.startsWith("/") }.toList()
 
     @Synchronized
     fun isPushTokenHandled(context: Context, token: String): Boolean {
@@ -539,7 +556,7 @@ fun AttacheFileInboxDialog(
     var previewTextFile by remember { mutableStateOf<LocalInboxFile?>(null) }
 
     // Remote browser state
-    var remoteFilterMode by remember { mutableStateOf("recent") } // "recent", "cwd", "downloads", "tmp"
+    var remoteFilterMode by remember { mutableStateOf("pushed") } // "pushed", "recent", "cwd", "downloads", "tmp"
     var customRemotePath by remember { mutableStateOf("") }
     var remoteLoading by remember { mutableStateOf(false) }
     var currentRemoteDir by remember { mutableStateOf("") }
@@ -578,6 +595,7 @@ fun AttacheFileInboxDialog(
         scope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) { remoteLoading = true }
             val (dir, entries) = when (mode) {
+                "pushed" -> "电脑最近发来的文件" to ctrl.listPushedFiles()
                 "recent" -> ctrl.listRemoteFiles(directory = null, recentArtifactsOnly = true)
                 "cwd" -> ctrl.listRemoteFiles(directory = null, recentArtifactsOnly = false)
                 "downloads" -> ctrl.listRemoteFiles(directory = "~/Downloads", recentArtifactsOnly = false)
@@ -886,6 +904,11 @@ fun AttacheFileInboxDialog(
                                 .padding(horizontal = 12.dp, vertical = 2.dp),
                         ) {
                             FilterChip(
+                                selected = remoteFilterMode == "pushed",
+                                onClick = { remoteFilterMode = "pushed" },
+                                label = { Text("电脑发来的", fontSize = 12.sp) },
+                            )
+                            FilterChip(
                                 selected = remoteFilterMode == "recent",
                                 onClick = { remoteFilterMode = "recent" },
                                 label = { Text("最近 APK / 视频 / 图片", fontSize = 12.sp) },
@@ -950,7 +973,7 @@ fun AttacheFileInboxDialog(
                                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                             } else if (remoteEntries.isEmpty()) {
                                 Text(
-                                    text = "该目录下没有找到文件",
+                                    text = if (remoteFilterMode == "pushed") "这台电脑还没有用 attache-send 发过文件" else "该目录下没有找到文件",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.align(Alignment.Center),
                                 )
