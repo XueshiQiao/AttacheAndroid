@@ -243,7 +243,10 @@ fun UsageSection(usage: Map<String, ProviderUsage>, modifier: Modifier = Modifie
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 16.dp + bottomSafeInset()),
+            // The same margin below as at the sides, inside the safe area:
+            // the screen's own rounded corner already keeps the card's
+            // corners clear of the edge (the owner's call, 2026-11-08).
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp),
     ) {
         Column(Modifier.animateContentSize()) {
             Row(
