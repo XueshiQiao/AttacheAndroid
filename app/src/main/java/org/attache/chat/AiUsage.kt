@@ -247,13 +247,17 @@ fun UsageSection(usage: Map<String, ProviderUsage>, desktop: String?, modifier: 
     if (shown.isEmpty() && !appMissing) return
     var expanded by rememberSaveable { mutableStateOf(false) }
     val nowSec by produceState(System.currentTimeMillis() / 1000) {
-        // The countdowns are whole minutes.
+        // The countdowns are whole minutes, but the heading's age counts
+        // seconds while it is under a minute.
         while (true) {
-            delay(30_000)
+            delay(10_000)
             value = System.currentTimeMillis() / 1000
         }
     }
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    // The oldest of the providers' times: "2m ago" then holds for every
+    // number on the card, not just the freshest one.
+    val updated = shown.mapNotNull { it.storedAt }.minOrNull()
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -273,6 +277,13 @@ fun UsageSection(usage: Map<String, ProviderUsage>, desktop: String?, modifier: 
                     .padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 2.dp),
             ) {
                 Text("Usage", style = MaterialTheme.typography.labelMedium, color = muted)
+                updated?.let {
+                    Text(
+                        "  · ${updatedAgo(nowSec - it)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = muted,
+                    )
+                }
                 // A refresh that failed keeps the last good numbers on screen;
                 // this says they are not current, and why when it is known.
                 if (appMissing && shown.isNotEmpty()) {
@@ -423,6 +434,16 @@ private fun UsageBar(used: Float, elapsed: Float?, color: Color) {
             }
         }
     }
+}
+
+/** How long ago the numbers were read: `just now`, `35s ago`, `2m ago`,
+ * `3h ago`, `2d ago`. */
+internal fun updatedAgo(seconds: Long): String = when {
+    seconds < 10 -> "just now"
+    seconds < 60 -> "${seconds}s ago"
+    seconds < 3_600 -> "${seconds / 60}m ago"
+    seconds < 86_400 -> "${seconds / 3_600}h ago"
+    else -> "${seconds / 86_400}d ago"
 }
 
 /** `4h 54m`, `3d 2h`, `12m`. */
