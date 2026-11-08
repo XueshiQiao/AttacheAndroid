@@ -46,6 +46,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1579,7 +1580,9 @@ internal fun Composer(
             // the stop button, as in any chat app; typing turns it back, and
             // a message sent then waits in Claude's queue.
             if (working && text.isBlank() && images.isEmpty()) {
-                FilledTonalIconButton(onClick = { confirmStop = true }, modifier = Modifier.size(48.dp)) {
+                // The field's single-line height, so the button and the empty
+                // field are the same height rather than 48 next to 56.
+                FilledTonalIconButton(onClick = { confirmStop = true }, modifier = Modifier.size(OutlinedTextFieldDefaults.MinHeight)) {
                     Icon(Icons.Filled.Stop, contentDescription = "Stop")
                 }
             } else {
@@ -1593,9 +1596,17 @@ internal fun Composer(
                         keyboard?.hide()
                         focus.clearFocus()
                     },
-                    modifier = Modifier.size(48.dp),
+                    modifier = Modifier.size(OutlinedTextFieldDefaults.MinHeight),
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    // The plane's box is centred but its weight is not: the
+                    // triangle's centroid sits 3.5 units left of the middle
+                    // of 24, so a centred plane reads as off to the left.
+                    // 2dp splits the difference between box and centroid.
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send",
+                        modifier = Modifier.offset(x = 2.dp),
+                    )
                 }
             }
         }
