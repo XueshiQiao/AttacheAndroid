@@ -215,10 +215,10 @@ fun AgentListScreen(
                     action = "Reconnect" to viewModel::reconnect,
                 )
 
-                ChatConnection.READY -> if (state.agents.isEmpty()) {
+                ChatConnection.READY -> if (state.agents.isEmpty() && state.usage.values.none { it.windows.isNotEmpty() }) {
                     CenteredMessage("No agents are running in tmux.")
                 } else {
-                    AgentList(state.agents, onOpenAgent)
+                    AgentList(state.agents, state.usage, onOpenAgent)
                 }
             }
         }
@@ -236,9 +236,10 @@ private fun subtitle(state: AgentListUiState): String = when (state.connection) 
 }
 
 @Composable
-private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit) {
-    // One clock for every row, ticking once a minute: the ages are whole
-    // minutes, so a faster tick would redraw the list to change nothing.
+private fun AgentList(agents: List<AgentPane>, usage: Map<String, ProviderUsage>, onOpen: (AgentPane) -> Unit) {
+    // One clock for every row, ticking once a minute: the ages and the
+    // usage countdowns are whole minutes, so a faster tick would redraw the
+    // list to change nothing.
     val nowSec by produceState(System.currentTimeMillis() / 1000) {
         while (true) {
             delay(60_000)
@@ -250,6 +251,18 @@ private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit) {
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp + bottomSafeInset()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (usage.values.any { it.windows.isNotEmpty() }) {
+            item(key = "usage") { UsageCard(usage, nowSec, Modifier.padding(top = 4.dp)) }
+        }
+        if (agents.isEmpty()) {
+            item(key = "no-agents") {
+                Text(
+                    "No agents are running in tmux.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(top = 24.dp),
+                )
+            }
+        }
         for (phase in AgentPhase.entries) {
             val inPhase = groups[phase].orEmpty()
             if (inPhase.isEmpty()) continue

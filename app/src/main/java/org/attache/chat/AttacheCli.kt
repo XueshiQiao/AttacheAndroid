@@ -175,6 +175,11 @@ object AttacheCli {
         return "${shell(cli)} agents --watch" + (pane?.let { " --pane $it" } ?: "")
     }
 
+    /** The shell command that keeps the host's AI subscription usage
+     * coming (`usage --watch`, attache-cli 0.3.0). An older attache-cli
+     * prints its usage text and exits, which reads as no usage at all. */
+    fun usageWatchCommand(cli: String): String = "${shell(cli)} usage --watch"
+
     /** The agents in a `watch` event, as [parseAgents] reads `agents`. */
     fun agentsEvent(o: JSONObject): List<AgentPane> {
         val a = o.optJSONArray("agents") ?: JSONArray()
