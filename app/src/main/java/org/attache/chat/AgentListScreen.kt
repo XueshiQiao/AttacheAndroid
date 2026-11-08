@@ -69,6 +69,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -120,6 +121,9 @@ private fun ModeOption(title: String, detail: String, onClick: () -> Unit) {
         color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier
             .fillMaxWidth()
+            // Clipped before the click handler, so its ripple keeps the
+            // rounded corners (see AgentRow).
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -290,11 +294,16 @@ private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit, onRe
 private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit, onLongClick: () -> Unit) {
     val emphasised = agent.phase == AgentPhase.NEEDS_YOU
     val haptics = LocalHapticFeedback.current
+    val shape = RoundedCornerShape(14.dp)
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = shape,
         color = if (emphasised) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier
             .fillMaxWidth()
+            // Surface clips only what it draws itself; the press ripple of a
+            // click handler outside it is drawn square, its corners showing
+            // past the row's rounded ones. Clipped first, it stays inside.
+            .clip(shape)
             // A long press renames: only a conversation can be, by its id.
             .combinedClickable(
                 onClick = onClick,
