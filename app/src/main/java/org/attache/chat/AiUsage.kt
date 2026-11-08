@@ -18,6 +18,7 @@
 package org.attache.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,10 +28,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -39,12 +49,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONObject
 
 /**
  * One AI subscription's quota windows, as `attache-cli usage --watch` passes
@@ -132,28 +143,109 @@ object UsageDirectory {
 
 private val PROVIDER_ORDER = listOf("claude", "antigravity", "grok")
 
+/** The providers worth a line: one that never answered on this host (its
+ * CLI is not installed there) is left out rather than shown as an error,
+ * since it is simply not something this person uses here. */
+internal fun shownProviders(usage: Map<String, ProviderUsage>): List<ProviderUsage> = usage.values
+    .filter { it.windows.isNotEmpty() }
+    .sortedBy { PROVIDER_ORDER.indexOf(it.provider).let { i -> if (i < 0) PROVIDER_ORDER.size else i } }
+
+/** The height of the collapsed bar, which the list keeps clear below its
+ * last row. */
+internal val UsageBarHeight = 44.dp
+
 /**
- * The quota card above the agents. A provider that never answered on this
- * host (its CLI is not installed there) is left out rather than shown as an
- * error: it is simply not something this person uses here.
+ * The quota bar pinned to the bottom of the agent list: one line, each
+ * provider's fullest window, and a tap opens every window above it. The
+ * panel lies over the list rather than pushing it up, so opening it never
+ * moves the row under a finger; a tap on the list behind it closes it.
  */
 @Composable
-fun UsageCard(usage: Map<String, ProviderUsage>, nowSec: Long, modifier: Modifier = Modifier) {
-    val shown = usage.values
-        .filter { it.windows.isNotEmpty() }
-        .sortedBy { PROVIDER_ORDER.indexOf(it.provider).let { i -> if (i < 0) PROVIDER_ORDER.size else i } }
+fun UsageBar(
+    usage: Map<String, ProviderUsage>,
+    nowSec: Long,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shown = shownProviders(usage)
     if (shown.isEmpty()) return
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            for (p in shown) ProviderBlock(p, nowSec)
+    Column(modifier.fillMaxWidth()) {
+        if (expanded) {
+            Surface(
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.6f).dp),
+            ) {
+                Column(
+                    Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    for (p in shown) ProviderBlock(p, nowSec)
+                }
+            }
         }
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = if (expanded) 0.dp else 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier
+                    .height(UsageBarHeight)
+                    .padding(horizontal = 16.dp),
+            ) {
+                for (p in shown) {
+                    val top = p.windows.maxByOrNull { it.usedAt(nowSec) ?: -1.0 }
+                    val used = top?.usedAt(nowSec)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .background(top?.let { gaugeColor(it, nowSec) } ?: Color.Gray, CircleShape),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(p.label, style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            used?.let { "${it.toInt()}%" } ?: "–",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                if (shown.any { it.error != null }) {
+                    Text("!", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                }
+                Icon(
+                    if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp,
+                    contentDescription = if (expanded) "Hide usage" else "Show usage",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** Green while spending slower than the clock, amber when ahead of it,
+ * red from 90% used. */
+internal fun gaugeColor(w: UsageWindow, nowSec: Long): Color {
+    val fraction = ((w.usedAt(nowSec) ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f)
+    val elapsed = w.elapsedAt(nowSec)
+    return when {
+        fraction >= 0.9f -> Color(0xFFE5484D)
+        elapsed != null && w.usedAt(nowSec) != null && fraction > elapsed + 0.02f -> Color(0xFFF5A524)
+        else -> Color(0xFF30A46C)
     }
 }
 
@@ -194,12 +286,7 @@ private fun UsageGauge(w: UsageWindow, nowSec: Long) {
     val used = w.usedAt(nowSec)
     val elapsed = w.elapsedAt(nowSec)
     val fraction = ((used ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f)
-    val ahead = elapsed != null && used != null && fraction > elapsed + 0.02f
-    val barColor = when {
-        fraction >= 0.9f -> Color(0xFFE5484D)
-        ahead -> Color(0xFFF5A524)
-        else -> Color(0xFF30A46C)
-    }
+    val barColor = gaugeColor(w, nowSec)
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
