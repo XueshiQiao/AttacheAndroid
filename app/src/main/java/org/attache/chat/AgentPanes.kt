@@ -38,24 +38,18 @@ data class AgentPane(
     val phase: AgentPhase,
     /** When the hook last wrote `@agent_state`, epoch seconds; null if never. */
     val sinceEpochSec: Long?,
-    /** What every list, header and notification calls it: the person's own
-     * [name] for the conversation when they gave one, else [defaultTitle]. */
+    /** What every list, header and notification calls it: the pane's title,
+     * cleaned — the person's own name when they renamed the pane. */
     val title: String,
     /** From the agent's own report, when it gave one. */
     val transcriptPath: String? = null,
     val model: String? = null,
     /** The conversation's id: Claude's session, agy's conversation. */
     val conversation: String? = null,
-    /** The person's name for the conversation (`attache-cli rename`), kept
-     * on the host by conversation so the phone and the tablet agree. */
+    /** The pane's title when the person renamed it (`attache-cli rename`):
+     * tmux keeps it as the pane's own title, so every client shows it. */
     val name: String? = null,
-    /** The name the agent's own title gives it, which [name] replaces. */
-    val defaultTitle: String = title,
-) {
-    /** Only a conversation can be renamed: the name is kept by its id. */
-    val canRename: Boolean
-        get() = conversation != null && kind.isNotEmpty()
-}
+)
 
 /** How the list names a pane: by the task Claude titled it with, or by its
  * window when the title says nothing about the work. */

@@ -113,20 +113,20 @@ object AttacheCli {
     }
 
     /**
-     * Names the agent's conversation [name] on the host (attache-cli 0.3.4),
-     * or, with a blank [name], goes back to the agent's own title. Kept by
-     * conversation on the host, so every phone and tablet shows it; nothing
-     * is typed into the agent. True when the host wrote it.
+     * Makes [name] [pane]'s title (attache-cli 0.3.5), which the agent in it
+     * then cannot change, so the phone, the desktop and every terminal on
+     * tmux show the same name; a blank [name] gives the title back to the
+     * agent. Nothing is typed into the agent. True when tmux took it.
      */
-    suspend fun rename(tmux: TmuxControl, kind: String, conversation: String, name: String): Boolean {
-        if (!ID.matches(kind) || !ID.matches(conversation)) return false
+    suspend fun rename(tmux: TmuxControl, pane: String, name: String): Boolean {
+        if (!PANE.matches(pane)) return false
         // "=" is the base64 of nothing, so a reset still passes an argument.
         val b64 = name.trim().takeIf { it.isNotEmpty() }
             ?.let { android.util.Base64.encodeToString(it.toByteArray(), android.util.Base64.NO_WRAP) } ?: "="
-        val out = lines(tmux, "rename $kind $conversation --name $b64") ?: return false
+        val out = lines(tmux, "rename $pane --name $b64") ?: return false
         return out.any {
             try {
-                JSONObject(it).optString("conversation") == conversation
+                JSONObject(it).optBoolean("renamed")
             } catch (_: Exception) {
                 false
             }
@@ -305,7 +305,8 @@ object AttacheCli {
         }
         val pane = o.optString("pane").takeIf { PANE.matches(it) } ?: return@mapNotNull null
         val windowName = o.optString("window_name")
-        val defaultTitle = AgentPanes.cleanTitle(o.optString("title"), command = o.optString("command"), fallback = windowName)
+        // A renamed pane's title is the person's, shown as it is, not
+        // cleaned as an agent's own title would be.
         val name = o.optStringOrNull("name")?.trim()?.ifEmpty { null }
         AgentPane(
             paneId = pane,
@@ -321,12 +322,11 @@ object AttacheCli {
                 else -> AgentPhase.IDLE
             },
             sinceEpochSec = o.optLongOrNull("since"),
-            title = name ?: defaultTitle,
+            title = name ?: AgentPanes.cleanTitle(o.optString("title"), command = o.optString("command"), fallback = windowName),
             transcriptPath = o.optStringOrNull("transcript"),
             model = o.optStringOrNull("model"),
             conversation = o.optStringOrNull("conversation"),
             name = name,
-            defaultTitle = defaultTitle,
         )
     }.sortedWith(compareBy<AgentPane>({ it.phase.ordinal }, { -(it.sinceEpochSec ?: 0L) }))
 

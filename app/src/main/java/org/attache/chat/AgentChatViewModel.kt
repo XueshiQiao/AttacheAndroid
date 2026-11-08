@@ -517,16 +517,15 @@ class AgentChatViewModel @Inject constructor(
      * the channel this page's own reads are waiting on. Until it answers the
      * switcher shows what the list page read.
      */
-    /** Renames this page's conversation on the host. The pane's own watch
+    /** Renames this page's pane on the host. The pane's own watch
      * brings the new name to the title; the switcher's list is read again.
      * [onDone] gets whether the host wrote it. */
     fun rename(agent: AgentPane, name: String, onDone: (Boolean) -> Unit) {
         val tmux = control
-        val conversation = agent.conversation
-        if (tmux == null || conversation == null) return onDone(false)
+        if (tmux == null) return onDone(false)
         viewModelScope.launch {
             val ok = try {
-                AttacheCli.rename(tmux, agent.kind, conversation, name)
+                AttacheCli.rename(tmux, agent.paneId, name)
             } catch (e: Exception) {
                 if (e is CancellationException) currentCoroutineContext().ensureActive()
                 false

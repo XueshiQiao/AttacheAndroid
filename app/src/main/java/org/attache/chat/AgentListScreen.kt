@@ -304,16 +304,12 @@ private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit, onLong
             // click handler outside it is drawn square, its corners showing
             // past the row's rounded ones. Clipped first, it stays inside.
             .clip(shape)
-            // A long press renames: only a conversation can be, by its id.
+            // A long press renames.
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = if (agent.canRename) {
-                    {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onLongClick()
-                    }
-                } else {
-                    null
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
                 },
             ),
     ) {

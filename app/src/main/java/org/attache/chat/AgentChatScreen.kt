@@ -303,10 +303,10 @@ fun AgentChatScreen(
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 // A tap switches agents; a long press renames
-                                // this one's conversation.
+                                // this one's pane.
                                 modifier = Modifier.combinedClickable(
                                     onClick = { drawerScope.launch { drawer.open() } },
-                                    onLongClick = if (state.agent?.canRename == true) {
+                                    onLongClick = if (state.agent != null) {
                                         {
                                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                             renaming = true

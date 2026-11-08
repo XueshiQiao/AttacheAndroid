@@ -88,16 +88,15 @@ class AgentListViewModel @Inject constructor(
 
     fun reconnect() = link.reconnect()
 
-    /** Renames [agent]'s conversation on the host; the list's own watch
+    /** Renames [agent]'s pane on the host; the list's own watch
      * then shows it, within a couple of seconds. [onDone] gets whether the
      * host wrote it. */
     fun rename(agent: AgentPane, name: String, onDone: (Boolean) -> Unit) {
         val tmux = link.control.value
-        val conversation = agent.conversation
-        if (tmux == null || conversation == null) return onDone(false)
+        if (tmux == null) return onDone(false)
         viewModelScope.launch {
             val ok = try {
-                AttacheCli.rename(tmux, agent.kind, conversation, name)
+                AttacheCli.rename(tmux, agent.paneId, name)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 false

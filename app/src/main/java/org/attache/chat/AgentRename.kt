@@ -38,13 +38,14 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 
 /**
- * Renaming an agent's conversation, from a long press on its row or on the
- * chat page's title. [onSave] gets the new name; a blank one, or Reset,
- * goes back to the agent's own title ([AgentPane.defaultTitle]).
+ * Renaming an agent's pane, from a long press on its row or on the chat
+ * page's title: the name becomes the pane's title in tmux, so every client
+ * shows it. [onSave] gets the new name; a blank one, or Reset, gives the
+ * title back to the agent.
  */
 @Composable
 fun RenameAgentDialog(agent: AgentPane, onSave: (String) -> Unit, onDismiss: () -> Unit) {
-    val start = agent.name ?: agent.defaultTitle
+    val start = agent.title
     var text by remember { mutableStateOf(TextFieldValue(start, TextRange(0, start.length))) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
@@ -56,7 +57,7 @@ fun RenameAgentDialog(agent: AgentPane, onSave: (String) -> Unit, onDismiss: () 
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                placeholder = { Text(agent.defaultTitle) },
+                placeholder = { Text("Name") },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
                 keyboardActions = KeyboardActions(onDone = { onSave(text.text) }),
                 modifier = Modifier.focusRequester(focus),
