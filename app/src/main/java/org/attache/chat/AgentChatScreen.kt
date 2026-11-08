@@ -375,7 +375,22 @@ fun AgentChatScreen(
             ) {
                 // Said above the conversation, which stays readable: a
                 // dropped connection used to look exactly like a quiet one.
-                if (state.linkLost || state.connection == ChatConnection.CONNECTING) {
+                // Connecting only once it has lasted: every page opens with
+                // its link saying CONNECTING until it has looked at the host's
+                // connection, a frame or two later, so the red bar flashed
+                // during the page's entry animation on a connection that was
+                // up all along (caught on the owner's screen recording,
+                // 2026-11-08). A lost link is said at once.
+                val connecting = state.connection == ChatConnection.CONNECTING
+                var connectingShown by remember { mutableStateOf(false) }
+                LaunchedEffect(connecting) {
+                    connectingShown = false
+                    if (connecting) {
+                        delay(CONNECTING_BANNER_DELAY_MS)
+                        connectingShown = true
+                    }
+                }
+                if (state.linkLost || connectingShown) {
                     LinkBanner(lost = state.linkLost, onReconnect = viewModel::reconnect)
                 }
                 Box(Modifier.weight(1f)) {
@@ -1717,6 +1732,9 @@ private const val RESULT_LINES = 40
 
 /** The space above each message of the person's: where a new turn begins. */
 private val TURN_GAP = 14.dp
+
+/** How long CONNECTING lasts before the page says so. */
+private const val CONNECTING_BANNER_DELAY_MS = 800L
 private const val DIFF_PREVIEW = 12
 private const val OUTPUT_PREVIEW = 4
 private const val COMMAND_PREVIEW = 30
