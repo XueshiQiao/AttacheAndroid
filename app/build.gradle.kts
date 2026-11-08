@@ -286,10 +286,14 @@ android {
 
         debug {
             manifestPlaceholders["memtagMode"] = "sync"
+            // Attaché: the debug APK is what goes to the phone, over a relay.
+            // Measured 2026-11-08 from clean packages: 61.1 MB as it was,
+            // 50.2 MB without coverage, 28.4 MB with R8 as well (class names
+            // stay readable in a debuggable build). Resource shrinking only
+            // took it to 26.1 MB and was left off on purpose.
+            isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard.cfg", "proguard-debug.cfg")
             testProguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard.cfg", "proguard-tests.cfg")
-
-            enableAndroidTestCoverage = true
         }
     }
 

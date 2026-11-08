@@ -52,3 +52,7 @@ Do not overwrite unrelated local changes. Keep edits scoped to the requested beh
      cp -f app/build/outputs/apk/oss/debug/app-oss-debug.apk "/tmp/Attache-v${VERSION_NAME}-b${BUILD_NUMBER}.apk"
      ~/.local/bin/attache-send "/tmp/Attache-v${VERSION_NAME}-b${BUILD_NUMBER}.apk"
      ```
+5. **What the debug APK is built with (the owner's choice, 2026-11-08)**:
+   - The debug build type runs R8 code shrinking (`isMinifyEnabled = true`) and has no test coverage instrumentation, so the APK sent to the phone is about 28 MB instead of 61 MB. Measured from clean packages: 61.1 MB as it was, 50.2 MB without coverage, 28.4 MB with R8 too.
+   - Resource shrinking (`isShrinkResources`) is left off on purpose: it only took the APK to 26.1 MB. Do not turn it on, and do not put coverage back, without the owner asking.
+   - When measuring APK sizes, delete the old APK first: debug packaging edits the previous file in place and the space freed by removed entries stays in it, so an incremental build reads tens of MB too large.
