@@ -281,6 +281,7 @@ class TmuxControl(
     val completedDownloads: SharedFlow<LocalInboxFile> = _completedDownloads.asSharedFlow()
 
     @Volatile private var currentDownloadJob: Job? = null
+    @Volatile private var currentDownloadPath: String? = null
     private val downloadQueue = Channel<String>(Channel.UNLIMITED)
     private val activeOrQueuedPaths = java.util.Collections.synchronizedSet(linkedSetOf<String>())
     private val pendingPushTokensByPath = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -390,6 +391,7 @@ class TmuxControl(
                 for (remotePath in downloadQueue) {
                     val ctx = appContext
                     if (ctx != null) {
+                        currentDownloadPath = remotePath
                         val job = scope.launch {
                             try {
                                 val displayName = remotePath.trim().substringAfterLast('/').ifBlank { "file" }
@@ -429,6 +431,7 @@ class TmuxControl(
                         currentDownloadJob = job
                         job.join()
                         currentDownloadJob = null
+                        currentDownloadPath = null
                     } else {
                         activeOrQueuedPaths.remove(remotePath)
                         _incomingPushFiles.tryEmit(remotePath)
@@ -591,6 +594,14 @@ class TmuxControl(
     }
 
     fun cancelActiveDownload() {
+        // A cancel answers the push as surely as a finished download does.
+        // Unrecorded, the host's @attache_push still names the file on the
+        // next connection and the whole download starts again from byte 0.
+        currentDownloadPath?.let { pendingPushTokensByPath.remove(it) }?.let { token ->
+            lastHandledPushToken = token
+            handledPushTokens.add(token)
+            appContext?.let { AttacheFileStorage.markPushTokenHandled(it, token) }
+        }
         currentDownloadJob?.cancel()
         currentDownloadJob = null
         activeOrQueuedPaths.clear()
