@@ -35,6 +35,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -203,6 +204,12 @@ open class SSH : AbsTransport {
     protected var client: SshClient? = null
     private var session: SshSession? = null
     private val jumpClients = mutableListOf<SshClient>()
+
+    /** Attaché: what a file transfer needs to open a connection of its own,
+     * and the transfer connections open right now, so close() ends them. */
+    @Volatile
+    private var transferPolicy: SshCryptoPolicy? = null
+    private val transferClients = mutableSetOf<SshClient>()
 
     private val savedPasswordsTried = mutableSetOf<UUID>()
 
@@ -875,6 +882,122 @@ open class SSH : AbsTransport {
     }
 
     /**
+     * Attaché: runs [block] on a second SSH connection to the same host, closed
+     * afterwards; null when one could not be opened. A file never comes down
+     * the connection the rail and the chat use: every channel on a connection
+     * shares one TCP stream, and sshlib lets the server run 2 MB ahead on each
+     * channel, so a download put up to 2 MB of file in front of every agent
+     * list update and every tmux reply — over a relay of a few Mbit/s, seconds
+     * of nothing per round trip, and a list that stayed blank.
+     *
+     * It goes the same way the main connection went (the same last jump host,
+     * or a tsnet forwarder of its own) and signs in only with what the main
+     * connection already holds: keys still loaded, the saved password. It
+     * never prompts, because a download in the background is no reason to ask
+     * for a passphrase, and a key marked for confirmation is not used at all.
+     */
+    private suspend fun <T> withTransferConnection(block: suspend (SshClient) -> T): T? {
+        val currentHost = host ?: return null
+        val policy = transferPolicy ?: return null
+        if (!authenticated) return null
+        val lastJump = synchronized(jumpClients) { jumpClients.lastOrNull() }
+        val forwarderPort = if (lastJump == null && routedViaTailscale) {
+            TailscaleManager.openForwarder(currentHost.hostname, currentHost.port).also { if (it <= 0) return null }
+        } else {
+            0
+        }
+        val config = SshClientConfig {
+            handshakeTimeoutMs = TRANSFER_HANDSHAKE_TIMEOUT_MS
+            cryptoPolicy(policy)
+            when {
+                lastJump != null -> this.transportFactory = lastJump.openDirectTcpipTransport(currentHost.hostname, currentHost.port)
+                forwarderPort > 0 -> {
+                    this.host = "127.0.0.1"
+                    this.port = forwarderPort
+                }
+                else -> {
+                    this.host = currentHost.hostname
+                    this.port = currentHost.port
+                }
+            }
+            this.hostKeyAlgorithms = policyHostKeyOrder(currentHost, policy)
+            this.hostKeyVerifier = TransferHostKeyVerifier(currentHost)
+            this.enableCompression = compressionEnabled
+            this.ipVersion = if (forwarderPort > 0) IpVersion.IPV4_ONLY else parseIpVersion(currentHost.ipVersion, currentHost.hostname)
+        }
+        val transfer = SshClient(config)
+        synchronized(transferClients) { transferClients.add(transfer) }
+        return try {
+            if (transfer.connect() !is ConnectResult.Success) {
+                Timber.w("transfer connection to %s failed", currentHost.hostname)
+                return null
+            }
+            val auth = transfer.authenticate(currentHost.username, TransferAuth(transfer, currentHost))
+            if (auth !is AuthResult.Success) {
+                Timber.w("transfer connection to %s could not sign in: %s", currentHost.hostname, auth)
+                return null
+            }
+            block(transfer)
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            Timber.w(e, "transfer connection to %s failed", currentHost.hostname)
+            null
+        } finally {
+            synchronized(transferClients) { transferClients.remove(transfer) }
+            withContext(NonCancellable) { runCatching { transfer.disconnect() } }
+            if (forwarderPort > 0) TailscaleManager.closeForwarder(forwarderPort)
+        }
+    }
+
+    /** A transfer connection accepts only a host key already saved for this
+     * host, and says nothing either way: the main connection is the one that
+     * shows fingerprints and asks, and it has just done so. */
+    private inner class TransferHostKeyVerifier(private val verifyHost: Host) : HostKeyVerifier {
+        override suspend fun verify(key: org.connectbot.sshlib.PublicKey): Boolean =
+            manager?.hostRepository?.getKnownHostsForHostBlocking(verifyHost.id).orEmpty()
+                .any { it.hostKeyAlgo == key.type && it.hostKey.contentEquals(key.encoded) }
+    }
+
+    /** Signs a transfer connection in with what is already at hand, asking nothing. */
+    private inner class TransferAuth(private val transfer: SshClient, private val currentHost: Host) : AuthHandler {
+        private fun usableKeys(): List<KeyPair> {
+            val pubkeyId = currentHost.pubkeyId
+            if (pubkeyId == HostConstants.PUBKEYID_NEVER) return emptyList()
+            return manager?.loadedKeypairs?.values.orEmpty()
+                .filter { holder ->
+                    holder.pubkey?.confirmation != true &&
+                        (pubkeyId == HostConstants.PUBKEYID_ANY || holder.pubkey?.id == pubkeyId)
+                }
+                .mapNotNull { it.pair }
+        }
+
+        override suspend fun onPublicKeysNeeded(): List<AuthPublicKey> = usableKeys().mapNotNull { pair ->
+            runCatching {
+                if (preparePublicKeyAuthentication(transfer, pair)) SshSigning.encodePublicKey(pair) else null
+            }.getOrNull()
+        }
+
+        override suspend fun onSignatureRequest(key: AuthPublicKey, dataToSign: ByteArray): ByteArray? {
+            val pair = usableKeys().firstOrNull { pair ->
+                runCatching { SshSigning.encodePublicKey(pair).publicKeyBlob.contentEquals(key.publicKeyBlob) }.getOrDefault(false)
+            } ?: return null
+            return runCatching { SshSigning.signWithKeyPair(key.algorithmName, pair, dataToSign) }.getOrNull()
+        }
+
+        override suspend fun onKeyboardInteractivePrompt(
+            name: String,
+            instruction: String,
+            prompts: List<KeyboardInteractiveCallback.Prompt>,
+        ): List<String>? {
+            val saved = manager?.securePasswordStorage?.getPassword(currentHost.id) ?: return null
+            if (prompts.any { it.echo }) return null
+            return prompts.map { saved }
+        }
+
+        override suspend fun onPasswordNeeded(): String? = manager?.securePasswordStorage?.getPassword(currentHost.id)
+    }
+
+    /**
      * Attaché trial: stream a remote file over a dedicated SSH exec channel into [output]
      * with real-time byte progress. First line emitted is `SIZE:<bytes>\n` or `ERR:<reason>\n`.
      */
@@ -889,7 +1012,19 @@ open class SSH : AbsTransport {
         val command = "P=$quoted; case \"\$P\" in \"~\"/*) P=\"\$HOME/\${P#~/}\" ;; esac; " +
             "if [ ! -f \"\$P\" ]; then echo \"ERR:NOT_FOUND\"; exit 1; fi; " +
             "SIZE=\$(wc -c < \"\$P\" | tr -d ' \\t\\r\\n'); echo \"SIZE:\$SIZE\"; cat \"\$P\""
-        val channel = client?.openSession() ?: return false
+        return withTransferConnection { transfer ->
+            pullFile(transfer, trimmed, command, output, onProgress)
+        } ?: false
+    }
+
+    private suspend fun pullFile(
+        transfer: SshClient,
+        trimmed: String,
+        command: String,
+        output: java.io.OutputStream,
+        onProgress: (Long, Long) -> Unit,
+    ): Boolean {
+        val channel = transfer.openSession() ?: return false
         return try {
             if (!channel.requestExec(command)) return false
             var headerParsed = false
@@ -1335,6 +1470,7 @@ open class SSH : AbsTransport {
             onDisconnect()
             return
         }
+        transferPolicy = policy
         val (dialHost, dialPort) = if (transportFactory == null) {
             resolveDialEndpoint(currentHost)
         } else {
@@ -1526,6 +1662,8 @@ open class SSH : AbsTransport {
         }
         closingSession?.close()
         closingClient?.disconnect()
+        synchronized(transferClients) { transferClients.toList().also { transferClients.clear() } }
+            .forEach { runCatching { it.disconnect() } }
         closingJumps.forEach {
             try {
                 it.disconnect()
@@ -2007,6 +2145,10 @@ open class SSH : AbsTransport {
     open fun instanceProtocolName(): String = PROTOCOL
 
     companion object {
+        /** A transfer connection has nobody to approve a host key: if it
+         * cannot finish its handshake in this long it gives up. */
+        private const val TRANSFER_HANDSHAKE_TIMEOUT_MS = 30_000L
+
         internal fun getKeySizeFromAlgorithm(algorithm: String, keyBlob: ByteArray): Int = when {
             algorithm == "ssh-rsa" || algorithm.startsWith("rsa-sha2-") -> {
                 rsaModulusBitLength(keyBlob)

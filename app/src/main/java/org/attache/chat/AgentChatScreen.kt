@@ -209,6 +209,7 @@ fun AgentChatScreen(
             }
         }
     }
+    org.attache.tmux.PushOfferDialog(tmux)
     if (showFiles) {
         AttacheFileInboxDialog(
             control = tmux,

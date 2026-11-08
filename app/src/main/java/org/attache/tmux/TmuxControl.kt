@@ -40,6 +40,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -295,6 +298,18 @@ class TmuxControl(
     )
     private val pushCheckLock = Mutex()
 
+    private val _pushOffers = MutableStateFlow<List<PushOffer>>(emptyList())
+
+    /** Files the computer pushed while the phone was away, found on
+     * connecting. They wait here for a yes or no instead of starting at once:
+     * a 72 MB video nobody asked for, pulled the moment a host opens, is what
+     * the person sees as a host that will not load. */
+    val pushOffers: StateFlow<List<PushOffer>> = _pushOffers.asStateFlow()
+
+    /** Whether the check made on connecting has run. Pushes found by it are
+     * offered; pushes that arrive later, while connected, download at once. */
+    @Volatile private var connectPushCheckDone = false
+
     /** Scroll the finger has asked for, positive back in history. One
      * loop drains it and merges what has piled up for the same pane, so a
      * fast swipe becomes a few commands rather than one per frame. */
@@ -417,10 +432,23 @@ class TmuxControl(
                                             android.widget.Toast.LENGTH_LONG,
                                         ).show()
                                     }
-                                } else if (!token.isNullOrEmpty()) {
-                                    handledPushTokens.remove(token)
-                                    if (lastHandledPushToken == token) {
-                                        lastHandledPushToken = ""
+                                } else {
+                                    if (!token.isNullOrEmpty()) {
+                                        handledPushTokens.remove(token)
+                                        if (lastHandledPushToken == token) {
+                                            lastHandledPushToken = ""
+                                        }
+                                    }
+                                    // A cancel is the person's own doing; anything else
+                                    // used to fail without a word.
+                                    if (isActive) {
+                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                            android.widget.Toast.makeText(
+                                                ctx,
+                                                "文件没有下载成功: $displayName",
+                                                android.widget.Toast.LENGTH_LONG,
+                                            ).show()
+                                        }
                                     }
                                 }
                             } finally {
@@ -575,9 +603,12 @@ class TmuxControl(
         }
     }
 
-    private fun enqueueAutoPushDownload(remotePath: String, pushToken: String? = null) {
+    private fun enqueueAutoPushDownload(remotePath: String, pushToken: String? = null, ask: Boolean = false) {
         val trimmed = remotePath.trim()
         if (trimmed.isEmpty()) return
+        // Every refresh checks again and sees the same unanswered token; a
+        // file still waiting on the person must not be answered for them.
+        if (_pushOffers.value.any { it.remotePath == trimmed }) return
         if (AttacheFileStorage.isAlreadyInstalledOrOlderAttacheApk(trimmed)) {
             Timber.i("Skipping auto-download of already-installed Attaché APK: %s", trimmed)
             if (!pushToken.isNullOrEmpty()) {
@@ -590,18 +621,56 @@ class TmuxControl(
         if (!pushToken.isNullOrEmpty()) {
             pendingPushTokensByPath[trimmed] = pushToken
         }
+        if (ask) {
+            _pushOffers.update { offers ->
+                if (offers.any { it.remotePath == trimmed }) offers else offers + PushOffer(trimmed, null)
+            }
+            return
+        }
         enqueueDownload(trimmed)
+    }
+
+    /** Downloads every offered file. */
+    fun acceptPushOffers() {
+        _pushOffers.getAndUpdate { emptyList() }.forEach { enqueueDownload(it.remotePath) }
+    }
+
+    /** Declines every offered file, for good: the same as cancelling it. */
+    fun declinePushOffers() {
+        _pushOffers.getAndUpdate { emptyList() }.forEach { offer ->
+            pendingPushTokensByPath.remove(offer.remotePath)?.let(::markPushHandled)
+        }
+    }
+
+    private fun markPushHandled(token: String) {
+        lastHandledPushToken = token
+        handledPushTokens.add(token)
+        appContext?.let { AttacheFileStorage.markPushTokenHandled(it, token) }
+    }
+
+    /** Fills in the size of each offered file, so the question can say how
+     * much it would pull over what may be a slow relay. */
+    private suspend fun measurePushOffers() {
+        val paths = _pushOffers.value.filter { it.sizeBytes == null }.map { it.remotePath }
+        if (paths.isEmpty()) return
+        val quoted = paths.joinToString(" ") { "'" + it.replace("'", "'\"'\"'") + "'" }
+        val out = try {
+            exec("for f in $quoted; do if [ -f \"${'$'}f\" ]; then wc -c < \"${'$'}f\"; else echo -1; fi; done")
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        } ?: return
+        val sizes = paths.zip(out.lines().map { it.trim().toLongOrNull() }).toMap()
+        _pushOffers.update { offers ->
+            offers.map { offer -> if (offer.sizeBytes == null) offer.copy(sizeBytes = sizes[offer.remotePath]) else offer }
+        }
     }
 
     fun cancelActiveDownload() {
         // A cancel answers the push as surely as a finished download does.
         // Unrecorded, the host's @attache_push still names the file on the
         // next connection and the whole download starts again from byte 0.
-        currentDownloadPath?.let { pendingPushTokensByPath.remove(it) }?.let { token ->
-            lastHandledPushToken = token
-            handledPushTokens.add(token)
-            appContext?.let { AttacheFileStorage.markPushTokenHandled(it, token) }
-        }
+        currentDownloadPath?.let { pendingPushTokensByPath.remove(it) }?.let(::markPushHandled)
         currentDownloadJob?.cancel()
         currentDownloadJob = null
         activeOrQueuedPaths.clear()
@@ -857,7 +926,7 @@ class TmuxControl(
      * Atomically drains `~/.local/share/attache/outbox.queue` on the remote host and
      * enqueues each file path for background download into `Download/Attache/`.
      */
-    private suspend fun drainRemotePushQueue(pushToken: String? = null): List<String> {
+    private suspend fun drainRemotePushQueue(pushToken: String? = null, ask: Boolean = false): List<String> {
         val d = "$"
         val out = try {
             exec(
@@ -876,42 +945,49 @@ class TmuxControl(
             .filter { it.startsWith("/") }
             .distinct()
             .toList()
-        paths.forEach { enqueueAutoPushDownload(it, pushToken) }
+        paths.forEach { enqueueAutoPushDownload(it, pushToken, ask) }
         return paths
     }
 
     private suspend fun handleRemotePushIfAny() {
         pushCheckLock.withLock {
-            val pushValue = send("show-options -gqv @attache_push").firstOrNull()?.trim().orEmpty()
-            if (pushValue.isEmpty()) {
-                drainRemotePushQueue()
-                return@withLock
+            val onConnect = !connectPushCheckDone
+            checkRemotePush(ask = onConnect)
+            connectPushCheckDone = true
+        }
+        measurePushOffers()
+    }
+
+    private suspend fun checkRemotePush(ask: Boolean) {
+        val pushValue = send("show-options -gqv @attache_push").firstOrNull()?.trim().orEmpty()
+        if (pushValue.isEmpty()) {
+            drainRemotePushQueue(ask = ask)
+            return
+        }
+        val alreadyHandled = pushValue == lastHandledPushToken ||
+            handledPushTokens.contains(pushValue) ||
+            (appContext != null && AttacheFileStorage.isPushTokenHandled(appContext, pushValue))
+        if (alreadyHandled) {
+            lastHandledPushToken = pushValue
+            return
+        }
+        val isFirstObservation = lastHandledPushToken.isEmpty()
+        val tokenEpoch = pushValue.substringBefore('-').toLongOrNull()
+        val isStaleOnConnect = isFirstObservation &&
+            tokenEpoch != null &&
+            tokenEpoch >= 1_700_000_000L &&
+            (System.currentTimeMillis() / 1000L - tokenEpoch) > 600L
+        val drained = drainRemotePushQueue(pushValue, ask)
+        if (!isStaleOnConnect) {
+            val colonIdx = pushValue.indexOf(':')
+            val remotePath = if (colonIdx >= 0) pushValue.substring(colonIdx + 1).trim() else pushValue
+            if (remotePath.startsWith("/") && remotePath !in drained) {
+                enqueueAutoPushDownload(remotePath, pushValue, ask)
             }
-            val alreadyHandled = pushValue == lastHandledPushToken ||
-                handledPushTokens.contains(pushValue) ||
-                (appContext != null && AttacheFileStorage.isPushTokenHandled(appContext, pushValue))
-            if (alreadyHandled) {
-                lastHandledPushToken = pushValue
-                return@withLock
-            }
-            val isFirstObservation = lastHandledPushToken.isEmpty()
-            val tokenEpoch = pushValue.substringBefore('-').toLongOrNull()
-            val isStaleOnConnect = isFirstObservation &&
-                tokenEpoch != null &&
-                tokenEpoch >= 1_700_000_000L &&
-                (System.currentTimeMillis() / 1000L - tokenEpoch) > 600L
-            val drained = drainRemotePushQueue(pushValue)
-            if (!isStaleOnConnect) {
-                val colonIdx = pushValue.indexOf(':')
-                val remotePath = if (colonIdx >= 0) pushValue.substring(colonIdx + 1).trim() else pushValue
-                if (remotePath.startsWith("/") && remotePath !in drained) {
-                    enqueueAutoPushDownload(remotePath, pushValue)
-                }
-            } else {
-                lastHandledPushToken = pushValue
-                handledPushTokens.add(pushValue)
-                appContext?.let { AttacheFileStorage.markPushTokenHandled(it, pushValue) }
-            }
+        } else {
+            lastHandledPushToken = pushValue
+            handledPushTokens.add(pushValue)
+            appContext?.let { AttacheFileStorage.markPushTokenHandled(it, pushValue) }
         }
     }
 

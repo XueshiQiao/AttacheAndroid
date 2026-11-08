@@ -2062,6 +2062,7 @@ fun ConsoleScreen(
             }
         }
 
+        org.attache.tmux.PushOfferDialog(currentTmuxControl)
         if (showFileInboxDialog) {
             AttacheFileInboxDialog(
                 control = currentTmuxControl,

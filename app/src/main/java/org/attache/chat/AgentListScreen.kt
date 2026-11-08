@@ -162,6 +162,8 @@ fun AgentListScreen(
     }
     var showAppearance by remember { mutableStateOf(false) }
     if (showAppearance) ChatAppearanceDialog(onDismiss = { showAppearance = false })
+    val tmux by viewModel.tmuxControl.collectAsStateWithLifecycle()
+    org.attache.tmux.PushOfferDialog(tmux)
 
     Scaffold(
         modifier = modifier,

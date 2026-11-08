@@ -84,6 +84,8 @@ class AgentListViewModel @Inject constructor(
 
     fun setTerminalManager(manager: TerminalManager) = link.attach(manager)
 
+    val tmuxControl: StateFlow<TmuxControl?> get() = link.control
+
     fun reconnect() = link.reconnect()
 
     /**

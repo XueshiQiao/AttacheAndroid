@@ -53,6 +53,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -69,6 +70,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -117,6 +119,13 @@ data class LocalInboxFile(
     val lastModifiedMs: Long,
     val kind: AttacheFileKind,
     val apkVersionLabel: String? = null,
+)
+
+/** A file the computer pushed, waiting for a yes or no; [sizeBytes] is null
+ * until measured and -1 when the file is gone from the computer. */
+data class PushOffer(
+    val remotePath: String,
+    val sizeBytes: Long?,
 )
 
 data class FileDownloadProgress(
@@ -469,6 +478,43 @@ internal fun formatInboxSize(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> "${bytes / 1024L} KB"
     else -> "$bytes B"
+}
+
+/**
+ * Asks whether to download the files the computer pushed while the phone was
+ * away. Shown on every screen a host opens to — the agent list, a chat, the
+ * terminal — because any of them can be the first. Tapping outside only puts
+ * the question away until the next screen; "不要" declines for good.
+ */
+@Composable
+fun PushOfferDialog(control: TmuxControl?) {
+    control ?: return
+    val offers by control.pushOffers.collectAsState()
+    var putAway by remember(offers) { mutableStateOf(false) }
+    if (offers.isEmpty() || putAway) return
+    AlertDialog(
+        onDismissRequest = { putAway = true },
+        title = { Text("电脑发来了 ${offers.size} 个文件") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                offers.forEach { offer ->
+                    val size = when (val bytes = offer.sizeBytes) {
+                        null -> ""
+                        -1L -> " · 电脑上已经没有了"
+                        else -> " · ${formatInboxSize(bytes)}"
+                    }
+                    Text(offer.remotePath.substringAfterLast('/') + size, style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    "是在你没连上的时候发的。要现在下载吗？",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = control::acceptPushOffers) { Text("下载") } },
+        dismissButton = { TextButton(onClick = control::declinePushOffers) { Text("不要") } },
+    )
 }
 
 private fun formatTimestamp(epochMs: Long): String {
