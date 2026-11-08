@@ -285,8 +285,11 @@ fun AgentChatScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable { drawerScope.launch { drawer.open() } },
                             ) {
+                                // The tmux window's name, as the window list and the
+                                // terminal show it, rather than the title the agent
+                                // writes into its pane, which matches neither.
                                 Text(
-                                    state.agent?.title ?: "Agent",
+                                    state.agent?.let { it.windowName.ifEmpty { it.title } } ?: "Agent",
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false),
@@ -441,7 +444,7 @@ private fun subtitle(state: AgentChatUiState): String {
         AgentPhase.DONE -> "done"
         AgentPhase.IDLE -> "idle"
     }
-    return listOf(agent.kind.ifEmpty { "agent" }, agent.sessionName, agent.windowName, phase).joinToString(" · ")
+    return listOf(agent.kind.ifEmpty { "agent" }, agent.sessionName, phase).joinToString(" · ")
 }
 
 @Composable
