@@ -112,6 +112,27 @@ object AttacheCli {
         return parseAgents(out)
     }
 
+    /**
+     * Names the agent's conversation [name] on the host (attache-cli 0.3.4),
+     * or, with a blank [name], goes back to the agent's own title. Kept by
+     * conversation on the host, so every phone and tablet shows it; nothing
+     * is typed into the agent. True when the host wrote it.
+     */
+    suspend fun rename(tmux: TmuxControl, kind: String, conversation: String, name: String): Boolean {
+        if (!ID.matches(kind) || !ID.matches(conversation)) return false
+        // "=" is the base64 of nothing, so a reset still passes an argument.
+        val b64 = name.trim().takeIf { it.isNotEmpty() }
+            ?.let { android.util.Base64.encodeToString(it.toByteArray(), android.util.Base64.NO_WRAP) } ?: "="
+        val out = lines(tmux, "rename $kind $conversation --name $b64") ?: return false
+        return out.any {
+            try {
+                JSONObject(it).optString("conversation") == conversation
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
     /** The person has looked at this conversation: Done becomes Idle. */
     suspend fun seen(tmux: TmuxControl, kind: String, conversation: String) {
         if (ID.matches(kind) && ID.matches(conversation)) run(tmux, "seen $kind $conversation")
@@ -284,6 +305,8 @@ object AttacheCli {
         }
         val pane = o.optString("pane").takeIf { PANE.matches(it) } ?: return@mapNotNull null
         val windowName = o.optString("window_name")
+        val defaultTitle = AgentPanes.cleanTitle(o.optString("title"), command = o.optString("command"), fallback = windowName)
+        val name = o.optStringOrNull("name")?.trim()?.ifEmpty { null }
         AgentPane(
             paneId = pane,
             sessionName = o.optString("session"),
@@ -298,10 +321,12 @@ object AttacheCli {
                 else -> AgentPhase.IDLE
             },
             sinceEpochSec = o.optLongOrNull("since"),
-            title = AgentPanes.cleanTitle(o.optString("title"), command = o.optString("command"), fallback = windowName),
+            title = name ?: defaultTitle,
             transcriptPath = o.optStringOrNull("transcript"),
             model = o.optStringOrNull("model"),
             conversation = o.optStringOrNull("conversation"),
+            name = name,
+            defaultTitle = defaultTitle,
         )
     }.sortedWith(compareBy<AgentPane>({ it.phase.ordinal }, { -(it.sinceEpochSec ?: 0L) }))
 

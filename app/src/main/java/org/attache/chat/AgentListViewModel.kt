@@ -88,6 +88,24 @@ class AgentListViewModel @Inject constructor(
 
     fun reconnect() = link.reconnect()
 
+    /** Renames [agent]'s conversation on the host; the list's own watch
+     * then shows it, within a couple of seconds. [onDone] gets whether the
+     * host wrote it. */
+    fun rename(agent: AgentPane, name: String, onDone: (Boolean) -> Unit) {
+        val tmux = link.control.value
+        val conversation = agent.conversation
+        if (tmux == null || conversation == null) return onDone(false)
+        viewModelScope.launch {
+            val ok = try {
+                AttacheCli.rename(tmux, agent.kind, conversation, name)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                false
+            }
+            onDone(ok)
+        }
+    }
+
     /**
      * Pushed rather than polled: `attache-cli agents --watch` reads every
      * agent on the host every 1.5 s (0.08 s with 26 agents) and sends the

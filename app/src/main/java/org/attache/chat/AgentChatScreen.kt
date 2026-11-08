@@ -32,6 +32,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,7 +53,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -107,6 +108,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -115,6 +118,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -123,10 +127,17 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -140,18 +151,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
-import kotlin.math.abs
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.testTag
-import kotlin.math.roundToInt
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.ui.platform.LocalDensity
 import org.attache.tmux.AGENT_SLASH_COMMANDS
 import org.attache.tmux.AttacheFileInboxDialog
 import org.attache.tmux.AttacheFileStorage
@@ -254,6 +257,21 @@ fun AgentChatScreen(
         drawerScope.launch { drawer.close() }
         if (agent.paneId != viewModel.paneId) onOpenAgent(agent)
     }
+    val haptics = LocalHapticFeedback.current
+    var renaming by remember { mutableStateOf(false) }
+    val renamed = state.agent
+    if (renaming && renamed != null) {
+        RenameAgentDialog(
+            agent = renamed,
+            onSave = { name ->
+                renaming = false
+                viewModel.rename(renamed, name) { ok ->
+                    if (!ok) drawerScope.launch { snackbar.showSnackbar("Could not rename: the host did not answer") }
+                }
+            },
+            onDismiss = { renaming = false },
+        )
+    }
     ModalNavigationDrawer(
         drawerState = drawer,
         drawerContent = {
@@ -284,7 +302,19 @@ fun AgentChatScreen(
                         Column {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.clickable { drawerScope.launch { drawer.open() } },
+                                // A tap switches agents; a long press renames
+                                // this one's conversation.
+                                modifier = Modifier.combinedClickable(
+                                    onClick = { drawerScope.launch { drawer.open() } },
+                                    onLongClick = if (state.agent?.canRename == true) {
+                                        {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            renaming = true
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                ),
                             ) {
                                 Text(
                                     state.agent?.title ?: "Agent",

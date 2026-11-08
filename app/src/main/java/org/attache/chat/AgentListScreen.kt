@@ -20,10 +20,12 @@ package org.attache.chat
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,7 +69,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -165,6 +169,20 @@ fun AgentListScreen(
     val tmux by viewModel.tmuxControl.collectAsStateWithLifecycle()
     org.attache.tmux.PushOfferDialog(tmux)
 
+    var renaming by remember { mutableStateOf<AgentPane?>(null) }
+    renaming?.let { agent ->
+        RenameAgentDialog(
+            agent = agent,
+            onSave = { name ->
+                renaming = null
+                viewModel.rename(agent, name) { ok ->
+                    if (!ok) Toast.makeText(context, "Could not rename: the host did not answer", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { renaming = null },
+        )
+    }
+
     Scaffold(
         modifier = modifier,
         // The bottom is kept clear by the list itself (bottomSafeInset).
@@ -218,7 +236,7 @@ fun AgentListScreen(
                 ChatConnection.READY -> if (state.agents.isEmpty()) {
                     CenteredMessage("No agents are running in tmux.")
                 } else {
-                    AgentList(state.agents, onOpenAgent)
+                    AgentList(state.agents, onOpenAgent, onRename = { renaming = it })
                 }
             }
         }
@@ -236,7 +254,7 @@ private fun subtitle(state: AgentListUiState): String = when (state.connection) 
 }
 
 @Composable
-private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit) {
+private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit, onRename: (AgentPane) -> Unit) {
     // One clock for every row, ticking once a minute: the ages are whole
     // minutes, so a faster tick would redraw the list to change nothing.
     val nowSec by produceState(System.currentTimeMillis() / 1000) {
@@ -262,21 +280,33 @@ private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit) {
                 )
             }
             items(inPhase, key = { it.paneId }) { agent ->
-                AgentRow(agent, nowSec, onClick = { onOpen(agent) })
+                AgentRow(agent, nowSec, onClick = { onOpen(agent) }, onLongClick = { onRename(agent) })
             }
         }
     }
 }
 
 @Composable
-private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit) {
+private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit, onLongClick: () -> Unit) {
     val emphasised = agent.phase == AgentPhase.NEEDS_YOU
+    val haptics = LocalHapticFeedback.current
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = if (emphasised) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            // A long press renames: only a conversation can be, by its id.
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = if (agent.canRename) {
+                    {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLongClick()
+                    }
+                } else {
+                    null
+                },
+            ),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
