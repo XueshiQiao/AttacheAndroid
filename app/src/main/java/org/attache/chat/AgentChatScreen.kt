@@ -33,6 +33,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
@@ -56,6 +57,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -72,6 +74,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.Palette
@@ -85,6 +88,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -588,20 +592,108 @@ internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEa
                 }
             }
         }
+        // Up and down step from one of the person's own messages to the
+        // next, each put at the top of the view so the reply to it reads from
+        // its start; down from the last one goes to the bottom and follows.
+        // Translucent and flat: they sit over text, and a shadow under a
+        // see-through button shows through it as a smudge.
+        val jumpColor = FloatingActionButtonDefaults.containerColor.copy(alpha = 0.78f)
+        val jumpElevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp)
+        if (rows.any(::isPrompt)) {
+            SmallFloatingActionButton(
+                onClick = {
+                    val target = PromptJumps.above(rows, listState.layoutInfo) ?: return@SmallFloatingActionButton
+                    follow.stick = false
+                    scope.launch { listState.alignTop(target) }
+                },
+                containerColor = jumpColor,
+                elevation = jumpElevation,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    // Above the down button's place even while it is hidden,
+                    // so this one never moves under the thumb.
+                    .padding(end = 12.dp, bottom = 12.dp + JUMP_BUTTON_SIZE + 8.dp),
+            ) {
+                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Previous prompt")
+            }
+        }
         if (!follow.stick) {
             SmallFloatingActionButton(
                 onClick = {
-                    follow.stick = true
-                    scope.launch { listState.animateScrollToItem(0) }
+                    val target = PromptJumps.below(rows, listState.layoutInfo)
+                    if (target == null) {
+                        follow.stick = true
+                        scope.launch { listState.animateScrollToItem(0) }
+                    } else {
+                        scope.launch { listState.alignTop(target) }
+                    }
                 },
+                containerColor = jumpColor,
+                elevation = jumpElevation,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(12.dp),
             ) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Jump to latest")
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Next prompt")
             }
         }
     }
+}
+
+private fun isPrompt(row: Any) = row is ChatItem.UserText || row is PendingMessage
+
+/**
+ * Which of the person's messages the up and down buttons go to. The list is
+ * reversed, so index 0 is the newest row, and an item's offset is counted
+ * from the bottom of the view: its top edge sits at `offset + size`, and the
+ * top of the view, inside the padding, at [line].
+ */
+internal object PromptJumps {
+    /** Within this of the top counts as at the top: a scroll lands a pixel
+     * or so off, and the same message must not be chosen twice. */
+    private const val SLACK_PX = 8
+
+    fun line(info: LazyListLayoutInfo) = info.viewportEndOffset - info.afterContentPadding
+
+    /** The nearest message whose top is above the top of the view. */
+    fun above(rows: List<Any>, info: LazyListLayoutInfo): Int? {
+        val visible = info.visibleItemsInfo
+        val last = visible.lastOrNull()?.index ?: return null
+        return rows.indices.firstOrNull { i ->
+            isPrompt(rows[i]) && (
+                i > last ||
+                    visible.firstOrNull { it.index == i }?.let { it.offset + it.size > line(info) + SLACK_PX } == true
+                )
+        }
+    }
+
+    /** The nearest message whose top is below the top of the view; null
+     * when there is none, and down goes to the bottom instead. */
+    fun below(rows: List<Any>, info: LazyListLayoutInfo): Int? {
+        val visible = info.visibleItemsInfo
+        val first = visible.firstOrNull()?.index ?: return null
+        return rows.indices.lastOrNull { i ->
+            isPrompt(rows[i]) && (
+                i < first ||
+                    visible.firstOrNull { it.index == i }?.let { it.offset + it.size < line(info) - SLACK_PX } == true
+                )
+        }
+    }
+}
+
+/** Scrolls the row at [index] to the top of the view: slid when it is on
+ * screen, jumped to when it is not, since sliding past screens of text
+ * reads as nothing at all. Near the bottom it stops where the list ends. */
+private suspend fun LazyListState.alignTop(index: Int) {
+    val shown = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+    if (shown != null) {
+        animateScrollBy((shown.offset + shown.size - PromptJumps.line(layoutInfo)).toFloat())
+        return
+    }
+    // Lands at the bottom of the view, measured; then lifted to the top.
+    scrollToItem(index)
+    val landed = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    scrollBy((landed.offset + landed.size - PromptJumps.line(layoutInfo)).toFloat())
 }
 
 /** Whether the conversation follows new rows to the bottom. */
@@ -1753,6 +1845,9 @@ private const val RESULT_LINES = 40
 
 /** The space above each message of the person's: where a new turn begins. */
 private val TURN_GAP = 14.dp
+
+/** A small floating button's side, for stacking the two jump buttons. */
+private val JUMP_BUTTON_SIZE = 40.dp
 
 /** How long CONNECTING lasts before the page says so. */
 private const val CONNECTING_BANNER_DELAY_MS = 800L
