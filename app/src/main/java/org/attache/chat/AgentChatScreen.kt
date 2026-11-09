@@ -387,34 +387,35 @@ fun AgentChatScreen(
             ) {
                 // Said above the conversation, which stays readable: a
                 // dropped connection used to look exactly like a quiet one.
-                // Connecting only once it has lasted: every page opens with
-                // its link saying CONNECTING until it has looked at the host's
+                // Only once it has lasted: every page opens with its link
+                // saying CONNECTING until it has looked at the host's
                 // connection, a frame or two later, so the red bar flashed
                 // during the page's entry animation on a connection that was
                 // up all along (caught on the owner's screen recording,
-                // 2026-11-08). A lost link is said at once.
-                val connecting = state.connection == ChatConnection.CONNECTING
-                var connectingShown by remember { mutableStateOf(false) }
-                LaunchedEffect(connecting) {
-                    connectingShown = false
-                    if (connecting) {
+                // 2026-11-08); and a link that is down on returning to the
+                // page is usually back within the delay. A lost link is said
+                // at once.
+                val down = state.connection == ChatConnection.CONNECTING || state.connection == ChatConnection.DISCONNECTED
+                var downShown by remember { mutableStateOf(false) }
+                LaunchedEffect(down) {
+                    downShown = false
+                    if (down) {
                         delay(CONNECTING_BANNER_DELAY_MS)
-                        connectingShown = true
+                        downShown = true
                     }
                 }
-                if (state.linkLost || connectingShown) {
-                    LinkBanner(lost = state.linkLost, onReconnect = viewModel::reconnect)
+                if (down && (state.linkLost || downShown)) {
+                    LinkBanner(
+                        connecting = state.connection == ChatConnection.CONNECTING,
+                        lost = state.linkLost,
+                        onReconnect = viewModel::reconnect,
+                    )
                 }
                 Box(Modifier.weight(1f)) {
                     when {
                         state.connection == ChatConnection.NEEDS_TERMINAL -> Centered(
                             "The connection is asking for a password or a host key.",
                             action = "Answer in terminal" to openTerminal,
-                        )
-
-                        state.connection == ChatConnection.DISCONNECTED -> Centered(
-                            "Disconnected.",
-                            action = "Reconnect" to viewModel::reconnect,
                         )
 
                         state.paneGone -> Centered("This pane has been closed.")
@@ -677,19 +678,27 @@ private object EarlierMarker
  * shuts it again (`holdInPlace`).
  */
 /** The connection is down or coming up, said in one line with a way to
- * push it. */
+ * push it. The wheel and "…ing" only while an attempt is really in flight:
+ * a connection nothing was bringing back used to say "Connecting…" too. */
 @Composable
-private fun LinkBanner(lost: Boolean, onReconnect: () -> Unit) {
+private fun LinkBanner(connecting: Boolean, lost: Boolean, onReconnect: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(
-                Modifier.size(14.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
-            Spacer(Modifier.width(10.dp))
+            if (connecting) {
+                CircularProgressIndicator(
+                    Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Spacer(Modifier.width(10.dp))
+            }
             Text(
-                if (lost) "Connection lost — reconnecting…" else "Connecting…",
+                when {
+                    connecting && lost -> "Connection lost — reconnecting…"
+                    connecting -> "Connecting…"
+                    lost -> "Connection lost"
+                    else -> "Not connected"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.weight(1f),

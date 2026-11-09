@@ -73,6 +73,7 @@ class AgentListViewModel @Inject constructor(
 
     fun setShown(value: Boolean) {
         shown.value = value
+        link.setShown(value)
     }
 
     init {

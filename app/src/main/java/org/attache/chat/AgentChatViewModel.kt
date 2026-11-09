@@ -29,7 +29,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -180,6 +179,7 @@ class AgentChatViewModel @Inject constructor(
 
     fun setOnScreen(value: Boolean) {
         onScreen = value
+        link.setShown(value)
         if (value) control?.let { tmux -> viewModelScope.launch { markSeen(tmux) } }
     }
 
@@ -207,7 +207,6 @@ class AgentChatViewModel @Inject constructor(
 
     @Volatile private var livePath: String? = null
 
-
     init {
         RecentAgents.visit(hostId, paneId)
         // The row this page was opened from: the list read it moments ago,
@@ -224,6 +223,9 @@ class AgentChatViewModel @Inject constructor(
         }
         viewModelScope.launch {
             link.connection.collect { c -> _uiState.update { it.copy(connection = c) } }
+        }
+        viewModelScope.launch {
+            link.lost.collect { lost -> _uiState.update { it.copy(linkLost = lost) } }
         }
         viewModelScope.launch {
             link.control.combine(usageShown) { tmux, shown -> tmux.takeIf { shown } }
@@ -244,38 +246,10 @@ class AgentChatViewModel @Inject constructor(
             link.control.collectLatest { tmux ->
                 control = tmux
                 if (tmux == null) return@collectLatest
-                _uiState.update { it.copy(linkLost = false) }
                 coroutineScope {
-                    launch { heartbeat(tmux) }
                     launch { watchPane(tmux) }
                     launch { transcriptPath.collectLatest { path -> follow(tmux, path) } }
                 }
-            }
-        }
-    }
-
-    /**
-     * Asks the channel something trivial every 15 s. A connection that died
-     * quietly (the network went, the phone slept) still has its channel
-     * object, so nothing else here noticed, and the page showed a live
-     * conversation that could not be reached. No answer in 6 s: the page
-     * says the connection was lost and a new one is made.
-     */
-    private suspend fun heartbeat(tmux: TmuxControl) {
-        while (true) {
-            delay(HEARTBEAT_MS)
-            val answered = try {
-                withTimeout(HEARTBEAT_TIMEOUT_MS) { tmux.query("display-message -p ok") }
-                true
-            } catch (e: Exception) {
-                if (e is CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
-                false
-            }
-            if (!answered) {
-                Timber.w("chat: the tmux channel stopped answering; reconnecting")
-                _uiState.update { it.copy(linkLost = true) }
-                link.declareDead()
-                return
             }
         }
     }
@@ -517,6 +491,7 @@ class AgentChatViewModel @Inject constructor(
      * the channel this page's own reads are waiting on. Until it answers the
      * switcher shows what the list page read.
      */
+
     /** Renames this page's pane on the host. The pane's own watch
      * brings the new name to the title; the switcher's list is read again.
      * [onDone] gets whether the host wrote it. */
@@ -790,8 +765,6 @@ class AgentChatViewModel @Inject constructor(
     private fun quote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     companion object {
-        private const val HEARTBEAT_MS = 15_000L
-        private const val HEARTBEAT_TIMEOUT_MS = 6_000L
 
         const val PANE_ARG = "pane"
         private const val MIRROR_POLL_MS = 2_000L
