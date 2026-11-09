@@ -33,6 +33,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -128,6 +130,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -249,6 +253,7 @@ fun AgentChatScreen(
     }
     val usage by viewModel.usage.collectAsStateWithLifecycle()
     val usageDesktop by viewModel.usageDesktop.collectAsStateWithLifecycle()
+    var usageExpanded by rememberSaveable { mutableStateOf(false) }
     val visits by RecentAgents.visits.collectAsStateWithLifecycle()
     val recents = remember(visits, state.allAgents) {
         RecentAgents.offer(visits[viewModel.hostId].orEmpty(), state.allAgents, current = viewModel.paneId)
@@ -284,9 +289,16 @@ fun AgentChatScreen(
                     current = viewModel.paneId,
                     onPick = switchTo,
                     keepBottomInset = !withUsage,
-                    modifier = Modifier.weight(1f),
+                    // A drag on the list, in any direction, means the person
+                    // is after the list: the card gives its room back. A drag
+                    // on the card itself scrolls the card and folds nothing.
+                    modifier = Modifier
+                        .weight(1f)
+                        .onAnyDrag { usageExpanded = false },
                 )
-                if (withUsage) UsageSection(usage, usageDesktop)
+                if (withUsage) {
+                    UsageSection(usage, usageDesktop, expanded = usageExpanded, onExpandedChange = { usageExpanded = it })
+                }
             }
         },
     ) {
@@ -1739,6 +1751,26 @@ private const val DIFF_PREVIEW = 12
 private const val OUTPUT_PREVIEW = 4
 private const val COMMAND_PREVIEW = 30
 private const val THINKING_PREVIEW = 4
+
+/**
+ * Calls [onDrag] once for each gesture whose finger travels past the touch
+ * slop, in any direction. It watches on the Initial pass and consumes
+ * nothing, so the list still scrolls and the drawer still closes under the
+ * same drag; a tap never reaches the slop and calls nothing.
+ */
+private fun Modifier.onAnyDrag(onDrag: () -> Unit): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        while (true) {
+            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                onDrag()
+                break
+            }
+        }
+    }
+}
 
 /** Every agent, by what it needs, with the one on screen marked. */
 @Composable

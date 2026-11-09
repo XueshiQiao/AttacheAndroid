@@ -44,10 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -239,13 +236,21 @@ private fun providerColor(provider: String): Color = when (provider) {
  * Usage is the one thing the phone may depend on the Mac desktop app for
  * (the owner's rule, 2026-11-08), so [desktop] `not_running` is said here
  * plainly: beside the last numbers, or alone when there are none.
+ *
+ * [expanded] is held by the drawer, because a drag on the list above folds
+ * the card too (the owner's call, 2026-11-09).
  */
 @Composable
-fun UsageSection(usage: Map<String, ProviderUsage>, desktop: String?, modifier: Modifier = Modifier) {
+fun UsageSection(
+    usage: Map<String, ProviderUsage>,
+    desktop: String?,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val shown = shownProviders(usage)
     val appMissing = desktop == "not_running"
     if (shown.isEmpty() && !appMissing) return
-    var expanded by rememberSaveable { mutableStateOf(false) }
     val nowSec by produceState(System.currentTimeMillis() / 1000) {
         // The countdowns are whole minutes, but the heading's age counts
         // seconds while it is under a minute.
@@ -273,7 +278,7 @@ fun UsageSection(usage: Map<String, ProviderUsage>, desktop: String?, modifier: 
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = !expanded }
+                    .clickable { onExpandedChange(!expanded) }
                     .padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 2.dp),
             ) {
                 Text("Usage", style = MaterialTheme.typography.labelMedium, color = muted)
@@ -314,7 +319,7 @@ fun UsageSection(usage: Map<String, ProviderUsage>, desktop: String?, modifier: 
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
                 )
             } else if (!expanded) {
-                Column(Modifier.clickable { expanded = true }) {
+                Column(Modifier.clickable { onExpandedChange(true) }) {
                     for (p in shown) {
                         val week = p.weekly ?: continue
                         UsageRow(
