@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1024 1024" width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="skyBg" x1="0.15" y1="0" x2="0.85" y2="1">
+        <stop offset="0%" stop-color="#7DD5FF"/>
+        <stop offset="52%" stop-color="#3AA0FF"/>
+        <stop offset="100%" stop-color="#1D68FF"/>
+      </linearGradient>
+      <radialGradient id="skyGlow" cx="0.28" cy="0.18" r="0.72">
+        <stop offset="0%" stop-color="rgba(255,255,255,0.42)"/>
+        <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+      </radialGradient>
+      <linearGradient id="mintBuddy" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#8BF9CC"/>
+        <stop offset="100%" stop-color="#22CE91"/>
+      </linearGradient>
+      <linearGradient id="whiteCard" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#FFFFFF"/>
+        <stop offset="100%" stop-color="#ECF5FF"/>
+      </linearGradient>
+      <filter id="softDrop1" x="-35%" y="-30%" width="170%" height="175%">
+        <feDropShadow dx="0" dy="28" stdDeviation="22" flood-color="#09368F" flood-opacity="0.34"/>
+        <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#09368F" flood-opacity="0.18"/>
+      </filter>
+    </defs>
+<rect width="1024" height="1024" fill="url(#skyBg)"/><rect width="1024" height="1024" fill="url(#skyGlow)"/>
+    <g transform="translate(512, 516) scale(1.10) translate(-512, -516)">
+      <g transform="translate(658, 450) rotate(10)" filter="url(#softDrop1)">
+        <rect x="-204" y="-204" width="408" height="408" rx="112" fill="url(#mintBuddy)"/>
+        <rect x="-197" y="-197" width="394" height="394" rx="105" fill="none" stroke="rgba(255,255,255,0.58)" stroke-width="8"/>
+        <rect x="24" y="-64" width="34" height="68" rx="17" fill="#123834"/>
+        <circle cx="34" cy="-46" r="7.5" fill="#FFFFFF"/>
+        <rect x="96" y="-64" width="34" height="68" rx="17" fill="#123834"/>
+        <circle cx="106" cy="-46" r="7.5" fill="#FFFFFF"/>
+      </g>
+
+      <g transform="translate(406, 554) rotate(-7)" filter="url(#softDrop1)">
+        <rect x="-248" y="-236" width="496" height="472" rx="124" fill="url(#whiteCard)"/>
+        <rect x="-241" y="-229" width="482" height="458" rx="117" fill="none" stroke="#FFFFFF" stroke-width="8"/>
+        <path d="M -118,-72 L -14,8 L -118,88" fill="none" stroke="#1E293B" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="30" y="58" width="118" height="50" rx="25" fill="#1FC788"/>
+      </g>
+    </g>
+</svg>
