@@ -2,6 +2,8 @@ package org.attache.tmux
 
 import android.widget.Toast
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -37,49 +40,53 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.attache.chat.AttacheCli
-import org.attache.chat.Workspace
-import org.attache.chat.WorkspaceDraft
+import org.attache.chat.Project
+import org.attache.chat.ProjectDraft
 
-/** The form: a new workspace from [window], or the saved one with [id]. */
-private data class WorkspaceEdit(val id: String?, val draft: WorkspaceDraft, val window: TmuxWindow?)
+/** The form: a new project from [window], or the saved one with [id]. */
+private data class ProjectEdit(val id: String?, val draft: ProjectDraft, val window: TmuxWindow?)
 
 /**
- * The host's saved workspaces (attache-cli keeps them, so the desktop shows
+ * The host's saved projects (attache-cli keeps them, so the desktop shows
  * the same list): a tap makes a new window in the folder and runs the
  * command there; a window can be saved as one, and closed in the same step,
  * which is the point of saving it. Nothing is kept on the phone.
  *
  * Every action waits for the host's answer before the dialog moves on, so a
  * refusal is shown where it happened and a window is only ever closed after
- * its workspace is known to be saved.
+ * its project is known to be saved.
  */
 @Composable
-fun WorkspacesDialog(control: TmuxControl, onDismiss: () -> Unit) {
+fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    var list by remember { mutableStateOf<List<Workspace>?>(null) }
+    var list by remember { mutableStateOf<List<Project>?>(null) }
+    var commands by remember { mutableStateOf<List<String>>(emptyList()) }
     var unreachable by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<WorkspaceEdit?>(null) }
-    var removing by remember { mutableStateOf<Workspace?>(null) }
+    var editing by remember { mutableStateOf<ProjectEdit?>(null) }
+    var removing by remember { mutableStateOf<Project?>(null) }
     var pickingWindow by remember { mutableStateOf(false) }
 
     fun say(text: String) = Toast.makeText(context, text, Toast.LENGTH_LONG).show()
 
     LaunchedEffect(reload) {
-        val got = AttacheCli.workspaces(control)
+        val got = AttacheCli.projects(control)
         unreachable = got == null
-        if (got != null) list = got
+        if (got != null) {
+            list = got.projects
+            commands = got.commands
+        }
     }
 
-    fun open(workspace: Workspace) {
+    fun open(project: Project) {
         val session = state.sessionId ?: return say("No tmux session to open it in")
         if (busy) return
         busy = true
         scope.launch {
-            val why = AttacheCli.openWorkspace(control, workspace.id, session)
+            val why = AttacheCli.openProject(control, project.id, session)
             busy = false
             if (why == null) onDismiss() else say("Not opened: $why")
         }
@@ -89,26 +96,27 @@ fun WorkspacesDialog(control: TmuxControl, onDismiss: () -> Unit) {
         if (busy) return
         busy = true
         scope.launch {
-            val draft = AttacheCli.draftWorkspace(control, window.id)
+            val draft = AttacheCli.draftProject(control, window.id)
             busy = false
             pickingWindow = false
             // Without a draft the form still opens: the name is known here,
             // and the folder can be typed.
-            editing = WorkspaceEdit(null, draft ?: WorkspaceDraft(window.name, "", ""), window)
+            editing = ProjectEdit(null, draft ?: ProjectDraft(window.name, "", ""), window)
         }
     }
 
     val edit = editing
     val remove = removing
     when {
-        edit != null -> WorkspaceEditor(
+        edit != null -> ProjectEditor(
             edit = edit,
+            commands = commands,
             busy = busy,
             onDismiss = { editing = null },
             onSave = { draft, closeWindow ->
                 busy = true
                 scope.launch {
-                    val why = AttacheCli.saveWorkspace(control, edit.id, draft)
+                    val why = AttacheCli.saveProject(control, edit.id, draft)
                     if (why != null) {
                         busy = false
                         say("Not saved: $why")
@@ -138,7 +146,7 @@ fun WorkspacesDialog(control: TmuxControl, onDismiss: () -> Unit) {
                     onClick = {
                         busy = true
                         scope.launch {
-                            val why = AttacheCli.removeWorkspace(control, remove.id)
+                            val why = AttacheCli.removeProject(control, remove.id)
                             busy = false
                             removing = null
                             if (why != null) say("Not removed: $why")
@@ -175,7 +183,7 @@ fun WorkspacesDialog(control: TmuxControl, onDismiss: () -> Unit) {
 
         else -> AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("Workspaces") },
+            title = { Text("Projects") },
             text = {
                 val shown = list
                 when {
@@ -184,24 +192,24 @@ fun WorkspacesDialog(control: TmuxControl, onDismiss: () -> Unit) {
                     shown == null -> Text("Reading…")
 
                     shown.isEmpty() -> Text(
-                        "None saved yet. Save a window as a workspace, close it, and open it again from here: " +
+                        "None saved yet. Save a window as a project, close it, and open it again from here: " +
                             "a new window in its folder, running its command.",
                     )
 
-                    else -> LazyColumn(Modifier.heightIn(max = 420.dp).testTag("workspaceList")) {
-                        items(shown, key = { it.id }) { workspace ->
-                            WorkspaceRow(
-                                workspace = workspace,
+                    else -> LazyColumn(Modifier.heightIn(max = 420.dp).testTag("projectList")) {
+                        items(shown, key = { it.id }) { project ->
+                            ProjectRow(
+                                project = project,
                                 enabled = !busy,
-                                onOpen = { open(workspace) },
+                                onOpen = { open(project) },
                                 onEdit = {
-                                    editing = WorkspaceEdit(
-                                        workspace.id,
-                                        WorkspaceDraft(workspace.name, workspace.path, workspace.command),
+                                    editing = ProjectEdit(
+                                        project.id,
+                                        ProjectDraft(project.name, project.path, project.command),
                                         null,
                                     )
                                 },
-                                onRemove = { removing = workspace },
+                                onRemove = { removing = project },
                             )
                         }
                     }
@@ -218,8 +226,8 @@ fun WorkspacesDialog(control: TmuxControl, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun WorkspaceRow(
-    workspace: Workspace,
+private fun ProjectRow(
+    project: Project,
     enabled: Boolean,
     onOpen: () -> Unit,
     onEdit: () -> Unit,
@@ -231,20 +239,20 @@ private fun WorkspaceRow(
                 .weight(1f)
                 // A folder that is gone cannot be opened, but the entry can
                 // still be edited to point somewhere real.
-                .clickable(enabled = enabled && workspace.exists, onClick = onOpen)
+                .clickable(enabled = enabled && project.exists, onClick = onOpen)
                 .padding(vertical = 10.dp),
         ) {
-            Text(workspace.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(project.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                if (workspace.exists) workspace.path else "${workspace.path} (folder missing)",
+                if (project.exists) project.path else "${project.path} (folder missing)",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (workspace.exists) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                color = if (project.exists) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                 maxLines = 1,
                 overflow = TextOverflow.StartEllipsis,
             )
-            if (workspace.command.isNotEmpty()) {
+            if (project.command.isNotEmpty()) {
                 Text(
-                    workspace.command,
+                    project.command,
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -259,17 +267,18 @@ private fun WorkspaceRow(
 }
 
 @Composable
-private fun WorkspaceEditor(
-    edit: WorkspaceEdit,
+private fun ProjectEditor(
+    edit: ProjectEdit,
+    commands: List<String>,
     busy: Boolean,
     onDismiss: () -> Unit,
-    onSave: (WorkspaceDraft, closeWindow: Boolean) -> Unit,
+    onSave: (ProjectDraft, closeWindow: Boolean) -> Unit,
 ) {
     var name by remember(edit) { mutableStateOf(edit.draft.name) }
     var path by remember(edit) { mutableStateOf(edit.draft.path) }
     var command by remember(edit) { mutableStateOf(edit.draft.command) }
     val ready = !busy && name.isNotBlank() && path.isNotBlank()
-    fun draft() = WorkspaceDraft(name.trim(), path.trim(), command.trim())
+    fun draft() = ProjectDraft(name.trim(), path.trim(), command.trim())
 
     // A command is code: no capitals put in, no words "corrected".
     val code = KeyboardOptions(
@@ -279,7 +288,7 @@ private fun WorkspaceEditor(
     )
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (edit.id == null) "Save as workspace" else "Edit workspace") },
+        title = { Text(if (edit.id == null) "Save as project" else "Edit project") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -306,8 +315,25 @@ private fun WorkspaceEditor(
                     placeholder = { Text("claude") },
                     supportingText = { Text("Runs in your shell, so an alias works. Empty for a plain shell.") },
                     keyboardOptions = code,
-                    modifier = Modifier.fillMaxWidth().testTag("workspaceCommand"),
+                    modifier = Modifier.fillMaxWidth().testTag("projectCommand"),
                 )
+                // The person's often-used commands (kept on the host, edited
+                // on the desktop): a tap fills the field, so an alias is
+                // picked rather than typed on a phone keyboard.
+                if (commands.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    ) {
+                        commands.forEach { suggestion ->
+                            FilterChip(
+                                selected = command.trim() == suggestion,
+                                onClick = { command = suggestion },
+                                label = { Text(suggestion, fontFamily = FontFamily.Monospace) },
+                            )
+                        }
+                    }
+                }
                 if (edit.window != null) {
                     TextButton(enabled = ready, onClick = { onSave(draft(), true) }) {
                         Text(

@@ -174,8 +174,8 @@ fun AgentListScreen(
     val tmux by viewModel.tmuxControl.collectAsStateWithLifecycle()
     org.attache.tmux.PushOfferDialog(tmux)
 
-    var showWorkspaces by remember { mutableStateOf(false) }
-    tmux?.takeIf { showWorkspaces }?.let { org.attache.tmux.WorkspacesDialog(it, onDismiss = { showWorkspaces = false }) }
+    var showProjects by remember { mutableStateOf(false) }
+    tmux?.takeIf { showProjects }?.let { org.attache.tmux.ProjectsDialog(it, onDismiss = { showProjects = false }) }
 
     var renaming by remember { mutableStateOf<AgentPane?>(null) }
     renaming?.let { agent ->
@@ -213,10 +213,10 @@ fun AgentListScreen(
                     }
                 },
                 actions = {
-                    // Saved workspaces: a tap makes the window again, and the
+                    // Saved projects: a tap makes the window again, and the
                     // agent it starts joins this list.
-                    IconButton(onClick = { showWorkspaces = true }, enabled = tmux != null) {
-                        Icon(Icons.Outlined.FolderOpen, contentDescription = "Workspaces")
+                    IconButton(onClick = { showProjects = true }, enabled = tmux != null) {
+                        Icon(Icons.Outlined.FolderOpen, contentDescription = "Projects")
                     }
                     IconButton(onClick = { showAppearance = true }) {
                         Icon(Icons.Outlined.Palette, contentDescription = "Appearance")

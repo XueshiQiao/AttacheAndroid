@@ -241,8 +241,8 @@ fun TmuxActionsButton(
         )
     }
 
-    var showWorkspaces by remember { mutableStateOf(false) }
-    if (showWorkspaces) WorkspacesDialog(control, onDismiss = { showWorkspaces = false })
+    var showProjects by remember { mutableStateOf(false) }
+    if (showProjects) ProjectsDialog(control, onDismiss = { showProjects = false })
 
     fun run(name: String, action: suspend () -> Unit) {
         onDismiss()
@@ -253,10 +253,10 @@ fun TmuxActionsButton(
         DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             DropdownMenuItem(text = { Text("New window") }, onClick = { run("new-window") { control.newWindow() } })
             DropdownMenuItem(
-                text = { Text("Workspaces…") },
+                text = { Text("Projects…") },
                 onClick = {
                     onDismiss()
-                    showWorkspaces = true
+                    showProjects = true
                 },
             )
             if (activeWindow != null) {
