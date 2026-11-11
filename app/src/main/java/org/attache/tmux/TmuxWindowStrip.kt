@@ -644,6 +644,19 @@ fun AttacheSidebar(
                 }
             }
         }
+        // Saved projects, under the windows they turn into. Folded until
+        // asked for; opening one closes the sidebar onto the new window.
+        ProjectsSection(
+            control = control,
+            onOpened = { onDismiss?.invoke() },
+            colors = ProjectsColors(
+                ink = palette.ink,
+                muted = palette.muted,
+                accent = palette.accent,
+                error = Color(0xFFE5484D),
+                line = palette.line,
+            ),
+        )
     }
 }
 

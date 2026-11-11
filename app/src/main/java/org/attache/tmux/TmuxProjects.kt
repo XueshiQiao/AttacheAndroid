@@ -2,25 +2,27 @@ package org.attache.tmux
 
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -33,9 +35,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -43,7 +48,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.attache.chat.AttacheCli
 import org.attache.chat.Project
@@ -53,17 +60,92 @@ import org.attache.chat.ProjectDraft
 private data class ProjectEdit(val id: String?, val draft: ProjectDraft, val window: TmuxWindow?)
 
 /**
+ * The colours the list is drawn in. It sits in three places: a dialog and
+ * the chat drawer, which are Material surfaces, and the terminal's sidebar,
+ * which is glass with a palette of its own. Reading `MaterialTheme` there
+ * would put dark text on dark glass.
+ */
+data class ProjectsColors(val ink: Color, val muted: Color, val accent: Color, val error: Color, val line: Color)
+
+@Composable
+fun materialProjectsColors() = ProjectsColors(
+    ink = MaterialTheme.colorScheme.onSurface,
+    muted = MaterialTheme.colorScheme.onSurfaceVariant,
+    accent = MaterialTheme.colorScheme.primary,
+    error = MaterialTheme.colorScheme.error,
+    line = MaterialTheme.colorScheme.outlineVariant,
+)
+
+/** The whole thing in a dialog, for the places with no drawer to put it in. */
+@Composable
+fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Projects") },
+        text = { ProjectsPanel(control, onOpened = onDismiss, listMaxHeight = 420.dp) },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/**
+ * The same list as a section of a drawer: a heading that folds, closed until
+ * asked for so a drawer that is opened to switch windows reads nothing from
+ * the host and loses no room. [onOpened] is the drawer closing: the new
+ * window is what the person wants to look at next.
+ */
+@Composable
+fun ProjectsSection(
+    control: TmuxControl?,
+    onOpened: () -> Unit,
+    modifier: Modifier = Modifier,
+    colors: ProjectsColors = materialProjectsColors(),
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = control != null) { expanded = !expanded }
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .testTag("projectsSection"),
+        ) {
+            Text("Projects", color = colors.ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(if (expanded) "▾" else "▸", color = colors.muted)
+        }
+        if (expanded && control != null) {
+            ProjectsPanel(
+                control,
+                onOpened = onOpened,
+                listMaxHeight = 260.dp,
+                colors = colors,
+                modifier = Modifier.padding(horizontal = 20.dp),
+            )
+        }
+    }
+}
+
+/**
  * The host's saved projects (attache-cli keeps them, so the desktop shows
  * the same list): a tap makes a new window in the folder and runs the
  * command there; a window can be saved as one, and closed in the same step,
  * which is the point of saving it. Nothing is kept on the phone.
  *
- * Every action waits for the host's answer before the dialog moves on, so a
+ * One component for every place the list appears, with its own forms: where
+ * it is put decides only its colours, its height and what opening one leads
+ * to. Every action waits for the host's answer before moving on, so a
  * refusal is shown where it happened and a window is only ever closed after
  * its project is known to be saved.
  */
 @Composable
-fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
+fun ProjectsPanel(
+    control: TmuxControl,
+    onOpened: () -> Unit,
+    listMaxHeight: Dp,
+    modifier: Modifier = Modifier,
+    colors: ProjectsColors = materialProjectsColors(),
+) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -78,7 +160,7 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
 
     fun say(text: String) = Toast.makeText(context, text, Toast.LENGTH_LONG).show()
 
-    LaunchedEffect(reload) {
+    LaunchedEffect(reload, control) {
         val got = AttacheCli.projects(control)
         unreachable = got == null
         if (got != null) {
@@ -94,7 +176,7 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
         scope.launch {
             val why = AttacheCli.openProject(control, project.id, session)
             busy = false
-            if (why == null) onDismiss() else say("Not opened: $why")
+            if (why == null) onOpened() else say("Not opened: $why")
         }
     }
 
@@ -111,10 +193,8 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
         }
     }
 
-    val edit = editing
-    val remove = removing
-    when {
-        edit != null -> ProjectEditor(
+    editing?.let { edit ->
+        ProjectEditor(
             edit = edit,
             commands = commands,
             busy = busy,
@@ -141,8 +221,10 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
                 }
             },
         )
+    }
 
-        remove != null -> AlertDialog(
+    removing?.let { remove ->
+        AlertDialog(
             onDismissRequest = { removing = null },
             title = { Text("Remove “${remove.name}”?") },
             text = { Text("Only the saved entry goes. The folder, and any window opened from it, stay.") },
@@ -163,8 +245,10 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
             },
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
         )
+    }
 
-        pickingWindow -> AlertDialog(
+    if (pickingWindow) {
+        AlertDialog(
             onDismissRequest = { pickingWindow = false },
             title = { Text("Save which window?") },
             text = {
@@ -186,70 +270,62 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
             confirmButton = {},
             dismissButton = { TextButton(onClick = { pickingWindow = false }) { Text("Cancel") } },
         )
+    }
 
-        else -> AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text("Projects") },
-            text = {
-                val shown = list
-                when {
-                    shown == null && unreachable -> Text("The host did not answer.")
+    Column(modifier.fillMaxWidth()) {
+        val shown = list
+        when {
+            shown == null && unreachable -> Text("The host did not answer.", color = colors.muted)
 
-                    shown == null -> Text("Reading…")
+            shown == null -> Text("Reading…", color = colors.muted)
 
-                    shown.isEmpty() -> Text(
-                        "None saved yet. Save a window as a project, close it, and open it again from here: " +
-                            "a new window in its folder, running its command.",
+            shown.isEmpty() -> Text(
+                "None saved yet. Save a window as a project, close it, and open it again from here: " +
+                    "a new window in its folder, running its command.",
+                color = colors.muted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            else -> LazyColumn(Modifier.heightIn(max = listMaxHeight).testTag("projectList")) {
+                items(shown, key = { it.id }) { project ->
+                    ProjectRow(
+                        project = project,
+                        colors = colors,
+                        enabled = !busy,
+                        onOpen = { open(project) },
+                        onEdit = {
+                            editing = ProjectEdit(project.id, ProjectDraft(project.name, project.path, project.command), null)
+                        },
+                        onRemove = { removing = project },
                     )
-
-                    else -> Column {
-                        Text(
-                            "Tap to open. Long-press to edit or remove.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        LazyColumn(Modifier.heightIn(max = 420.dp).testTag("projectList")) {
-                        items(shown, key = { it.id }) { project ->
-                            ProjectRow(
-                                project = project,
-                                enabled = !busy,
-                                onOpen = { open(project) },
-                                onEdit = {
-                                    editing = ProjectEdit(
-                                        project.id,
-                                        ProjectDraft(project.name, project.path, project.command),
-                                        null,
-                                    )
-                                },
-                                onRemove = { removing = project },
-                            )
-                            HorizontalDivider()
-                        }
-                        }
-                    }
                 }
-            },
-            confirmButton = {
-                TextButton(enabled = state.windows.isNotEmpty() && !busy, onClick = { pickingWindow = true }) {
-                    Text("Save a window…")
-                }
-            },
-            dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                if (shown.isNullOrEmpty()) "" else "Tap to open · hold to edit",
+                color = colors.muted,
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(enabled = state.windows.isNotEmpty() && !busy, onClick = { pickingWindow = true }) {
+                Text("Save a window…", color = colors.accent)
+            }
+        }
     }
 }
 
 /**
- * One project, the whole width of the dialog: its name, its folder in full
- * (wrapped onto as many lines as it takes, never cut: the folder is what
- * tells two projects of the same name apart), and its command. A tap opens
- * it; a long press brings up Edit and Remove, which are rare and used to
- * take a third of every row as buttons.
+ * One project, the whole width: its name with its command beside it, and
+ * under them its folder in full, wrapped onto as many lines as it takes and
+ * never cut, since the folder is what tells two projects of one name apart.
+ * A tap opens it; a long press brings up Edit and Remove, which are rare.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ProjectRow(
     project: Project,
+    colors: ProjectsColors,
     enabled: Boolean,
     onOpen: () -> Unit,
     onEdit: () -> Unit,
@@ -260,6 +336,7 @@ private fun ProjectRow(
         Column(
             Modifier
                 .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
                 .combinedClickable(
                     enabled = enabled,
                     // A folder that is gone cannot be opened; the tap then
@@ -267,19 +344,38 @@ private fun ProjectRow(
                     onClick = { if (project.exists) onOpen() else menu = true },
                     onLongClick = { menu = true },
                 )
-                .padding(vertical = 10.dp),
+                .padding(vertical = 8.dp),
         ) {
-            Text(project.name, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    project.name,
+                    color = colors.ink,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    project.command.ifEmpty { "shell" },
+                    color = colors.accent,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .widthIn(max = 150.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(colors.accent.copy(alpha = 0.14f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
             Text(
                 if (project.exists) project.path else "${project.path} (folder missing)",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (project.exists) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-            )
-            Text(
-                project.command.ifEmpty { "plain shell" },
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.primary,
+                color = if (project.exists) colors.muted else colors.error,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 2.dp),
             )
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

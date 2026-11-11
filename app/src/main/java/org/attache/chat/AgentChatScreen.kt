@@ -94,6 +94,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
@@ -292,13 +293,22 @@ fun AgentChatScreen(
                     agents = state.allAgents,
                     current = viewModel.paneId,
                     onPick = switchTo,
-                    keepBottomInset = !withUsage,
+                    keepBottomInset = false,
                     // A drag on the list, in any direction, means the person
                     // is after the list: the card gives its room back. A drag
                     // on the card itself scrolls the card and folds nothing.
                     modifier = Modifier
                         .weight(1f)
                         .onAnyDrag { usageExpanded = false },
+                )
+                // Saved projects, folded until asked for: a window that was
+                // closed is made again from here, and the drawer closes on
+                // it so the agent list behind is what shows next.
+                HorizontalDivider()
+                org.attache.tmux.ProjectsSection(
+                    control = tmux,
+                    onOpened = { drawerScope.launch { drawer.close() } },
+                    modifier = if (withUsage) Modifier else Modifier.padding(bottom = bottomSafeInset()),
                 )
                 if (withUsage) {
                     UsageSection(usage, usageDesktop, expanded = usageExpanded, onExpandedChange = { usageExpanded = it })
