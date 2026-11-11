@@ -1,7 +1,10 @@
 package org.attache.tmux
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +17,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -196,7 +202,13 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
                             "a new window in its folder, running its command.",
                     )
 
-                    else -> LazyColumn(Modifier.heightIn(max = 420.dp).testTag("projectList")) {
+                    else -> Column {
+                        Text(
+                            "Tap to open. Long-press to edit or remove.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        LazyColumn(Modifier.heightIn(max = 420.dp).testTag("projectList")) {
                         items(shown, key = { it.id }) { project ->
                             ProjectRow(
                                 project = project,
@@ -211,6 +223,8 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
                                 },
                                 onRemove = { removing = project },
                             )
+                            HorizontalDivider()
+                        }
                         }
                     }
                 }
@@ -225,6 +239,14 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * One project, the whole width of the dialog: its name, its folder in full
+ * (wrapped onto as many lines as it takes, never cut: the folder is what
+ * tells two projects of the same name apart), and its command. A tap opens
+ * it; a long press brings up Edit and Remove, which are rare and used to
+ * take a third of every row as buttons.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ProjectRow(
     project: Project,
@@ -233,36 +255,49 @@ private fun ProjectRow(
     onEdit: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    var menu by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
         Column(
             Modifier
-                .weight(1f)
-                // A folder that is gone cannot be opened, but the entry can
-                // still be edited to point somewhere real.
-                .clickable(enabled = enabled && project.exists, onClick = onOpen)
+                .fillMaxWidth()
+                .combinedClickable(
+                    enabled = enabled,
+                    // A folder that is gone cannot be opened; the tap then
+                    // offers what can be done, which is to edit or remove.
+                    onClick = { if (project.exists) onOpen() else menu = true },
+                    onLongClick = { menu = true },
+                )
                 .padding(vertical = 10.dp),
         ) {
-            Text(project.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(project.name, fontWeight = FontWeight.SemiBold)
             Text(
                 if (project.exists) project.path else "${project.path} (folder missing)",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (project.exists) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                maxLines = 1,
-                overflow = TextOverflow.StartEllipsis,
             )
-            if (project.command.isNotEmpty()) {
-                Text(
-                    project.command,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                project.command.ifEmpty { "plain shell" },
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
-        TextButton(enabled = enabled, onClick = onEdit) { Text("Edit") }
-        TextButton(enabled = enabled, onClick = onRemove) { Text("Remove") }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text("Edit…") },
+                onClick = {
+                    menu = false
+                    onEdit()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Remove…", color = MaterialTheme.colorScheme.error) },
+                onClick = {
+                    menu = false
+                    onRemove()
+                },
+            )
+        }
     }
 }
 
