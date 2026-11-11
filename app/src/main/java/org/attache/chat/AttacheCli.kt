@@ -54,6 +54,12 @@ data class ScreenReading(
     val question: QuestionPrompt? = null,
 )
 
+/** A saved workspace; [exists] is whether its folder was there when read. */
+data class Workspace(val id: String, val name: String, val path: String, val command: String, val exists: Boolean)
+
+/** The three things a workspace is, as typed. */
+data class WorkspaceDraft(val name: String, val path: String, val command: String)
+
 object AttacheCli {
     /**
      * Runs `attache-cli <args>` and returns what it printed; null when
@@ -103,6 +109,78 @@ object AttacheCli {
         true
     } catch (_: TmuxCommandError) {
         false
+    }
+
+    // Workspaces (attache-cli 0.3.9): a folder and the command to start in
+    // it, kept on the host in ~/.config/attache-workspaces.toml, so a window
+    // can be closed and made again with one tap, here and on the desktop.
+    // Only ids are written into a command as themselves; the three pieces of
+    // the person's own text go base64-encoded.
+
+    private val WORKSPACE_ID = Regex("[A-Za-z0-9_-]{1,128}")
+    private val SESSION_ID = Regex("\\$\\d+")
+    private val WINDOW_ID = Regex("@\\d+")
+
+    /** "=" is the base64 of nothing, so an empty text still passes an argument. */
+    private fun b64(text: String): String = android.util.Base64.encodeToString(text.toByteArray(), android.util.Base64.NO_WRAP).ifEmpty { "=" }
+
+    /** The line that answers with [flag], when there is one. */
+    private fun answer(lines: List<String>?, flag: String): JSONObject? = lines?.firstNotNullOfOrNull {
+        try {
+            JSONObject(it).takeIf { o -> o.has(flag) }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Null when it happened; else why not, in words to show. */
+    private fun refusal(lines: List<String>?, flag: String): String? {
+        if (lines == null) return "the host did not answer"
+        val o = answer(lines, flag) ?: return "attache-cli on the host does not know workspaces yet (it needs 0.3.10)"
+        return if (o.optBoolean(flag)) null else o.optString("why").ifEmpty { "attache-cli refused" }
+    }
+
+    /** The saved workspaces, in the file's order; null when the host could not be asked. */
+    suspend fun workspaces(tmux: TmuxControl): List<Workspace>? {
+        val out = lines(tmux, "workspaces") ?: return null
+        return out.mapNotNull {
+            try {
+                val o = JSONObject(it)
+                val id = o.getString("id")
+                if (!WORKSPACE_ID.matches(id)) return@mapNotNull null
+                Workspace(id, o.getString("name"), o.getString("path"), o.optString("command"), o.optBoolean("exists", true))
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    /** Saves a new workspace, or changes the one with [id]. Null when saved, else why not. */
+    suspend fun saveWorkspace(tmux: TmuxControl, id: String?, draft: WorkspaceDraft): String? {
+        if (id != null && !WORKSPACE_ID.matches(id)) return "not a workspace id"
+        val which = if (id == null) "" else "--id $id "
+        val args = "workspace save $which--name ${b64(draft.name)} --path ${b64(draft.path)} --command ${b64(draft.command)}"
+        return refusal(lines(tmux, args), "saved")
+    }
+
+    suspend fun removeWorkspace(tmux: TmuxControl, id: String): String? {
+        if (!WORKSPACE_ID.matches(id)) return "not a workspace id"
+        return refusal(lines(tmux, "workspace remove $id"), "removed")
+    }
+
+    /** A new window in [session] (`$3`), in the workspace's folder, running
+     * its command. tmux selects it and says so itself. Null when opened. */
+    suspend fun openWorkspace(tmux: TmuxControl, id: String, session: String): String? {
+        if (!WORKSPACE_ID.matches(id) || !SESSION_ID.matches(session)) return "not a workspace or a session id"
+        // Quoted: this is a shell line, and `$3` unquoted is a variable.
+        return refusal(lines(tmux, "workspace open $id --session '$session'"), "opened")
+    }
+
+    /** What saving [window] (`@7`) would start from; null when the host could not say. */
+    suspend fun draftWorkspace(tmux: TmuxControl, window: String): WorkspaceDraft? {
+        if (!WINDOW_ID.matches(window)) return null
+        val o = answer(lines(tmux, "workspace draft $window"), "draft")?.takeIf { it.optBoolean("draft") } ?: return null
+        return WorkspaceDraft(o.optString("name"), o.optString("path"), o.optString("command"))
     }
 
     /** Every agent, or the one in [pane]; null when attache-cli could not be asked. */

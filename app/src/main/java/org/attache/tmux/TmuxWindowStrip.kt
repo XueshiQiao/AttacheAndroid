@@ -241,6 +241,9 @@ fun TmuxActionsButton(
         )
     }
 
+    var showWorkspaces by remember { mutableStateOf(false) }
+    if (showWorkspaces) WorkspacesDialog(control, onDismiss = { showWorkspaces = false })
+
     fun run(name: String, action: suspend () -> Unit) {
         onDismiss()
         scope.tmuxAction(name, action)
@@ -249,6 +252,13 @@ fun TmuxActionsButton(
         trigger(onOpen)
         DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             DropdownMenuItem(text = { Text("New window") }, onClick = { run("new-window") { control.newWindow() } })
+            DropdownMenuItem(
+                text = { Text("Workspaces…") },
+                onClick = {
+                    onDismiss()
+                    showWorkspaces = true
+                },
+            )
             if (activeWindow != null) {
                 DropdownMenuItem(
                     text = { Text("Rename window…") },

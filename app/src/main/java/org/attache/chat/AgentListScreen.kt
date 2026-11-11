@@ -46,6 +46,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -173,6 +174,9 @@ fun AgentListScreen(
     val tmux by viewModel.tmuxControl.collectAsStateWithLifecycle()
     org.attache.tmux.PushOfferDialog(tmux)
 
+    var showWorkspaces by remember { mutableStateOf(false) }
+    tmux?.takeIf { showWorkspaces }?.let { org.attache.tmux.WorkspacesDialog(it, onDismiss = { showWorkspaces = false }) }
+
     var renaming by remember { mutableStateOf<AgentPane?>(null) }
     renaming?.let { agent ->
         RenameAgentDialog(
@@ -209,6 +213,11 @@ fun AgentListScreen(
                     }
                 },
                 actions = {
+                    // Saved workspaces: a tap makes the window again, and the
+                    // agent it starts joins this list.
+                    IconButton(onClick = { showWorkspaces = true }, enabled = tmux != null) {
+                        Icon(Icons.Outlined.FolderOpen, contentDescription = "Workspaces")
+                    }
                     IconButton(onClick = { showAppearance = true }) {
                         Icon(Icons.Outlined.Palette, contentDescription = "Appearance")
                     }
