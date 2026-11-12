@@ -290,11 +290,12 @@ fun AgentChatScreen(
         org.attache.tmux.NewWindowSheet(
             control = control,
             onDismiss = { newWindowSheet = false },
-            onEmptyWindow = {
+            // On to the new window: its chat when an agent starts in it,
+            // the terminal (already on it) when none does.
+            onMade = { made ->
                 newWindowSheet = false
-                drawerScope.launch { runCatching { control.newWindow() } }
+                viewModel.followNewWindow(made.pane, onAgent = onOpenAgent, otherwise = onOpenTerminal)
             },
-            onOpened = { newWindowSheet = false },
         )
     }
     ModalNavigationDrawer(

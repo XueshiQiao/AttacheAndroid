@@ -17,6 +17,7 @@
 
 package org.attache.chat
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import org.attache.tmux.TmuxCommandError
@@ -59,6 +60,10 @@ data class Project(val id: String, val name: String, val path: String, val comma
 
 /** What `projects` answers: the saved ones, and the commands to offer when one is saved. */
 data class ProjectList(val projects: List<Project>, val commands: List<String>)
+
+/** What `project open` answered: [why] it made no window, or the new
+ * window (`@7`) and its pane (`%9`) when the host named them. */
+data class ProjectOpening(val why: String?, val window: String?, val pane: String?)
 
 /** The three things a project is, as typed. */
 data class ProjectDraft(val name: String, val path: String, val command: String)
@@ -189,10 +194,34 @@ object AttacheCli {
 
     /** A new window in [session] (`$3`), in the project's folder, running
      * its command. tmux selects it and says so itself. Null when opened. */
-    suspend fun openProject(tmux: TmuxControl, id: String, session: String): String? {
-        if (!PROJECT_ID.matches(id) || !SESSION_ID.matches(session)) return "not a project or a session id"
+    suspend fun openProject(tmux: TmuxControl, id: String, session: String): ProjectOpening {
+        if (!PROJECT_ID.matches(id) || !SESSION_ID.matches(session)) {
+            return ProjectOpening("not a project or a session id", null, null)
+        }
         // Quoted: this is a shell line, and `$3` unquoted is a variable.
-        return refusal(lines(tmux, "project open $id --session '$session'"), "opened")
+        val out = lines(tmux, "project open $id --session '$session'")
+        refusal(out, "opened")?.let { return ProjectOpening(it, null, null) }
+        val o = answer(out, "opened")
+        return ProjectOpening(
+            why = null,
+            window = o?.optString("window")?.takeIf { WINDOW_ID.matches(it) },
+            pane = o?.optString("pane")?.takeIf { PANE.matches(it) },
+        )
+    }
+
+    /**
+     * The agent in [pane] once there is one, asked for once a second for
+     * [seconds]: a window made a moment ago runs a shell first and its
+     * command after, and the agent is only an agent once attache-cli sees
+     * it. Null when none came, which is also what a plain command gives.
+     */
+    suspend fun awaitAgent(tmux: TmuxControl, pane: String, seconds: Int): AgentPane? {
+        if (!PANE.matches(pane)) return null
+        repeat(seconds) {
+            agents(tmux)?.firstOrNull { it.paneId == pane }?.let { return it }
+            delay(1000)
+        }
+        return null
     }
 
     /** What saving [window] (`@7`) would start from; null when the host could not say. */

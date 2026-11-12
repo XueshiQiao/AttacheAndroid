@@ -494,12 +494,8 @@ fun AttacheSidebar(
         NewWindowSheet(
             control = control,
             onDismiss = { newWindowSheet = false },
-            onEmptyWindow = {
-                newWindowSheet = false
-                onDismiss?.invoke()
-                scope.tmuxAction("new-window") { control.newWindow() }
-            },
-            onOpened = {
+            // The sheet has put the terminal on the new window already.
+            onMade = {
                 newWindowSheet = false
                 onDismiss?.invoke()
             },

@@ -60,6 +60,13 @@ import org.attache.chat.AttacheCli
 import org.attache.chat.Project
 import org.attache.chat.ProjectDraft
 
+/**
+ * A window this component just made, already switched to on the terminal:
+ * what the place it was made from needs in order to go there too. [pane] is
+ * set when the window runs a command, which may turn out to be an agent.
+ */
+data class MadeWindow(val window: String?, val pane: String?)
+
 /** The form: a new project from [window], or the saved one with [id]. */
 private data class ProjectEdit(val id: String?, val draft: ProjectDraft, val window: TmuxWindow?)
 
@@ -81,11 +88,20 @@ fun materialProjectsColors() = ProjectsColors(
 
 /** The whole thing in a dialog, for the places with no drawer to put it in. */
 @Composable
-fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
+fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit, onOpened: (MadeWindow) -> Unit = {}) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Projects") },
-        text = { ProjectsPanel(control, onOpened = onDismiss, listMaxHeight = 420.dp) },
+        text = {
+            ProjectsPanel(
+                control,
+                onOpened = {
+                    onDismiss()
+                    onOpened(it)
+                },
+                listMaxHeight = 420.dp,
+            )
+        },
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
@@ -102,10 +118,29 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
 fun NewWindowSheet(
     control: TmuxControl,
     onDismiss: () -> Unit,
-    onEmptyWindow: () -> Unit,
-    onOpened: () -> Unit,
+    onMade: (MadeWindow) -> Unit,
 ) {
     val state by control.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var making by remember { mutableStateOf(false) }
+    // An empty window, and the terminal put on it: a window that was made
+    // and then has to be looked for is the thing this sheet is here to end.
+    fun emptyWindow() {
+        if (making) return
+        making = true
+        scope.launch {
+            try {
+                val window = control.newWindowId()
+                if (window != null) control.goTo(window)
+                onMade(MadeWindow(window, null))
+            } catch (e: TmuxCommandError) {
+                Toast.makeText(context, "No window made: ${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                making = false
+            }
+        }
+    }
     val session = state.sessions.firstOrNull { it.id == state.sessionId }?.name
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     ModalBottomSheet(
@@ -129,7 +164,7 @@ fun NewWindowSheet(
                     .fillMaxWidth()
                     .padding(top = 8.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(enabled = state.sessionId != null, onClick = onEmptyWindow)
+                    .clickable(enabled = state.sessionId != null && !making) { emptyWindow() }
                     .padding(vertical = 12.dp)
                     .testTag("newEmptyWindow"),
             ) {
@@ -149,7 +184,7 @@ fun NewWindowSheet(
                 }
             }
             HorizontalDivider()
-            ProjectsPanel(control, onOpened = onOpened, listMaxHeight = 360.dp, inSheet = true)
+            ProjectsPanel(control, onOpened = onMade, listMaxHeight = 360.dp, inSheet = true)
         }
     }
 }
@@ -169,7 +204,7 @@ fun NewWindowSheet(
 @Composable
 fun ProjectsPanel(
     control: TmuxControl,
-    onOpened: () -> Unit,
+    onOpened: (MadeWindow) -> Unit,
     listMaxHeight: Dp,
     modifier: Modifier = Modifier,
     colors: ProjectsColors = materialProjectsColors(),
@@ -203,9 +238,12 @@ fun ProjectsPanel(
         if (busy) return
         busy = true
         scope.launch {
-            val why = AttacheCli.openProject(control, project.id, session)
+            val made = AttacheCli.openProject(control, project.id, session)
+            if (made.why == null && made.window != null) control.goTo(made.window)
             busy = false
-            if (why == null) onOpened() else say("Not opened: $why")
+            if (made.why != null) return@launch say("Not opened: ${made.why}")
+            // A plain shell never becomes an agent, so nobody waits for one.
+            onOpened(MadeWindow(made.window, made.pane.takeIf { project.command.isNotBlank() }))
         }
     }
 
@@ -364,6 +402,15 @@ fun ProjectsPanel(
                 }
             }
         }
+    }
+}
+
+/** Puts the terminal on [window]. tmux's refusal is not the caller's: the
+ * window is made either way, and it is only one tap further off. */
+private suspend fun TmuxControl.goTo(window: String) {
+    try {
+        switchTo(window)
+    } catch (_: TmuxCommandError) {
     }
 }
 

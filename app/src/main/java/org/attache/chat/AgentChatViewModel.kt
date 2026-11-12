@@ -265,6 +265,30 @@ class AgentChatViewModel @Inject constructor(
 
     fun reportNotice(message: String) = _uiState.update { it.copy(notice = message) }
 
+    /**
+     * Goes to a window that was just made. With a [pane] that runs a
+     * command, waits a while for an agent to start in it and opens its
+     * chat; with none, or when no agent came, opens the terminal, which the
+     * maker has already put on the new window.
+     */
+    fun followNewWindow(pane: String?, onAgent: (AgentPane) -> Unit, otherwise: () -> Unit) {
+        val tmux = control
+        viewModelScope.launch {
+            val agent = if (tmux == null || pane == null) {
+                null
+            } else {
+                reportNotice("Window made. Waiting for its agent to start…")
+                try {
+                    AttacheCli.awaitAgent(tmux, pane, NEW_AGENT_WAIT_SECONDS)
+                } catch (e: Exception) {
+                    if (e is CancellationException) currentCoroutineContext().ensureActive()
+                    null
+                }
+            }
+            if (agent != null) onAgent(agent) else otherwise()
+        }
+    }
+
     /** Points this connection's terminal at the agent's window first, so the
      * terminal opens on it. Navigation happens whatever tmux says: the
      * terminal is the fallback and must always open. */
@@ -776,3 +800,6 @@ class AgentChatViewModel @Inject constructor(
         private val PANEL_KEYS = setOf("Up", "Down", "Left", "Right", "Enter", "Escape", "Tab")
     }
 }
+
+/** How long a new window's command is given to show itself as an agent. */
+private const val NEW_AGENT_WAIT_SECONDS = 15

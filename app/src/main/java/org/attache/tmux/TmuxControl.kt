@@ -580,6 +580,14 @@ class TmuxControl(
         send("new-window -t '$session:' -c '#{pane_current_path}'")
     }
 
+    /** [newWindow], answering with the new window's id (`@7`) so the caller
+     * can go to it; null when tmux made one and did not name it. */
+    suspend fun newWindowId(): String? {
+        val session = _state.value.sessionId ?: return null
+        return send("new-window -P -F '#{window_id}' -t '$session:' -c '#{pane_current_path}'")
+            .firstOrNull()?.trim()?.takeIf { WINDOW_ID.matches(it) }
+    }
+
     /** The window after (or before) the active one, wrapping as tmux's own
      * `prefix n` / `prefix p` do. */
     suspend fun stepWindow(forward: Boolean) {

@@ -17,6 +17,8 @@
 
 package org.attache.chat
 
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -175,7 +177,20 @@ fun AgentListScreen(
     org.attache.tmux.PushOfferDialog(tmux)
 
     var showProjects by remember { mutableStateOf(false) }
-    tmux?.takeIf { showProjects }?.let { org.attache.tmux.ProjectsDialog(it, onDismiss = { showProjects = false }) }
+    val projectScope = rememberCoroutineScope()
+    tmux?.takeIf { showProjects }?.let { control ->
+        org.attache.tmux.ProjectsDialog(
+            control,
+            onDismiss = { showProjects = false },
+            // On to the new window's chat once its agent has started; a
+            // window with no agent stays one row away in the terminal.
+            onOpened = { made ->
+                made.pane?.let { pane ->
+                    projectScope.launch { AttacheCli.awaitAgent(control, pane, 15)?.let(onOpenAgent) }
+                }
+            },
+        )
+    }
 
     var renaming by remember { mutableStateOf<AgentPane?>(null) }
     renaming?.let { agent ->
