@@ -485,6 +485,26 @@ fun AttacheSidebar(
     var hasScrolledToActiveOnOpen by remember { mutableStateOf(false) }
     var renamingWindow by remember { mutableStateOf<TmuxWindow?>(null) }
     val palette = attacheGlassPalette(isDark)
+    var newWindowSheet by remember { mutableStateOf(false) }
+
+    // The "+" asks what kind of new window: an empty one, or a saved
+    // project. The sheet is kept here, so the sidebar stays up under it
+    // until one is chosen.
+    if (newWindowSheet) {
+        NewWindowSheet(
+            control = control,
+            onDismiss = { newWindowSheet = false },
+            onEmptyWindow = {
+                newWindowSheet = false
+                onDismiss?.invoke()
+                scope.tmuxAction("new-window") { control.newWindow() }
+            },
+            onOpened = {
+                newWindowSheet = false
+                onDismiss?.invoke()
+            },
+        )
+    }
 
     renamingWindow?.let { target ->
         TmuxRenameWindowDialog(
@@ -530,10 +550,7 @@ fun AttacheSidebar(
                             .height(26.dp)
                             .clip(RoundedCornerShape(8.dp))
                             .background(palette.button)
-                            .clickable {
-                                onDismiss?.invoke()
-                                scope.tmuxAction("new-window") { control.newWindow() }
-                            }
+                            .clickable { newWindowSheet = true }
                             .padding(horizontal = 8.dp)
                             .testTag("tmuxSidebarNewWindow"),
                     ) {
@@ -644,19 +661,6 @@ fun AttacheSidebar(
                 }
             }
         }
-        // Saved projects, under the windows they turn into. Folded until
-        // asked for; opening one closes the sidebar onto the new window.
-        ProjectsSection(
-            control = control,
-            onOpened = { onDismiss?.invoke() },
-            colors = ProjectsColors(
-                ink = palette.ink,
-                muted = palette.muted,
-                accent = palette.accent,
-                error = Color(0xFFE5484D),
-                line = palette.line,
-            ),
-        )
     }
 }
 

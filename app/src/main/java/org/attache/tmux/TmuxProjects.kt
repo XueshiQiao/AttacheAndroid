@@ -9,6 +9,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -22,11 +23,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -35,7 +40,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,10 +64,9 @@ import org.attache.chat.ProjectDraft
 private data class ProjectEdit(val id: String?, val draft: ProjectDraft, val window: TmuxWindow?)
 
 /**
- * The colours the list is drawn in. It sits in three places: a dialog and
- * the chat drawer, which are Material surfaces, and the terminal's sidebar,
- * which is glass with a palette of its own. Reading `MaterialTheme` there
- * would put dark text on dark glass.
+ * The colours the list is drawn in. A dialog and the sheet are Material
+ * surfaces; a place with a palette of its own (the terminal's glass) passes
+ * that instead, since `MaterialTheme` there would put dark text on dark.
  */
 data class ProjectsColors(val ink: Color, val muted: Color, val accent: Color, val error: Color, val line: Color)
 
@@ -89,39 +92,64 @@ fun ProjectsDialog(control: TmuxControl, onDismiss: () -> Unit) {
 }
 
 /**
- * The same list as a section of a drawer: a heading that folds, closed until
- * asked for so a drawer that is opened to switch windows reads nothing from
- * the host and loses no room. [onOpened] is the drawer closing: the new
- * window is what the person wants to look at next.
+ * What the "+" at the top of either left drawer brings up: a sheet from the
+ * bottom of the screen, as wide as the screen so a folder is read whole.
+ * An empty window first, then the saved projects, each of which is a new
+ * window too. Nothing is read from the host until the sheet is asked for.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProjectsSection(
-    control: TmuxControl?,
+fun NewWindowSheet(
+    control: TmuxControl,
+    onDismiss: () -> Unit,
+    onEmptyWindow: () -> Unit,
     onOpened: () -> Unit,
-    modifier: Modifier = Modifier,
-    colors: ProjectsColors = materialProjectsColors(),
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
+    val state by control.state.collectAsState()
+    val session = state.sessions.firstOrNull { it.id == state.sessionId }?.name
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(
+            Modifier
                 .fillMaxWidth()
-                .clickable(enabled = control != null) { expanded = !expanded }
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-                .testTag("projectsSection"),
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 12.dp)
+                .testTag("newWindowSheet"),
         ) {
-            Text("Projects", color = colors.ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text(if (expanded) "▾" else "▸", color = colors.muted)
-        }
-        if (expanded && control != null) {
-            ProjectsPanel(
-                control,
-                onOpened = onOpened,
-                listMaxHeight = 260.dp,
-                colors = colors,
-                modifier = Modifier.padding(horizontal = 20.dp),
-            )
+            Text("New window", style = MaterialTheme.typography.titleLarge)
+            if (session != null) {
+                Text("in session $session", style = MaterialTheme.typography.bodySmall, color = muted)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = state.sessionId != null, onClick = onEmptyWindow)
+                    .padding(vertical = 12.dp)
+                    .testTag("newEmptyWindow"),
+            ) {
+                Text(
+                    "\$_",
+                    color = muted,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                        .padding(horizontal = 7.dp, vertical = 6.dp),
+                )
+                Column(Modifier.padding(start = 12.dp)) {
+                    Text("Empty window", fontWeight = FontWeight.SemiBold)
+                    Text("A plain shell, no project", style = MaterialTheme.typography.bodySmall, color = muted)
+                }
+            }
+            HorizontalDivider()
+            ProjectsPanel(control, onOpened = onOpened, listMaxHeight = 360.dp, inSheet = true)
         }
     }
 }
@@ -145,6 +173,7 @@ fun ProjectsPanel(
     listMaxHeight: Dp,
     modifier: Modifier = Modifier,
     colors: ProjectsColors = materialProjectsColors(),
+    inSheet: Boolean = false,
 ) {
     val state by control.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -274,6 +303,18 @@ fun ProjectsPanel(
 
     Column(modifier.fillMaxWidth()) {
         val shown = list
+        // In the sheet the list has a heading of its own, which also says
+        // how a project is edited; elsewhere a line under the list does.
+        if (inSheet) {
+            Text(
+                if (shown.isNullOrEmpty()) "PROJECTS" else "PROJECTS · HOLD TO EDIT",
+                color = colors.muted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.8.sp,
+                modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+            )
+        }
         when {
             shown == null && unreachable -> Text("The host did not answer.", color = colors.muted)
 
@@ -301,15 +342,26 @@ fun ProjectsPanel(
                 }
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text(
-                if (shown.isNullOrEmpty()) "" else "Tap to open · hold to edit",
-                color = colors.muted,
-                fontSize = 12.sp,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(enabled = state.windows.isNotEmpty() && !busy, onClick = { pickingWindow = true }) {
-                Text("Save a window…", color = colors.accent)
+        val canSave = state.windows.isNotEmpty() && !busy
+        if (inSheet) {
+            TextButton(
+                enabled = canSave,
+                onClick = { pickingWindow = true },
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp),
+            ) {
+                Text("Save a window as project…", color = colors.accent)
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    if (shown.isNullOrEmpty()) "" else "Tap to open · hold to edit",
+                    color = colors.muted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(enabled = canSave, onClick = { pickingWindow = true }) {
+                    Text("Save a window…", color = colors.accent)
+                }
             }
         }
     }

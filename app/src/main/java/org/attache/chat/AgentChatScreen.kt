@@ -69,6 +69,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
@@ -209,6 +210,7 @@ fun AgentChatScreen(
     // received files, the host's recent files and folders, and downloads.
     var showFiles by remember { mutableStateOf(false) }
     val tmux by viewModel.tmuxControl.collectAsStateWithLifecycle()
+    var newWindowSheet by remember { mutableStateOf(false) }
     var download by remember { mutableStateOf<FileDownloadProgress?>(null) }
     LaunchedEffect(tmux) {
         val control = tmux ?: return@LaunchedEffect
@@ -282,6 +284,19 @@ fun AgentChatScreen(
             onDismiss = { renaming = false },
         )
     }
+    // The "+" over the agent list: an empty window or a saved project, in
+    // a sheet as wide as the screen. The drawer has closed by then.
+    tmux?.takeIf { newWindowSheet }?.let { control ->
+        org.attache.tmux.NewWindowSheet(
+            control = control,
+            onDismiss = { newWindowSheet = false },
+            onEmptyWindow = {
+                newWindowSheet = false
+                drawerScope.launch { runCatching { control.newWindow() } }
+            },
+            onOpened = { newWindowSheet = false },
+        )
+    }
     ModalNavigationDrawer(
         drawerState = drawer,
         drawerContent = {
@@ -294,21 +309,13 @@ fun AgentChatScreen(
                     current = viewModel.paneId,
                     onPick = switchTo,
                     keepBottomInset = false,
+                    onNewWindow = tmux?.let { { drawerScope.launch { drawer.close() }; newWindowSheet = true } },
                     // A drag on the list, in any direction, means the person
                     // is after the list: the card gives its room back. A drag
                     // on the card itself scrolls the card and folds nothing.
                     modifier = Modifier
                         .weight(1f)
                         .onAnyDrag { usageExpanded = false },
-                )
-                // Saved projects, folded until asked for: a window that was
-                // closed is made again from here, and the drawer closes on
-                // it so the agent list behind is what shows next.
-                HorizontalDivider()
-                org.attache.tmux.ProjectsSection(
-                    control = tmux,
-                    onOpened = { drawerScope.launch { drawer.close() } },
-                    modifier = if (withUsage) Modifier else Modifier.padding(bottom = bottomSafeInset()),
                 )
                 if (withUsage) {
                     UsageSection(usage, usageDesktop, expanded = usageExpanded, onExpandedChange = { usageExpanded = it })
@@ -1894,6 +1901,7 @@ internal fun AgentDrawer(
     onPick: (AgentPane) -> Unit,
     keepBottomInset: Boolean = true,
     modifier: Modifier = Modifier,
+    onNewWindow: (() -> Unit)? = null,
 ) {
     val nowSec = System.currentTimeMillis() / 1000
     val groups = agents.groupBy { it.phase }
@@ -1902,11 +1910,22 @@ internal fun AgentDrawer(
         contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp + if (keepBottomInset) bottomSafeInset() else 0.dp),
     ) {
         item {
-            Text(
-                "Agents",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 20.dp, end = 8.dp),
+            ) {
+                Text(
+                    "Agents",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                )
+                // A new window: empty, or one of the saved projects.
+                if (onNewWindow != null) {
+                    IconButton(onClick = onNewWindow, modifier = Modifier.testTag("agentDrawerNewWindow")) {
+                        Icon(Icons.Filled.Add, contentDescription = "New window", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
         }
         for (phase in AgentPhase.entries) {
             val inPhase = groups[phase].orEmpty()
