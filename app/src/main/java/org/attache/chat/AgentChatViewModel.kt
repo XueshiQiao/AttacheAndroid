@@ -107,6 +107,9 @@ data class AgentChatUiState(
     /** The pane is still there but no agent runs in it any more. */
     val agentExited: Boolean = false,
     val paneGone: Boolean = false,
+    /** The pane is there and no agent has been seen in it yet: a window
+     * made a moment ago, whose command is still starting. */
+    val starting: Boolean = false,
     val items: List<ChatItem> = emptyList(),
     /** Reading began part-way into the file; older turns are not shown. */
     val earlierNotLoaded: Boolean = false,
@@ -264,30 +267,6 @@ class AgentChatViewModel @Inject constructor(
     fun clearNotice() = _uiState.update { it.copy(notice = null) }
 
     fun reportNotice(message: String) = _uiState.update { it.copy(notice = message) }
-
-    /**
-     * Goes to a window that was just made. With a [pane] that runs a
-     * command, waits a while for an agent to start in it and opens its
-     * chat; with none, or when no agent came, opens the terminal, which the
-     * maker has already put on the new window.
-     */
-    fun followNewWindow(pane: String?, onAgent: (AgentPane) -> Unit, otherwise: () -> Unit) {
-        val tmux = control
-        viewModelScope.launch {
-            val agent = if (tmux == null || pane == null) {
-                null
-            } else {
-                reportNotice("Window made. Waiting for its agent to start…")
-                try {
-                    AttacheCli.awaitAgent(tmux, pane, NEW_AGENT_WAIT_SECONDS)
-                } catch (e: Exception) {
-                    if (e is CancellationException) currentCoroutineContext().ensureActive()
-                    null
-                }
-            }
-            if (agent != null) onAgent(agent) else otherwise()
-        }
-    }
 
     /** Points this connection's terminal at the agent's window first, so the
      * terminal opens on it. Navigation happens whatever tmux says: the
@@ -593,6 +572,10 @@ class AgentChatViewModel @Inject constructor(
 
     @Volatile private var lastScreen: ScreenReading? = null
 
+    private var startWait: Job? = null
+
+    @Volatile private var startWaitOver = false
+
     private suspend fun onAgent(tmux: TmuxControl, agent: AgentPane?) {
         if (agent == null) {
             val stillThere = try {
@@ -602,7 +585,28 @@ class AgentChatViewModel @Inject constructor(
                 false
             }
             if (!stillThere) {
-                _uiState.update { it.copy(paneGone = true, prompt = null, question = null) }
+                _uiState.update { it.copy(paneGone = true, starting = false, prompt = null, question = null) }
+                return
+            }
+            // No agent has ever been seen here: the page was opened on a
+            // window made a moment ago, and "the agent is no longer
+            // running" would be said of one that has not started. Wait for
+            // it, for as long as a slow start takes and no longer.
+            if (_uiState.value.agent == null && !startWaitOver) {
+                if (startWait == null) {
+                    startWait = viewModelScope.launch {
+                        delay(NEW_AGENT_WAIT_SECONDS * 1000L)
+                        startWaitOver = true
+                        _uiState.update { s ->
+                            if (s.agent != null || !s.starting) {
+                                s
+                            } else {
+                                s.copy(starting = false, agentExited = true, transcript = TranscriptStatus.MISSING)
+                            }
+                        }
+                    }
+                }
+                _uiState.update { it.copy(starting = true, paneGone = false) }
                 return
             }
         }
@@ -620,6 +624,7 @@ class AgentChatViewModel @Inject constructor(
                 agent = agent ?: s.agent,
                 agentExited = agent == null,
                 paneGone = false,
+                starting = false,
                 status = currentStatus(),
             )
         }
@@ -801,5 +806,6 @@ class AgentChatViewModel @Inject constructor(
     }
 }
 
-/** How long a new window's command is given to show itself as an agent. */
+/** How long a new window's command is given to show itself as an agent,
+ * before the page says there is none. */
 private const val NEW_AGENT_WAIT_SECONDS = 15

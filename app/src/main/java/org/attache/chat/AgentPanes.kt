@@ -51,6 +51,23 @@ data class AgentPane(
     val name: String? = null,
 )
 
+/**
+ * A row for the pane of a window made a moment ago, which runs a shell
+ * first and its command after: enough to open the chat page on it at once.
+ * The page waits there for the agent, and shows nothing of this row.
+ */
+fun newWindowPane(paneId: String, windowId: String?) = AgentPane(
+    paneId = paneId,
+    sessionName = "",
+    windowId = windowId.orEmpty(),
+    windowName = "",
+    path = "",
+    kind = "",
+    phase = AgentPhase.IDLE,
+    sinceEpochSec = null,
+    title = "",
+)
+
 /** How the list names a pane: by the task Claude titled it with, or by its
  * window when the title says nothing about the work. */
 object AgentPanes {

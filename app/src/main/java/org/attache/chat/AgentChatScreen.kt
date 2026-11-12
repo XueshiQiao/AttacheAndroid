@@ -290,11 +290,13 @@ fun AgentChatScreen(
         org.attache.tmux.NewWindowSheet(
             control = control,
             onDismiss = { newWindowSheet = false },
-            // On to the new window: its chat when an agent starts in it,
-            // the terminal (already on it) when none does.
+            // On to the new window at once: its chat page when it runs a
+            // command, which waits there for the agent; the terminal
+            // (already on it) when it is an empty one.
             onMade = { made ->
                 newWindowSheet = false
-                viewModel.followNewWindow(made.pane, onAgent = onOpenAgent, otherwise = onOpenTerminal)
+                val pane = made.pane
+                if (pane != null) onOpenAgent(newWindowPane(pane, made.window)) else onOpenTerminal()
             },
         )
     }
@@ -351,7 +353,7 @@ fun AgentChatScreen(
                                 ),
                             ) {
                                 Text(
-                                    state.agent?.title ?: "Agent",
+                                    state.agent?.title ?: if (state.starting) "New window" else "Agent",
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false),
@@ -442,6 +444,8 @@ fun AgentChatScreen(
 
                         state.paneGone -> Centered("This pane has been closed.")
 
+                        state.starting -> Centered("Starting in the new window…", progress = true)
+
                         state.mirror != null -> ScreenMirror(state.mirror.orEmpty(), onOpenTerminal = openTerminal)
 
                         state.transcript == TranscriptStatus.MISSING && state.items.isEmpty() -> Centered(
@@ -486,6 +490,7 @@ fun AgentChatScreen(
                 }
                 Composer(
                     enabled = state.connection == ChatConnection.READY && !state.linkLost && !state.paneGone && !state.agentExited &&
+                        !state.starting &&
                         state.agent?.phase != AgentPhase.NEEDS_YOU && state.panel == null,
                     agentName = state.agent?.kind?.replaceFirstChar { it.uppercase() } ?: "the agent",
                     images = state.images,

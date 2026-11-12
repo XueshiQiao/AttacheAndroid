@@ -209,21 +209,6 @@ object AttacheCli {
         )
     }
 
-    /**
-     * The agent in [pane] once there is one, asked for once a second for
-     * [seconds]: a window made a moment ago runs a shell first and its
-     * command after, and the agent is only an agent once attache-cli sees
-     * it. Null when none came, which is also what a plain command gives.
-     */
-    suspend fun awaitAgent(tmux: TmuxControl, pane: String, seconds: Int): AgentPane? {
-        if (!PANE.matches(pane)) return null
-        repeat(seconds) {
-            agents(tmux)?.firstOrNull { it.paneId == pane }?.let { return it }
-            delay(1000)
-        }
-        return null
-    }
-
     /** What saving [window] (`@7`) would start from; null when the host could not say. */
     suspend fun draftProject(tmux: TmuxControl, window: String): ProjectDraft? {
         if (!WINDOW_ID.matches(window)) return null

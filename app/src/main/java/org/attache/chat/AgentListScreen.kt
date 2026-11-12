@@ -177,18 +177,13 @@ fun AgentListScreen(
     org.attache.tmux.PushOfferDialog(tmux)
 
     var showProjects by remember { mutableStateOf(false) }
-    val projectScope = rememberCoroutineScope()
     tmux?.takeIf { showProjects }?.let { control ->
         org.attache.tmux.ProjectsDialog(
             control,
             onDismiss = { showProjects = false },
-            // On to the new window's chat once its agent has started; a
-            // window with no agent stays one row away in the terminal.
-            onOpened = { made ->
-                made.pane?.let { pane ->
-                    projectScope.launch { AttacheCli.awaitAgent(control, pane, 15)?.let(onOpenAgent) }
-                }
-            },
+            // On to the new window's chat page at once, which waits there
+            // for the agent; a plain shell is one tap away in the terminal.
+            onOpened = { made -> made.pane?.let { onOpenAgent(newWindowPane(it, made.window)) } },
         )
     }
 
