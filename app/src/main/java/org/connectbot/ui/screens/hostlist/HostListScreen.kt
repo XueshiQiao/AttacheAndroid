@@ -93,6 +93,7 @@ import org.attache.chat.ModeChooserDialog
 import org.attache.tailscale.TailscaleDialog
 import org.attache.tailscale.TailscaleStatusBadge
 import org.attache.tmux.TmuxTrial
+import org.connectbot.BuildConfig
 import org.connectbot.R
 import org.connectbot.data.EntityIds
 import org.connectbot.data.JsonImportReader
@@ -353,7 +354,18 @@ fun HostListScreenContent(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
+                title = {
+                    // Which build this is, where it is seen on every launch:
+                    // builds arrive several a day and look alike otherwise.
+                    Column {
+                        Text(stringResource(R.string.app_name))
+                        Text(
+                            "v${BuildConfig.VERSION_NAME}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                },
                 actions = {
                     if (!makingShortcut) {
                         TailscaleStatusBadge(
