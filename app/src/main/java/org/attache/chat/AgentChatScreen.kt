@@ -113,6 +113,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -455,7 +456,13 @@ fun AgentChatScreen(
 
                         state.transcript == TranscriptStatus.LOADING && state.items.isEmpty() -> Centered("Loading…", progress = true)
 
-                        else -> Conversation(state, follow, onLoadEarlier = viewModel::loadEarlier)
+                        // The files a reply names are on this host, and a
+                        // relative one is under this agent's folder.
+                        else -> CompositionLocalProvider(
+                            LocalChatMedia provides ChatMediaSource(tmux, viewModel.hostId.toString(), state.agent?.path.orEmpty()),
+                        ) {
+                            Conversation(state, follow, onLoadEarlier = viewModel::loadEarlier)
+                        }
                     }
                 }
                 if (state.agentExited && !state.paneGone) {

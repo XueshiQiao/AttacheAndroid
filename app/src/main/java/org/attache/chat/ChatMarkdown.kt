@@ -116,6 +116,10 @@ internal sealed interface MdBlock {
     data class Quote(val blocks: List<MdBlock>) : MdBlock
 
     data object Rule : MdBlock
+
+    /** A picture or a video on the host that the text names, on a line of
+     * its own under the paragraph that named it. */
+    data class Media(val kind: MediaKind, val destination: String, val label: String, val indent: Int = 0) : MdBlock
 }
 
 /** The colours inline text is styled with. */
@@ -130,8 +134,9 @@ internal data class MdColors(val codeBackground: Color, val link: Color)
  * agy's replies are mostly `[name](file:///…)` links, and every one of
  * them came out as its source.
  *
- * Links open in the browser when they are web links. A `file://` link names
- * a file on the host, which the phone cannot open, so it is coloured as a
+ * Links open in the browser when they are web links. A picture or a video
+ * on the host, named as an image or as a link, gets a card that fetches it
+ * when tapped ([ChatMediaCard]); any other `file://` link is coloured as a
  * link and does nothing.
  */
 internal object ChatMarkdown {
@@ -145,9 +150,32 @@ internal object ChatMarkdown {
 
     fun blocks(text: String, colors: MdColors): List<MdBlock> {
         val out = ArrayList<MdBlock>()
-        val prepared = CjkEmphasis.prepare(text)
+        val prepared = CjkEmphasis.prepare(spacedMediaPaths(text))
         children(parser.parse(prepared), 0, out, colors)
         return out
+    }
+
+    // `](/Users/j/My Clips/a.png)`: a path with a space in it, which agents
+    // write as it is and CommonMark does not take as a destination unless
+    // it is in angle brackets.
+    private val SPACED_MEDIA = Regex("""\]\(((?:/|~/|file://)[^()<>\n]* [^()<>\n]*\.(?:png|jpe?g|gif|webp|heic|mp4|mov|webm|m4v))\)""", RegexOption.IGNORE_CASE)
+
+    /** Puts those paths in angle brackets, outside fenced code, where the
+     * text is shown as typed. */
+    private fun spacedMediaPaths(text: String): String {
+        if (!text.contains("](")) return text
+        var fenced = false
+        return text.split('\n').joinToString("\n") { line ->
+            val trimmed = line.trimStart()
+            if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+                fenced = !fenced
+                line
+            } else if (fenced) {
+                line
+            } else {
+                SPACED_MEDIA.replace(line) { "](<${it.groupValues[1]}>)" }
+            }
+        }
     }
 
     private fun children(parent: Node, indent: Int, out: MutableList<MdBlock>, colors: MdColors) {
@@ -160,7 +188,13 @@ internal object ChatMarkdown {
 
     private fun block(node: Node, indent: Int, out: MutableList<MdBlock>, colors: MdColors) {
         when (node) {
-            is Paragraph -> out += MdBlock.Paragraph(inline(node, colors), indent)
+            is Paragraph -> {
+                val text = inline(node, colors, liftMedia = true)
+                val before = out.size
+                media(node, indent, out)
+                // A paragraph that was only a picture leaves no empty line.
+                if (text.isNotBlank() || out.size == before) out.add(before, MdBlock.Paragraph(text, indent))
+            }
 
             is Heading -> out += MdBlock.Heading(node.level, inline(node, colors))
 
@@ -175,7 +209,8 @@ internal object ChatMarkdown {
                         // The item's first paragraph sits beside its marker;
                         // whatever follows it is indented under it.
                         if (first is Paragraph) {
-                            out += MdBlock.Bullet(marker, inline(first, colors), indent)
+                            out += MdBlock.Bullet(marker, inline(first, colors, liftMedia = true), indent)
+                            media(first, indent + 1, out)
                         } else {
                             out += MdBlock.Bullet(marker, AnnotatedString(""), indent)
                             if (first != null) block(first, indent + 1, out, colors)
@@ -204,6 +239,35 @@ internal object ChatMarkdown {
 
             else -> children(node, indent, out, colors)
         }
+    }
+
+    /** The pictures and videos on the host that [parent]'s text names, as
+     * an image or as a link: each becomes a card under the text. */
+    private fun media(parent: Node, indent: Int, out: MutableList<MdBlock>) {
+        fun label(node: Node): String = buildString {
+            fun walk(n: Node) {
+                var child = n.firstChild
+                while (child != null) {
+                    if (child is MdText) append(child.literal.replace(CjkEmphasis.MARK, "")) else walk(child)
+                    child = child.next
+                }
+            }
+            walk(node)
+        }.trim()
+        fun walk(node: Node) {
+            var child = node.firstChild
+            while (child != null) {
+                val destination = (child as? Image)?.destination ?: (child as? Link)?.destination
+                val kind = destination?.let(ChatMedia::kindOf)
+                if (destination != null && kind != null) {
+                    out += MdBlock.Media(kind, destination, label(child), indent)
+                } else {
+                    walk(child)
+                }
+                child = child.next
+            }
+        }
+        walk(parent)
     }
 
     /** Laid out rather than shown as typed: the source only lines up when
@@ -237,7 +301,7 @@ internal object ChatMarkdown {
     }
 
     /** A block's inline content: code, emphasis, strikethrough and links. */
-    fun inline(parent: Node, colors: MdColors): AnnotatedString = buildAnnotatedString {
+    fun inline(parent: Node, colors: MdColors, liftMedia: Boolean = false): AnnotatedString = buildAnnotatedString {
         fun visit(node: Node) {
             var child = node.firstChild
             while (child != null) {
@@ -256,8 +320,10 @@ internal object ChatMarkdown {
 
                     is Link -> link(child.destination, colors) { visit(child) }
 
-                    // The phone does not fetch it; its description says what it was.
-                    is Image -> {
+                    // A picture on the host gets a card under the text (see
+                    // [media]); one on the web is not fetched, and its
+                    // description says what it was.
+                    is Image -> if (!liftMedia || ChatMedia.kindOf(child.destination) == null) {
                         append("[")
                         visit(child)
                         append("]")
@@ -391,6 +457,8 @@ private fun MarkdownBlocks(blocks: List<MdBlock>, badge: MdBadge? = null) {
                 }
 
                 MdBlock.Rule -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                is MdBlock.Media -> ChatMediaCard(block, Modifier.padding(start = under(block.indent)))
             }
         }
         if (badge != null && !inLast) {
@@ -409,6 +477,7 @@ private fun MdBlock.indentOf(): Int = when (this) {
     is MdBlock.Bullet -> indent
     is MdBlock.Preformatted -> indent
     is MdBlock.Table -> indent
+    is MdBlock.Media -> indent
     else -> 0
 }
 

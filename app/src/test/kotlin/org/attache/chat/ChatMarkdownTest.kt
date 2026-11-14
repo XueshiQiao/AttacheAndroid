@@ -105,4 +105,39 @@ class ChatMarkdownTest {
     fun aLineBreakStaysALineBreak() {
         assertEquals("第一行\n第二行", paragraph("第一行\n第二行").text)
     }
+
+    @Test
+    fun aPictureOnTheHostBecomesACardUnderItsParagraph() {
+        val out = blocks("看这张图 ![方案图](/tmp/a b.png) 怎么样")
+        assertEquals(2, out.size)
+        assertEquals("看这张图  怎么样", (out[0] as MdBlock.Paragraph).text.text)
+        assertEquals(MdBlock.Media(MediaKind.IMAGE, "/tmp/a b.png", "方案图"), out[1])
+    }
+
+    @Test
+    fun aParagraphThatIsOnlyAPictureLeavesNoEmptyLine() {
+        assertEquals(listOf(MdBlock.Media(MediaKind.IMAGE, "/tmp/shot.PNG", "截图")), blocks("![截图](/tmp/shot.PNG)"))
+    }
+
+    @Test
+    fun aLinkToAVideoKeepsItsWordsAndGetsACard() {
+        val out = blocks("- 录屏在 [demo](file:///Users/j/My%20Clips/demo+1.mp4)")
+        assertEquals("录屏在 demo", (out[0] as MdBlock.Bullet).text.text)
+        val media = out[1] as MdBlock.Media
+        assertEquals(MediaKind.VIDEO, media.kind)
+        assertEquals(1, media.indent)
+        assertEquals("/Users/j/My Clips/demo+1.mp4", ChatMedia.pathOf(media.destination))
+    }
+
+    @Test
+    fun aPathWithASpaceIsLeftAloneInsideCode() {
+        val code = "```\n![x](/tmp/a b.png)\n```"
+        assertEquals(listOf(MdBlock.Preformatted("![x](/tmp/a b.png)")), blocks(code))
+    }
+
+    @Test
+    fun aPictureOnTheWebAndAnyOtherFileStayAsTheyWere() {
+        assertEquals("[logo]", paragraph("![logo](https://example.com/a.png)").text)
+        assertEquals(1, blocks("[notes](file:///tmp/notes.md) and [site](https://example.com/a.png)").size)
+    }
 }
