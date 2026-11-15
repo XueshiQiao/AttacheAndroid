@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tailscale Page Designs</title>
+<style>
+:root { --font: Roboto, -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; --mono: "Roboto Mono", ui-monospace, Menlo, monospace; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 13px/1.5 var(--font); background: #e9e9ec; color: #222; -webkit-font-smoothing: antialiased; }
+header.doc { padding: 22px 28px 6px; max-width: 1240px; }
+header.doc h1 { margin: 0 0 6px; font-size: 20px; }
+header.doc p { margin: 0; font-size: 13px; color: #555; max-width: 860px; }
+section.design { padding: 18px 28px 30px; }
+section.design > h2 { margin: 0 0 2px; font-size: 16px; }
+section.design > p.what { margin: 0 0 14px; font-size: 12.5px; color: #555; max-width: 860px; }
+.pair { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+.cap { font-size: 12px; color: #666; margin: 0 0 8px 6px; font-weight: 600; }
+.phone { width: 392px; height: 820px; border-radius: 34px; padding: 10px; background: #1b1b1d; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+.screen { --bg: #fbf8ff; --text: #1b1b21; --mute: #5b5b66; --faint: #8e8e98; --line: #dcdbe4; --card: #f1eff6; --card2: #e9e7f0;
+  --primary: #4355b9; --primaryC: #dde1ff; --good: #1f7a3a; --goodC: #d4f2dc; --warn: #8a5a00; --warnC: #ffe3b0; --bad: #ba1a1a; --badC: #ffdad6;
+  height: 100%; border-radius: 26px; overflow: hidden; background: var(--bg); color: var(--text); display: flex; flex-direction: column; position: relative; }
+.status { height: 26px; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; font-size: 11.5px; color: var(--mute); }
+.appbar { display: flex; align-items: center; gap: 10px; padding: 6px 12px 8px 8px; }
+.appbar .back { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; }
+.appbar h3 { margin: 0; font-size: 19px; font-weight: 500; flex: 1; }
+.switch { width: 46px; height: 26px; border-radius: 13px; background: var(--primary); position: relative; }
+.switch::after { content: ""; position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; }
+.body { flex: 1; overflow: hidden; padding: 2px 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.card { background: var(--card); border-radius: 16px; padding: 12px 14px; }
+.sec { font-size: 12px; font-weight: 600; color: var(--mute); margin: 2px 4px -4px; letter-spacing: .02em; }
+.mono { font-family: var(--mono); }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.chip.good { background: var(--goodC); color: var(--good); }
+.chip.bad { background: var(--badC); color: var(--bad); }
+.chip.warn { background: var(--warnC); color: var(--warn); }
+.chip.mute { background: var(--card2); color: var(--mute); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.good { background: #34a853; } .dot.bad { background: var(--bad); } .dot.warn { background: #e8a200; } .dot.off { background: #a3a3ad; }
+.ico { width: 18px; height: 18px; flex: none; }
+.btn { border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 500; text-align: center; }
+.btn.tonal { background: var(--primaryC); color: #1a2a80; }
+.btn.text { color: var(--primary); }
+.btn.danger { color: var(--bad); }
+.fix { background: var(--badC); color: #5c0b0b; border-radius: 12px; padding: 10px 12px; font-size: 12.5px; line-height: 1.55; }
+.fix b { color: var(--bad); }
+.fix .act { margin-top: 8px; display: flex; gap: 8px; }
+.fix .act span { background: #fff; color: var(--bad); border-radius: 999px; padding: 4px 11px; font-weight: 600; font-size: 12px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.kv { display: grid; grid-template-columns: 74px 1fr; row-gap: 6px; column-gap: 10px; font-size: 12.5px; }
+.kv .k { color: var(--mute); }
+.kv .v { font-weight: 500; }
+.peer { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-top: 1px solid var(--line); }
+.peer:first-child { border-top: 0; }
+.peer .name { font-size: 13.5px; font-weight: 500; }
+.peer .sub { font-size: 11.5px; color: var(--mute); }
+.peer .grow { flex: 1; min-width: 0; }
+.osico { width: 30px; height: 30px; border-radius: 9px; background: var(--card2); display: grid; place-items: center; color: var(--mute); flex: none; }
+.more { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; font-size: 13.5px; }
+
+/* A: path diagram */
+.hero { background: linear-gradient(135deg, #e3e7ff, #f1eff6); border-radius: 20px; padding: 14px 16px; }
+.hero .big { font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.hero .ip { font-size: 15px; margin-top: 2px; }
+.hero .meta { font-size: 11.5px; color: var(--mute); margin-top: 6px; }
+.path { display: flex; align-items: flex-start; justify-content: space-between; margin-top: 4px; position: relative; padding: 4px 0 0; }
+.node { width: 74px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; z-index: 1; }
+.node .disc { width: 46px; height: 46px; border-radius: 50%; background: #fff; display: grid; place-items: center; box-shadow: 0 1px 3px rgba(0,0,0,.12); color: var(--text); }
+.node .disc.bad { background: var(--badC); color: var(--bad); outline: 2px solid var(--bad); }
+.node .disc.skip { background: var(--card2); color: var(--faint); }
+.node .t { font-size: 11.5px; font-weight: 600; }
+.node .s { font-size: 10.5px; color: var(--mute); line-height: 1.3; }
+.link { position: absolute; top: 27px; height: 3px; border-radius: 2px; }
+.link.good { background: #34a853; }
+.link.bad { background: repeating-linear-gradient(90deg, var(--bad) 0 6px, transparent 6px 10px); }
+.link.skip { background: repeating-linear-gradient(90deg, #b5b5bf 0 4px, transparent 4px 8px); }
+.verdict { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+
+/* B: tiles */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tile { background: var(--card); border-radius: 16px; padding: 11px 12px; min-height: 92px; display: flex; flex-direction: column; gap: 3px; }
+.tile .lab { font-size: 11.5px; color: var(--mute); display: flex; align-items: center; gap: 6px; }
+.tile .val { font-size: 16px; font-weight: 600; line-height: 1.25; }
+.tile .det { font-size: 11px; color: var(--mute); }
+.tile.bad { background: var(--badC); }
+.tile.bad .val, .tile.bad .lab { color: var(--bad); }
+.tile.good .val { color: var(--good); }
+.band { border-radius: 16px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
+.band.good { background: var(--goodC); }
+.band.bad { background: var(--badC); }
+.band .h { font-size: 15px; font-weight: 600; }
+.band .s { font-size: 11.5px; color: var(--mute); }
+
+/* C: checklist */
+.steps { display: flex; flex-direction: column; }
+.step { display: grid; grid-template-columns: 26px 1fr; column-gap: 10px; position: relative; padding-bottom: 12px; }
+.step:last-child { padding-bottom: 0; }
+.step::before { content: ""; position: absolute; left: 12px; top: 24px; bottom: 0; width: 2px; background: var(--line); }
+.step:last-child::before { display: none; }
+.mark { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 14px; font-weight: 700; z-index: 1; }
+.mark.good { background: #34a853; } .mark.bad { background: var(--bad); } .mark.warn { background: #e8a200; } .mark.off { background: #b5b5bf; }
+.step .t { font-size: 13.5px; font-weight: 500; padding-top: 3px; }
+.step .s { font-size: 11.5px; color: var(--mute); }
+.step .fix { margin-top: 7px; }
+.summary { display: flex; align-items: center; gap: 12px; }
+.ring { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 15px; flex: none; }
+.ring.good { background: var(--goodC); color: var(--good); }
+.ring.bad { background: var(--badC); color: var(--bad); }
+</style>
+</head>
+<body>
+<header class="doc">
+  <h1>Tailscale 单独页面：三种设计</h1>
+  <p>点主界面上方的 TS 按钮后推出的完整页面，取代现在的弹窗。每种设计都画了两个状态：左边是正常（直连电脑），右边是 2026-11-15 那种情况（FlClash 不允许绕开，只能走 DERP 中转）。所有数字都来自那天实际看到的值；页面上只放 app 真能拿到的信息（拿不到 VPN 是哪个 app 开的，也拿不到延迟）。</p>
+</header>
+
+<!-- ============================ A ============================ -->
+<section class="design" data-d="a">
+  <h2>方案一 · 线路图</h2>
+  <p class="what">最上面一张大卡片放本机身份（节点名、Tailscale IP、Tailnet）。下面画一条从「本机」到「电脑」的线路：每一段经过哪里一目了然，被拦住的那一段画成红色虚线并打叉，再在下方说该怎么改。设备列表里每台设备用一个彩色标签说明它走的是直连、Peer Relay 还是 DERP 中转。</p>
+  <div class="pair">
+    <div><div class="cap">正常</div>
+      <div class="phone"><div class="screen">
+        <div class="status"><span>11:58</span><span>5G · 82%</span></div>
+        <div class="appbar"><div class="back"><svg class="ico" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Tailscale</h3><div class="switch"></div></div>
+        <div class="body">
+          <div class="hero">
+            <div class="row"><span class="dot good"></span><span style="font-size:12px;color:var(--good);font-weight:600">已连接</span></div>
+            <div class="big">attache-v2505a</div>
+            <div class="ip mono">100.72.170.95</div>
+            <div class="meta">qiaoxueshi@ · attache-v2505a.taildff16.ts.net</div>
+          </div>
+          <div class="sec">线路</div>
+          <div class="card">
+            <div class="path">
+              <div class="link good" style="left:46px;right:46px"></div>
+              <div class="node"><div class="disc"><svg class="ico" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="t">本机</div><div class="s">Attaché</div></div>
+              <div class="node"><div class="disc skip"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="t" style="color:var(--faint)">VPN</div><div class="s">没有</div></div>
+              <div class="node"><div class="disc"><svg class="ico" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0119 0M5.5 12.5a9.5 9.5 0 0113 0M8.5 16a5 5 0 017 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="19.3" r="1.3" fill="currentColor"/></svg></div><div class="t">Wi-Fi</div><div class="s mono">wlan0<br>192.168.8.157</div></div>
+              <div class="node"><div class="disc"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M1.5 19.5h21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div><div class="t">电脑</div><div class="s">直连</div></div>
+            </div>
+            <div class="verdict"><span class="chip good">直连物理网络</span><span style="color:var(--mute)">没有 VPN 挡路</span></div>
+          </div>
+          <div class="sec">设备 · 2 台在线</div>
+          <div class="card" style="padding:4px 12px">
+            <div class="peer"><div class="osico"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M1.5 19.5h21" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="grow"><div class="name">xueshis-macbook-pro</div><div class="sub mono">100.78.174.78 · 192.168.8.233</div></div><span class="chip good">直连</span></div>
+            <div class="peer"><div class="osico"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="16" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="grow"><div class="name">bj-relay</div><div class="sub mono">100.72.198.89</div></div><span class="chip warn">Peer Relay</span></div>
+            <div class="peer"><div class="osico"><svg class="ico" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="grow"><div class="name">attache-ipa2693</div><div class="sub">12 小时前在线</div></div><span class="chip mute">离线</span></div>
+          </div>
+          <div class="card more" style="padding:0"><div class="more" style="width:100%"><span>节点名 · Auth Key · Headscale</span><span style="color:var(--faint)">›</span></div></div>
+        </div>
+      </div></div>
+    </div>
+    <div><div class="cap">被 VPN 拦住</div>
+      <div class="phone"><div class="screen">
+        <div class="status"><span>11:38</span><span>5G · 79%</span></div>
+        <div class="appbar"><div class="back"><svg class="ico" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Tailscale</h3><div class="switch"></div></div>
+        <div class="body">
+          <div class="hero">
+            <div class="row"><span class="dot good"></span><span style="font-size:12px;color:var(--good);font-weight:600">已连接</span></div>
+            <div class="big">attache-v2505a</div>
+            <div class="ip mono">100.72.170.95</div>
+            <div class="meta">qiaoxueshi@ · attache-v2505a.taildff16.ts.net</div>
+          </div>
+          <div class="sec">线路</div>
+          <div class="card">
+            <div class="path">
+              <div class="link good" style="left:46px;width:96px"></div>
+              <div class="link bad" style="left:142px;right:46px"></div>
+              <div class="node"><div class="disc"><svg class="ico" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="t">本机</div><div class="s">Attaché</div></div>
+              <div class="node"><div class="disc bad"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div><div class="t" style="color:var(--bad)">VPN</div><div class="s mono">tun0<br>172.19.0.1</div></div>
+              <div class="node"><div class="disc skip"><svg class="ico" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0119 0M5.5 12.5a9.5 9.5 0 0113 0M8.5 16a5 5 0 017 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="19.3" r="1.3" fill="currentColor"/></svg></div><div class="t" style="color:var(--faint)">Wi-Fi</div><div class="s">没走这里</div></div>
+              <div class="node"><div class="disc"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M1.5 19.5h21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div><div class="t">电脑</div><div class="s">DERP 纽伦堡</div></div>
+            </div>
+            <div class="verdict"><span class="chip bad">被 VPN 拦住</span><span style="color:var(--mute)">绕开失败 37 次</span></div>
+          </div>
+          <div class="fix"><b>这个 VPN 不允许 Attaché 绕开它。</b>Tailscale 只能经过它走，UDP 不通，连电脑只能绕道国外中转，所以 chat 连不上、下载不动。请在这个 VPN app 里把 Attaché 设成不走代理。
+            <div class="act"><span>打开 VPN 设置</span></div></div>
+          <div class="sec">设备 · 2 台在线</div>
+          <div class="card" style="padding:4px 12px">
+            <div class="peer"><div class="osico"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M1.5 19.5h21" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="grow"><div class="name">xueshis-macbook-pro</div><div class="sub mono">100.78.174.78</div></div><span class="chip bad">DERP nue</span></div>
+            <div class="peer"><div class="osico"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="16" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div><div class="grow"><div class="name">bj-relay</div><div class="sub mono">100.72.198.89</div></div><span class="chip mute">空闲</span></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ B ============================ -->
+<section class="design" data-d="b">
+  <h2>方案二 · 状态色带 + 四宫格</h2>
+  <p class="what">最上面一条整宽的色带直接给结论（绿：能直连；红：被拦住），一句话说明原因。下面四个格子各管一件事：Tailscale、物理网络、VPN、到电脑的线路，出问题的那一格整格变红。信息密度最高，一眼扫完；身份信息收进第一个格子里。</p>
+  <div class="pair">
+    <div><div class="cap">正常</div>
+      <div class="phone"><div class="screen">
+        <div class="status"><span>11:58</span><span>5G · 82%</span></div>
+        <div class="appbar"><div class="back"><svg class="ico" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Tailscale</h3><div class="switch"></div></div>
+        <div class="body">
+          <div class="band good"><svg width="30" height="30" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#34a853"/><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div><div class="h" style="color:var(--good)">能直连电脑</div><div class="s">Tailscale 直接走 Wi-Fi，没有 VPN 挡路</div></div></div>
+          <div class="tiles">
+            <div class="tile good"><div class="lab"><span class="dot good"></span>Tailscale</div><div class="val">已连接</div><div class="det mono">100.72.170.95</div><div class="det">attache-v2505a</div></div>
+            <div class="tile"><div class="lab">物理网络</div><div class="val">Wi-Fi</div><div class="det mono">wlan0 · 192.168.8.157</div></div>
+            <div class="tile"><div class="lab">VPN</div><div class="val">没有</div><div class="det">Attaché 不经过任何 VPN</div></div>
+            <div class="tile good"><div class="lab">到电脑</div><div class="val">直连</div><div class="det mono">192.168.8.233</div></div>
+          </div>
+          <div class="sec">设备</div>
+          <div class="card" style="padding:4px 12px">
+            <div class="peer"><span class="dot good"></span><div class="grow"><div class="name">xueshis-macbook-pro</div><div class="sub mono">100.78.174.78</div></div><span class="chip good">直连</span></div>
+            <div class="peer"><span class="dot good"></span><div class="grow"><div class="name">bj-relay</div><div class="sub mono">100.72.198.89</div></div><span class="chip warn">Peer Relay</span></div>
+            <div class="peer"><span class="dot off"></span><div class="grow"><div class="name">attache-ipa2693</div><div class="sub">12 小时前在线</div></div><span class="chip mute">离线</span></div>
+          </div>
+          <div class="card more" style="padding:0"><div class="more" style="width:100%"><span>高级设置</span><span style="color:var(--faint)">›</span></div></div>
+        </div>
+      </div></div>
+    </div>
+    <div><div class="cap">被 VPN 拦住</div>
+      <div class="phone"><div class="screen">
+        <div class="status"><span>11:38</span><span>5G · 79%</span></div>
+        <div class="appbar"><div class="back"><svg class="ico" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Tailscale</h3><div class="switch"></div></div>
+        <div class="body">
+          <div class="band bad"><svg width="30" height="30" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#ba1a1a"/><path d="M12 7v6.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="17" r="1.4" fill="#fff"/></svg>
+            <div><div class="h" style="color:var(--bad)">被 VPN 拦住</div><div class="s">只能绕道国外中转，chat 和下载会很慢或连不上</div></div></div>
+          <div class="tiles">
+            <div class="tile good"><div class="lab"><span class="dot good"></span>Tailscale</div><div class="val">已连接</div><div class="det mono">100.72.170.95</div><div class="det">attache-v2505a</div></div>
+            <div class="tile"><div class="lab">物理网络</div><div class="val">Wi-Fi</div><div class="det mono">wlan0 · 192.168.8.157</div></div>
+            <div class="tile bad"><div class="lab">VPN</div><div class="val">不允许绕开</div><div class="det mono">tun0 · 172.19.0.1</div><div class="det">绕开失败 37 次</div></div>
+            <div class="tile bad"><div class="lab">到电脑</div><div class="val">DERP 中转</div><div class="det">纽伦堡 · UDP 不通</div></div>
+          </div>
+          <div class="fix"><b>怎么解决：</b>在这个 VPN app 里把 Attaché 设成不走代理，或者打开它的「允许应用绕过 VPN」，然后重新打开 Attaché。
+            <div class="act"><span>打开 VPN 设置</span></div></div>
+          <div class="sec">设备</div>
+          <div class="card" style="padding:4px 12px">
+            <div class="peer"><span class="dot good"></span><div class="grow"><div class="name">xueshis-macbook-pro</div><div class="sub mono">100.78.174.78</div></div><span class="chip bad">DERP nue</span></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ C ============================ -->
+<section class="design" data-d="c">
+  <h2>方案三 · 自检清单</h2>
+  <p class="what">把「能不能连上电脑」拆成四步依次检查：Tailscale 登录、选到物理网络、绕开 VPN、到电脑的线路。每一步一个圆形标记（绿勾 / 红叉 / 灰色未检查），哪一步失败，修复办法就直接展开在那一步下面，后面的步骤变灰。最像「诊断」，出问题时最清楚该从哪里下手；正常时稍显啰嗦。</p>
+  <div class="pair">
+    <div><div class="cap">正常</div>
+      <div class="phone"><div class="screen">
+        <div class="status"><span>11:58</span><span>5G · 82%</span></div>
+        <div class="appbar"><div class="back"><svg class="ico" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Tailscale</h3><div class="switch"></div></div>
+        <div class="body">
+          <div class="card summary"><div class="ring good">4/4</div><div><div style="font-size:15px;font-weight:600">一切正常</div><div style="font-size:11.5px;color:var(--mute)" class="mono">attache-v2505a · 100.72.170.95</div></div></div>
+          <div class="card">
+            <div class="steps">
+              <div class="step"><div class="mark good">✓</div><div><div class="t">Tailscale 已登录</div><div class="s">qiaoxueshi@ · taildff16.ts.net</div></div></div>
+              <div class="step"><div class="mark good">✓</div><div><div class="t">选到物理网络：Wi-Fi</div><div class="s mono">wlan0 · 192.168.8.157</div></div></div>
+              <div class="step"><div class="mark good">✓</div><div><div class="t">没有 VPN 挡路</div><div class="s">Attaché 的流量不经过任何 VPN</div></div></div>
+              <div class="step"><div class="mark good">✓</div><div><div class="t">直连电脑</div><div class="s mono">xueshis-macbook-pro · 192.168.8.233</div></div></div>
+            </div>
+          </div>
+          <div class="sec">设备</div>
+          <div class="card" style="padding:4px 12px">
+            <div class="peer"><span class="dot good"></span><div class="grow"><div class="name">xueshis-macbook-pro</div><div class="sub">直连 · 192.168.8.233</div></div></div>
+            <div class="peer"><span class="dot good"></span><div class="grow"><div class="name">bj-relay</div><div class="sub">Peer Relay · 62.234.135.47</div></div></div>
+            <div class="peer"><span class="dot off"></span><div class="grow"><div class="name">attache-ipa2693</div><div class="sub">离线 · 12 小时前</div></div></div>
+          </div>
+          <div class="card more" style="padding:0"><div class="more" style="width:100%"><span>高级设置</span><span style="color:var(--faint)">›</span></div></div>
+        </div>
+      </div></div>
+    </div>
+    <div><div class="cap">被 VPN 拦住</div>
+      <div class="phone"><div class="screen">
+        <div class="status"><span>11:38</span><span>5G · 79%</span></div>
+        <div class="appbar"><div class="back"><svg class="ico" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Tailscale</h3><div class="switch"></div></div>
+        <div class="body">
+          <div class="card summary"><div class="ring bad">2/4</div><div><div style="font-size:15px;font-weight:600;color:var(--bad)">第 3 步没通过</div><div style="font-size:11.5px;color:var(--mute)" class="mono">attache-v2505a · 100.72.170.95</div></div></div>
+          <div class="card">
+            <div class="steps">
+              <div class="step"><div class="mark good">✓</div><div><div class="t">Tailscale 已登录</div><div class="s">qiaoxueshi@ · taildff16.ts.net</div></div></div>
+              <div class="step"><div class="mark good">✓</div><div><div class="t">选到物理网络：Wi-Fi</div><div class="s mono">wlan0 · 192.168.8.157</div></div></div>
+              <div class="step"><div class="mark bad">✕</div><div><div class="t" style="color:var(--bad)">没能绕开 VPN</div><div class="s mono">tun0 · 172.19.0.1 · 不允许绕开 · 失败 37 次</div>
+                <div class="fix">在这个 VPN app 里把 Attaché 设成不走代理，或者打开它的「允许应用绕过 VPN」，然后重新打开 Attaché。<div class="act"><span>打开 VPN 设置</span></div></div></div></div>
+              <div class="step"><div class="mark off">·</div><div><div class="t" style="color:var(--faint)">到电脑的线路</div><div class="s">现在只能走 DERP 纽伦堡，修好上一步后再看</div></div></div>
+            </div>
+          </div>
+          <div class="sec">设备</div>
+          <div class="card" style="padding:4px 12px">
+            <div class="peer"><span class="dot good"></span><div class="grow"><div class="name">xueshis-macbook-pro</div><div class="sub">DERP 中转 · nue</div></div></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</section>
+<script>
+// ?d=a|b|c shows one design, for a screenshot per design.
+const d = new URLSearchParams(location.search).get('d');
+if (d) {
+  document.querySelector('header.doc').style.display = 'none';
+  document.querySelectorAll('section.design').forEach(s => { if (s.dataset.d !== d) s.remove(); });
+}
+</script>
+</body>
+</html>

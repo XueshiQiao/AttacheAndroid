@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,9 +15,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,16 +25,22 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -45,6 +52,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -53,10 +63,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 
 /**
- * Compact Tailscale status pill that opens [TailscaleDialog] when tapped.
+ * Compact Tailscale status pill that opens the Tailscale page ([TailscaleDialog]) when tapped.
  */
 @Composable
 fun TailscaleStatusBadge(
@@ -107,400 +119,482 @@ fun TailscaleStatusBadge(
     }
 }
 
+/**
+ * The Tailscale page, full screen over whatever opened it (the TS pill on
+ * the host list, the terminal's settings). Back closes it.
+ *
+ * Laid out as the owner chose on 2026-11-15 from
+ * `docs/tailscale-page-designs.html`: design 1's identity card on top —
+ * the node's name and addresses are what matter there, not a score — then
+ * design 3's check list, which answers "can I reach my computer, and if
+ * not, which step is wrong and what do I change". The list exists because
+ * of that day: FlClash would not let the app bypass it, every packet rode
+ * its tunnel with UDP blocked, chat never connected, and nothing on screen
+ * said why.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TailscaleDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         TailscaleManager.init(context)
         TailscaleManager.refreshStatusNow()
     }
     val state by TailscaleManager.uiState.collectAsState()
 
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text("Tailscale") },
+                        navigationIcon = {
+                            IconButton(onClick = onDismiss) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            }
+                        },
+                        actions = {
+                            Switch(
+                                checked = state.enabled,
+                                enabled = state.nativeAvailable,
+                                onCheckedChange = { TailscaleManager.setEnabled(context, it) },
+                                modifier = Modifier
+                                    .padding(end = 12.dp)
+                                    .testTag("tailscaleEnableSwitch"),
+                            )
+                        },
+                    )
+                },
+            ) { inner ->
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .padding(inner)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                ) {
+                    if (!state.nativeAvailable) {
+                        Callout("这台设备的架构没有带 libattache_tsnet.so（需要 arm64-v8a），内置 Tailscale 用不了。")
+                    }
+                    IdentityCard(state)
+                    if (state.status.error.isNotEmpty()) Callout("错误：${state.status.error}")
+                    if (state.enabled) {
+                        SectionLabel("连接检查")
+                        CheckList(state)
+                        if (state.status.peers.isNotEmpty()) {
+                            SectionLabel("设备 · ${state.status.peers.count { it.online }} 台在线")
+                            PeerList(state.status.peers)
+                        }
+                    } else {
+                        Text(
+                            "打开右上角的开关，Attaché 会在 app 里面连上你的 Tailnet，不影响手机上的其他 app。",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
+                    }
+                    AdvancedSettings(state)
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- identity
+
+/** Design 1's top card: who this node is on the tailnet. */
+@Composable
+private fun IdentityCard(state: TailscaleUiState) {
+    val context = LocalContext.current
+    val st = state.status
+    val (dot, label) = when {
+        !state.enabled -> Color(0xFF9E9EA6) to "已关闭"
+        st.running -> Color(0xFF34A853) to "已连接"
+        st.backendState == "NeedsLogin" -> Color(0xFFE8A200) to "等待登录"
+        else -> Color(0xFF42A5F5) to "正在启动"
+    }
+    Column(
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.surfaceContainerHigh),
+                ),
+            )
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
+            Spacer(Modifier.width(6.dp))
+            Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = dot)
+        }
+        Text(
+            st.selfHostname.ifEmpty { state.hostname },
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (st.selfIpv4.isNotEmpty()) {
+            Text(
+                st.selfIpv4,
+                fontSize = 16.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.clickable { copyToClipboard(context, "Tailscale IP", st.selfIpv4) },
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        // One line each, no separator between them (asked for).
+        if (st.tailnetName.isNotEmpty()) {
+            Text(st.tailnetName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (st.selfDnsName.isNotEmpty()) {
+            Text(
+                st.selfDnsName,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { copyToClipboard(context, "MagicDNS", st.selfDnsName) },
+            )
+        }
+    }
+}
+
+// --------------------------------------------------------------- checklist
+
+private enum class Mark { GOOD, BAD, WARN, PENDING }
+
+private data class Check(
+    val mark: Mark,
+    val title: String,
+    val detail: String = "",
+    val mono: Boolean = false,
+    /** What the step needs below it: a fix, or the login buttons. */
+    val extra: (@Composable () -> Unit)? = null,
+)
+
+/** The four steps between this app and a computer on the tailnet. */
+@Composable
+private fun CheckList(state: TailscaleUiState) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val st = state.status
+    val net = state.network
+    val bind = st.bind
+
+    val login = when {
+        st.running -> Check(Mark.GOOD, "Tailscale 已登录", st.tailnetName)
+        st.backendState == "NeedsLogin" -> Check(Mark.BAD, "还没有登录 Tailscale", "用浏览器登录一次，之后会记住") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+                Button(
+                    enabled = !state.isStartingLogin,
+                    onClick = {
+                        scope.launch {
+                            val url = TailscaleManager.startInteractiveLogin(context)
+                            if (url.isNotBlank()) {
+                                openBrowserUrl(context, url)
+                            } else {
+                                Toast.makeText(context, "正在获取登录链接，请稍候再试…", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                ) {
+                    if (state.isStartingLogin) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("用浏览器登录")
+                }
+                if (st.authUrl.isNotBlank()) {
+                    OutlinedButton(onClick = { copyToClipboard(context, "Tailscale Auth URL", st.authUrl) }) {
+                        Text("复制链接")
+                    }
+                }
+            }
+        }
+        else -> Check(Mark.PENDING, "Tailscale 正在启动", st.backendState)
+    }
+
+    val physical = if (net.physical.isNotEmpty()) {
+        Check(Mark.GOOD, "选到物理网络：${net.physical.substringBefore(" · ")}", net.physical.substringAfter(" · ", ""), mono = true)
+    } else {
+        Check(Mark.BAD, "没有可用的物理网络", "Wi-Fi 和移动数据都没有连上")
+    }
+
+    val vpnWhere = (listOf(net.vpnInterface.ifEmpty { "未知网卡" }) + net.vpnAddresses).joinToString(" · ")
+    val blocked = net.vpnApplies && (bind.last == "failed" || (bind.last != "ok" && net.vpnBypassable == false))
+    val vpn = when {
+        !net.vpnApplies -> Check(Mark.GOOD, "没有 VPN 挡路", "Attaché 的流量不经过任何 VPN")
+        blocked -> Check(
+            Mark.BAD,
+            "没能绕开 VPN",
+            listOfNotNull(
+                vpnWhere,
+                if (net.vpnBypassable == false) "不允许绕开" else null,
+                if (bind.failed > 0) "失败 ${bind.failed} 次" else null,
+                bind.lastError.ifEmpty { null },
+            ).joinToString(" · "),
+            mono = true,
+        ) {
+            Callout(
+                "Tailscale 只能经过这个 VPN 走，UDP 常常不通，所以连不上电脑或者很慢。" +
+                    "请在这个 VPN app 里把 Attaché 设成不走代理，或者打开它的「允许应用绕过 VPN」，然后重新打开 Attaché。",
+                action = "打开 VPN 设置" to { openVpnSettings(context) },
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        bind.last == "ok" -> Check(Mark.GOOD, "有 VPN，已经绕开", vpnWhere, mono = true)
+        else -> Check(Mark.PENDING, "有 VPN，还不知道能不能绕开", vpnWhere, mono = true)
+    }
+
+    val active = st.peers.filter { it.online && it.active }
+    val route = when {
+        !st.running -> Check(Mark.PENDING, "到其他设备的线路", "登录以后再看")
+        login.mark == Mark.BAD || physical.mark == Mark.BAD || vpn.mark == Mark.BAD -> Check(
+            Mark.PENDING,
+            "到其他设备的线路",
+            "修好上面那一步以后再看" + (active.firstOrNull()?.let { "；现在 ${it.hostname} 走的是 ${TailscaleManager.formatPeerRoute(it)}" } ?: ""),
+        )
+        active.isEmpty() -> Check(Mark.PENDING, "还没有连过其他设备", "连上一台主机以后，这里会显示走的是哪条线路")
+        active.any { it.direct.isBlank() && it.peerRelay.isBlank() } -> {
+            val p = active.first { it.direct.isBlank() && it.peerRelay.isBlank() }
+            Check(Mark.WARN, "${p.hostname} 只能走 DERP 中转（${p.relay}）", "没能直连，也没走 Peer Relay，会比较慢")
+        }
+        active.any { it.direct.isBlank() } -> {
+            val p = active.first { it.direct.isBlank() }
+            Check(Mark.GOOD, "经 Peer Relay 连到 ${p.hostname}", p.peerRelay.substringBefore(":vni:"), mono = true)
+        }
+        else -> {
+            val p = active.first()
+            Check(Mark.GOOD, "直连 ${p.hostname}", p.direct, mono = true)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        val steps = listOf(login, physical, vpn, route)
+        steps.forEachIndexed { i, c -> CheckRow(c, last = i == steps.lastIndex) }
+    }
+}
+
+@Composable
+private fun CheckRow(c: Check, last: Boolean) {
+    val line = MaterialTheme.colorScheme.outlineVariant
+    val faint = c.mark == Mark.PENDING
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawRail(if (last) null else line),
+    ) {
+        MarkDisc(c.mark)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f).padding(top = 3.dp, bottom = if (last) 0.dp else 14.dp)) {
+            Text(
+                c.title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = when {
+                    c.mark == Mark.BAD -> MaterialTheme.colorScheme.error
+                    faint -> MaterialTheme.colorScheme.onSurfaceVariant
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
+            )
+            if (c.detail.isNotEmpty()) {
+                Text(
+                    c.detail,
+                    fontSize = 12.sp,
+                    fontFamily = if (c.mono) FontFamily.Monospace else FontFamily.Default,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            c.extra?.invoke()
+        }
+    }
+}
+
+/** The vertical line joining one step's mark to the next. */
+private fun Modifier.drawRail(color: Color?): Modifier = if (color == null) {
+    this
+} else {
+    this.then(
+        Modifier.drawBehind {
+            val x = 13.dp.toPx()
+            drawLine(color, Offset(x, 28.dp.toPx()), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+        },
+    )
+}
+
+@Composable
+private fun MarkDisc(mark: Mark) {
+    val (bg, glyph) = when (mark) {
+        Mark.GOOD -> Color(0xFF34A853) to "✓"
+        Mark.BAD -> MaterialTheme.colorScheme.error to "✕"
+        Mark.WARN -> Color(0xFFE8A200) to "!"
+        Mark.PENDING -> Color(0xFFB5B5BF) to "·"
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(26.dp).clip(CircleShape).background(bg),
+    ) {
+        Text(glyph, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+// ------------------------------------------------------------------- peers
+
+@Composable
+private fun PeerList(peers: List<TailscalePeer>) {
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        peers.sortedByDescending { it.online }.forEach { peer ->
+            val ip = peer.ips.firstOrNull().orEmpty()
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = ip.isNotEmpty()) { copyToClipboard(context, "Tailscale Peer IP", ip) }
+                    .padding(vertical = 9.dp),
+            ) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(if (peer.online) Color(0xFF34A853) else Color(0xFFA3A3AD)))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        peer.hostname.ifBlank { peer.dnsName },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOf(TailscaleManager.formatPeerRoute(peer), ip).filter { it.isNotEmpty() }.joinToString(" · "),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- settings
+
+@Composable
+private fun AdvancedSettings(state: TailscaleUiState) {
+    val context = LocalContext.current
+    var open by remember { mutableStateOf(false) }
     var hostname by remember(state.hostname) { mutableStateOf(state.hostname) }
     var authKey by remember(state.authKey) { mutableStateOf(state.authKey) }
     var controlUrl by remember(state.controlUrl) { mutableStateOf(state.controlUrl) }
-    var showAdvanced by remember { mutableStateOf(state.authKey.isNotEmpty() || state.controlUrl.isNotEmpty()) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Embedded Tailscale (tsnet)",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "仅作用于本 App · 自动分流 100.x / *.ts.net · 兼容全局 VPN",
-                        fontSize = 11.5.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = state.enabled,
-                    enabled = state.nativeAvailable,
-                    onCheckedChange = { enabled ->
-                        TailscaleManager.updateConfig(context, hostname, authKey, controlUrl)
-                        TailscaleManager.setEnabled(context, enabled)
-                    },
-                    modifier = Modifier.testTag("tailscaleEnableSwitch"),
-                )
-            }
-        },
-        text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 460.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                if (!state.nativeAvailable) {
-                    Text(
-                        text = "当前设备架构未包含 libattache_tsnet.so (需要 arm64-v8a)。",
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 13.sp,
-                    )
-                }
-
-                // Status card
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-                        .padding(10.dp),
-                ) {
-                    val statusText = when {
-                        !state.enabled -> "已关闭 (Stopped)"
-                        state.status.running -> "已连接 (Running)"
-                        state.status.backendState == "NeedsLogin" -> "等待登录授权 (NeedsLogin)"
-                        else -> state.status.backendState
-                    }
-                    Text(
-                        text = "状态: $statusText",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.5.sp,
-                    )
-                    if (state.status.selfIpv4.isNotEmpty()) {
-                        Text(
-                            text = "本机 Tailscale IP: ${state.status.selfIpv4}",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.5.sp,
-                        )
-                    }
-                    if (state.status.selfDnsName.isNotEmpty()) {
-                        Text(
-                            text = "MagicDNS: ${state.status.selfDnsName}",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (state.status.tailnetName.isNotEmpty()) {
-                        Text(
-                            text = "Tailnet: ${state.status.tailnetName}",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (state.status.error.isNotEmpty()) {
-                        Text(
-                            text = "错误: ${state.status.error}",
-                            color = MaterialTheme.colorScheme.error,
-                            fontSize = 12.sp,
-                        )
-                    }
-                }
-
-                if (state.enabled) NetworkPathCard(state.network, state.status.bind)
-
-                // Login / Logout actions
-                if (state.enabled) {
-                    if (!state.status.running) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Button(
-                                enabled = !state.isStartingLogin,
-                                onClick = {
-                                    scope.launch {
-                                        TailscaleManager.updateConfig(context, hostname, authKey, controlUrl)
-                                        val url = TailscaleManager.startInteractiveLogin(context)
-                                        if (url.isNotBlank()) {
-                                            openBrowserUrl(context, url)
-                                        } else {
-                                            Toast.makeText(
-                                                context,
-                                                "正在获取 Tailscale 授权链接，请稍候再试…",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                if (state.isStartingLogin) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                }
-                                Text("浏览器登录授权")
-                            }
-                            if (state.status.authUrl.isNotBlank()) {
-                                OutlinedButton(
-                                    onClick = {
-                                        copyToClipboard(context, "Tailscale Auth URL", state.status.authUrl)
-                                    },
-                                ) {
-                                    Text("复制链接")
-                                }
-                            }
-                        }
-                    } else {
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                text = "已发现 ${state.status.peers.size} 台 Tailnet 设备",
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            TextButton(onClick = { TailscaleManager.logout() }) {
-                                Text("退出登录 (Logout)", color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
-                }
-
-                // Peers list when running
-                if (state.status.peers.isNotEmpty()) {
-                    HorizontalDivider()
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (peer in state.status.peers) {
-                            val primaryIp = peer.ips.firstOrNull().orEmpty()
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                                    .clickable {
-                                        if (primaryIp.isNotEmpty()) {
-                                            copyToClipboard(context, "Tailscale Peer IP", primaryIp)
-                                        }
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(if (peer.online) Color(0xFF4CAF50) else Color(0xFF7A7D85)),
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = peer.hostname.ifBlank { peer.dnsName },
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    val routeDesc = TailscaleManager.formatPeerRoute(peer)
-                                    Text(
-                                        text = "$primaryIp · $routeDesc",
-                                        fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                Text(
-                                    text = "复制 IP",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Advanced settings (Hostname / AuthKey / Headscale Control URL)
-                HorizontalDivider()
-                TextButton(
-                    onClick = { showAdvanced = !showAdvanced },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (showAdvanced) "收起高级设置 (节点名 / Auth Key / Headscale)" else "展开高级设置 (节点名 / Auth Key / Headscale)")
-                }
-
-                if (showAdvanced) {
-                    OutlinedTextField(
-                        value = hostname,
-                        onValueChange = { hostname = it },
-                        label = { Text("节点名称 (Hostname)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = authKey,
-                        onValueChange = { authKey = it },
-                        label = { Text("Auth Key (可选, 如 tskey-auth-...)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = controlUrl,
-                        onValueChange = { controlUrl = it },
-                        label = { Text("Control URL (可选, Headscale 地址)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    TailscaleManager.updateConfig(context, hostname, authKey, controlUrl)
-                    onDismiss()
-                },
-            ) {
-                Text("保存并关闭")
-            }
-        },
-    )
-}
-
-/**
- * Which way the embedded Tailscale's packets leave the phone: the physical
- * network it binds to, any VPN that carries this app, and whether binding
- * past that VPN worked. When it did not, the packets ride the VPN — on
- * 2026-11-15 that was FlClash with UDP blocked, so the desktop was reached
- * only through a DERP relay in Europe and chat never connected, with
- * nothing on screen to say why.
- */
-@Composable
-private fun NetworkPathCard(net: PhoneNetwork, bind: BindStatus) {
-    val verdict = networkVerdict(net, bind)
     Column(
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-            .padding(10.dp),
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer),
     ) {
-        // The verdict first: everything below only explains it.
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("网络通道", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, modifier = Modifier.weight(1f))
-            VerdictChip(verdict)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { open = !open }
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+        ) {
+            Text("高级设置", fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text(if (open) "收起" else "节点名 · Auth Key · Headscale", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        PathRow("物理网络", net.physical.ifEmpty { "未选到" })
-        PathRow(
-            "VPN",
-            if (net.vpnApplies) (listOf(net.vpnInterface.ifEmpty { "未知网卡" }) + net.vpnAddresses).joinToString(" · ") else "无",
-        )
-        if (net.vpnApplies) {
-            PathRow(
-                "允许绕开",
-                when (net.vpnBypassable) {
-                    true -> "允许"
-                    false -> "不允许"
-                    null -> "系统没有说明"
-                },
-                alarm = net.vpnBypassable == false,
-            )
-        }
-        PathRow(
-            "绕开结果",
-            when (bind.last) {
-                "ok" -> if (net.vpnApplies) "已绕开 VPN" else "直接走物理网络"
-                "failed" -> "没有绕开 VPN" +
-                    (if (bind.lastError.isNotEmpty()) "（${bind.lastError}）" else "") +
-                    "，已失败 ${bind.failed} 次"
-                else -> if (bind.handle == 0L) "没有选到物理网络" else "还没有试过"
-            },
-            alarm = bind.last == "failed",
-        )
-        if (verdict == Verdict.BLOCKED) {
-            Text(
-                "Attaché 的 Tailscale 只能经过这个 VPN 走，UDP 常常不通，所以连不上电脑或者很慢。" +
-                    "请在这个 VPN app 里把 Attaché 设成不走代理，或者打开它的「允许应用绕过 VPN」，然后重新打开 Attaché。",
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(MaterialTheme.colorScheme.errorContainer)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-            )
+        if (open) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+            ) {
+                OutlinedTextField(hostname, { hostname = it }, label = { Text("节点名称 (Hostname)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(authKey, { authKey = it }, label = { Text("Auth Key（可选，如 tskey-auth-…）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(controlUrl, { controlUrl = it }, label = { Text("Control URL（可选，Headscale 地址）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (state.status.running) {
+                        TextButton(onClick = { TailscaleManager.logout() }) {
+                            Text("退出登录", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Button(onClick = {
+                        TailscaleManager.updateConfig(context, hostname, authKey, controlUrl)
+                        Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                    }) { Text("保存") }
+                }
+            }
         }
     }
 }
 
-private enum class Verdict { DIRECT, BLOCKED, UNKNOWN }
-
-/** What the card leads with, from the latest bind and the VPN in the way. */
-private fun networkVerdict(net: PhoneNetwork, bind: BindStatus): Verdict = when {
-    bind.last == "failed" && net.vpnApplies -> Verdict.BLOCKED
-    bind.last == "ok" -> Verdict.DIRECT
-    net.vpnApplies && net.vpnBypassable == false -> Verdict.BLOCKED
-    else -> Verdict.UNKNOWN
-}
+// ----------------------------------------------------------------- helpers
 
 @Composable
-private fun VerdictChip(verdict: Verdict) {
-    val (label, bg, fg) = when (verdict) {
-        Verdict.DIRECT -> Triple("直连物理网络", Color(0xFF2E7D32).copy(alpha = 0.16f), Color(0xFF2E7D32))
-        Verdict.BLOCKED -> Triple("被 VPN 拦住", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
-        Verdict.UNKNOWN -> Triple("还不知道", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+private fun SectionLabel(text: String) {
     Text(
-        label,
-        fontSize = 11.5.sp,
+        text,
+        fontSize = 12.sp,
         fontWeight = FontWeight.SemiBold,
-        color = fg,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(bg)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
     )
 }
 
-/** A label in a fixed muted column, its value beside it in the text colour. */
+/** A red box: something is wrong, and what to do about it. */
 @Composable
-private fun PathRow(label: String, value: String, alarm: Boolean = false) {
-    Row(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            label,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(64.dp),
-        )
-        Text(
-            value,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
+private fun Callout(text: String, modifier: Modifier = Modifier, action: Pair<String, () -> Unit>? = null) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(text, fontSize = 12.5.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onErrorContainer)
+        if (action != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                action.first,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .clickable(onClick = action.second)
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+            )
+        }
+    }
+}
+
+private fun openVpnSettings(context: Context) {
+    runCatching {
+        context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure {
+        Toast.makeText(context, "打不开系统的 VPN 设置", Toast.LENGTH_SHORT).show()
     }
 }
 
