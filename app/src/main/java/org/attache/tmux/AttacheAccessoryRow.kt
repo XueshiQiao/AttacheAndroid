@@ -196,6 +196,7 @@ fun AttacheToolbarStyleDialog(
     onDismiss: () -> Unit,
     currentFontSizeSp: Float = 14f,
     onChangeFontSize: ((Float) -> Unit)? = null,
+    onOpenTailscale: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val iconOnly by AttacheToolbarPrefs.iconOnlyFlow.collectAsState()
@@ -204,14 +205,6 @@ fun AttacheToolbarStyleDialog(
         org.attache.tailscale.TailscaleManager.init(context)
     }
     val tsState by org.attache.tailscale.TailscaleManager.uiState.collectAsState()
-    var showTailscaleDialog by remember { mutableStateOf(false) }
-
-    if (showTailscaleDialog) {
-        org.attache.tailscale.TailscaleDialog(
-            onDismiss = { showTailscaleDialog = false },
-        )
-    }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -496,7 +489,7 @@ fun AttacheToolbarStyleDialog(
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { showTailscaleDialog = true }
+                        .clickable(onClick = onOpenTailscale)
                         .testTag("tmuxSidebarTailscale"),
                 ) {
                     Row(

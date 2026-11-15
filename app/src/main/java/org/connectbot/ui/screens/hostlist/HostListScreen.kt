@@ -90,7 +90,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.attache.chat.ModeChooserDialog
-import org.attache.tailscale.TailscaleDialog
 import org.attache.tailscale.TailscaleStatusBadge
 import org.attache.tmux.TmuxTrial
 import org.connectbot.BuildConfig
@@ -131,6 +130,7 @@ fun HostListScreen(
     makingShortcut: Boolean = false,
     onSelectShortcut: (Host, String?, IconStyle) -> Unit = { _, _, _ -> },
     onNavigateToChat: (Host) -> Unit = {},
+    onNavigateToTailscale: () -> Unit = {},
     viewModel: HostListViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -295,6 +295,7 @@ fun HostListScreen(
         onNavigateToPortForwards = onNavigateToPortForwards,
         onNavigateToProfiles = onNavigateToProfiles,
         onNavigateToHelp = onNavigateToHelp,
+        onNavigateToTailscale = onNavigateToTailscale,
         onToggleSortOrder = viewModel::toggleSortOrder,
         onDeleteHost = viewModel::deleteHost,
         onDuplicateHost = viewModel::duplicateHost,
@@ -326,6 +327,7 @@ fun HostListScreenContent(
     onDisconnectHost: (Host) -> Unit,
     onDisconnectAll: () -> Unit,
     modifier: Modifier = Modifier,
+    onNavigateToTailscale: () -> Unit = {},
     makingShortcut: Boolean = false,
     onSelectShortcut: (Host) -> Unit = {},
     onExportHosts: () -> Unit = {},
@@ -333,12 +335,7 @@ fun HostListScreenContent(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDisconnectAllDialog by remember { mutableStateOf(false) }
-    var showTailscaleDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
-
-    if (showTailscaleDialog) {
-        TailscaleDialog(onDismiss = { showTailscaleDialog = false })
-    }
 
     // Show snackbar when there's an error
     LaunchedEffect(uiState.error) {
@@ -369,7 +366,7 @@ fun HostListScreenContent(
                 actions = {
                     if (!makingShortcut) {
                         TailscaleStatusBadge(
-                            onClick = { showTailscaleDialog = true },
+                            onClick = onNavigateToTailscale,
                             modifier = Modifier.padding(end = 4.dp),
                         )
                         IconButton(onClick = { showMenu = true }) {

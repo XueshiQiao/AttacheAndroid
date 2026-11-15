@@ -36,7 +36,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,12 +62,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 
 /**
- * Compact Tailscale status pill that opens the Tailscale page ([TailscaleDialog]) when tapped.
+ * Compact Tailscale status pill that opens the Tailscale page ([TailscaleScreen]) when tapped.
  */
 @Composable
 fun TailscaleStatusBadge(
@@ -120,8 +117,12 @@ fun TailscaleStatusBadge(
 }
 
 /**
- * The Tailscale page, full screen over whatever opened it (the TS pill on
- * the host list, the terminal's settings). Back closes it.
+ * The Tailscale page: a destination of its own in the app's navigation,
+ * pushed in from the right like any other page (the TS pill on the host
+ * list, the terminal's settings). It was first a full-screen Dialog, which
+ * the owner rejected on sight: a dialog is its own window, so the system
+ * dimmed the status and navigation bars around it and it arrived with no
+ * push — not a page of this app.
  *
  * Laid out as the owner chose on 2026-11-15 from
  * `docs/tailscale-page-designs.html`: design 1's identity card on top —
@@ -134,8 +135,8 @@ fun TailscaleStatusBadge(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TailscaleDialog(
-    onDismiss: () -> Unit,
+fun TailscaleScreen(
+    onNavigateBack: () -> Unit,
 ) {
     val context = LocalContext.current
     LaunchedEffect(Unit) {
@@ -144,64 +145,57 @@ fun TailscaleDialog(
     }
     val state by TailscaleManager.uiState.collectAsState()
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = { Text("Tailscale") },
-                        navigationIcon = {
-                            IconButton(onClick = onDismiss) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                            }
-                        },
-                        actions = {
-                            Switch(
-                                checked = state.enabled,
-                                enabled = state.nativeAvailable,
-                                onCheckedChange = { TailscaleManager.setEnabled(context, it) },
-                                modifier = Modifier
-                                    .padding(end = 12.dp)
-                                    .testTag("tailscaleEnableSwitch"),
-                            )
-                        },
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Tailscale") },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    Switch(
+                        checked = state.enabled,
+                        enabled = state.nativeAvailable,
+                        onCheckedChange = { TailscaleManager.setEnabled(context, it) },
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .testTag("tailscaleEnableSwitch"),
                     )
                 },
-            ) { inner ->
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier
-                        .padding(inner)
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
-                ) {
-                    if (!state.nativeAvailable) {
-                        Callout("这台设备的架构没有带 libattache_tsnet.so（需要 arm64-v8a），内置 Tailscale 用不了。")
-                    }
-                    IdentityCard(state)
-                    if (state.status.error.isNotEmpty()) Callout("错误：${state.status.error}")
-                    if (state.enabled) {
-                        SectionLabel("连接检查")
-                        CheckList(state)
-                        if (state.status.peers.isNotEmpty()) {
-                            SectionLabel("设备 · ${state.status.peers.count { it.online }} 台在线")
-                            PeerList(state.status.peers)
-                        }
-                    } else {
-                        Text(
-                            "打开右上角的开关，Attaché 会在 app 里面连上你的 Tailnet，不影响手机上的其他 app。",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 4.dp),
-                        )
-                    }
-                    AdvancedSettings(state)
-                }
+            )
+        },
+    ) { inner ->
+        Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .padding(inner)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+        ) {
+            if (!state.nativeAvailable) {
+                Callout("这台设备的架构没有带 libattache_tsnet.so（需要 arm64-v8a），内置 Tailscale 用不了。")
             }
+            IdentityCard(state)
+            if (state.status.error.isNotEmpty()) Callout("错误：${state.status.error}")
+            if (state.enabled) {
+                SectionLabel("连接检查")
+                CheckList(state)
+                if (state.status.peers.isNotEmpty()) {
+                    SectionLabel("设备 · ${state.status.peers.count { it.online }} 台在线")
+                    PeerList(state.status.peers)
+                }
+            } else {
+                Text(
+                    "打开右上角的开关，Attaché 会在 app 里面连上你的 Tailnet，不影响手机上的其他 app。",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+            AdvancedSettings(state)
         }
     }
 }

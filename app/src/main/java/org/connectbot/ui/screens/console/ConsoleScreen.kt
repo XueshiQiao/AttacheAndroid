@@ -764,6 +764,7 @@ fun ConsoleScreen(
     onNavigateToPortForwards: (UUID) -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToSettings: () -> Unit = {},
+    onNavigateToTailscale: () -> Unit = {},
     viewModel: ConsoleViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -2128,6 +2129,10 @@ fun ConsoleScreen(
                 },
                 currentFontSizeSp = currentFontSizeSp,
                 onChangeFontSize = { delta -> changeFontSize(delta) },
+                onOpenTailscale = {
+                    showToolbarStyleDialog = false
+                    onNavigateToTailscale()
+                },
             )
         }
 

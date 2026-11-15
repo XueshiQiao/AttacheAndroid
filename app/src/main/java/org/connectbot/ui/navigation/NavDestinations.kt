@@ -39,6 +39,7 @@ object NavDestinations {
     const val EULA = "eula"
     const val HINTS = "hints"
     const val CONTACT = "contact"
+    const val TAILSCALE = "tailscale"
 }
 
 object NavArgs {

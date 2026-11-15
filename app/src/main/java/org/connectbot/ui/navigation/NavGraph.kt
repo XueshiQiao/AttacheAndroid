@@ -17,6 +17,9 @@
 
 package org.connectbot.ui.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -24,6 +27,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavHostController
+import org.attache.tailscale.TailscaleScreen
 import androidx.navigation.NavOptions
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -60,6 +64,13 @@ import org.connectbot.util.IconStyle
 import timber.log.Timber
 import java.util.UUID
 
+private const val PUSH_MS = 300
+
+/** The page a push goes over: a third of the way left, as on iOS. */
+private fun pushedUnder() = slideOutHorizontally(tween(PUSH_MS)) { -it / 3 }
+
+private fun returnedFromUnder() = slideInHorizontally(tween(PUSH_MS)) { -it / 3 }
+
 @Composable
 fun ConnectBotNavHost(
     navController: NavHostController,
@@ -85,7 +96,13 @@ fun ConnectBotNavHost(
             startDestination = startDestination,
             modifier = modifier,
         ) {
-            composable(NavDestinations.HOST_LIST) {
+            composable(
+                NavDestinations.HOST_LIST,
+                // Under a pushed Tailscale page, the list moves a little
+                // left and back, as a page under an iOS push does.
+                exitTransition = { if (targetState.destination.route == NavDestinations.TAILSCALE) pushedUnder() else null },
+                popEnterTransition = { if (initialState.destination.route == NavDestinations.TAILSCALE) returnedFromUnder() else null },
+            ) {
                 HostListScreen(
                     makingShortcut = makingShortcut,
                     onNavigateToConsole = onNavigateToConsole,
@@ -115,7 +132,22 @@ fun ConnectBotNavHost(
                     onNavigateToHelp = {
                         navController.navigateSafely(NavDestinations.HELP)
                     },
+                    onNavigateToTailscale = {
+                        navController.navigateSafely(NavDestinations.TAILSCALE)
+                    },
                 )
+            }
+
+            // Pushed in from the right and popped back out to it, the way the
+            // owner asked for it: a page of the app, not a window over it.
+            composable(
+                NavDestinations.TAILSCALE,
+                enterTransition = { slideInHorizontally(tween(PUSH_MS)) { it } },
+                exitTransition = { pushedUnder() },
+                popEnterTransition = { returnedFromUnder() },
+                popExitTransition = { slideOutHorizontally(tween(PUSH_MS)) { it } },
+            ) {
+                TailscaleScreen(onNavigateBack = { navController.safePopBackStack() })
             }
 
             composable(
@@ -138,6 +170,9 @@ fun ConnectBotNavHost(
                     },
                     onNavigateToSettings = {
                         navController.navigateSafely(NavDestinations.SETTINGS_HIGHLIGHT_CONN_PERSIST)
+                    },
+                    onNavigateToTailscale = {
+                        navController.navigateSafely(NavDestinations.TAILSCALE)
                     },
                 )
             }
