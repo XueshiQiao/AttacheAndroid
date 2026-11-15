@@ -48,6 +48,8 @@ data class BindStatus(
     val ok: Long = 0,
     val failed: Long = 0,
     val lastError: String = "",
+    /** The latest bind: "ok", "failed", or "" before the first one. */
+    val last: String = "",
 )
 
 /**
@@ -491,6 +493,7 @@ object TailscaleManager {
                         ok = b.optLong("ok"),
                         failed = b.optLong("failed"),
                         lastError = b.optString("lastError"),
+                        last = b.optString("last"),
                     )
                 } ?: BindStatus(),
             )

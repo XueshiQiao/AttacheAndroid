@@ -397,47 +397,110 @@ fun TailscaleDialog(
  */
 @Composable
 private fun NetworkPathCard(net: PhoneNetwork, bind: BindStatus) {
-    val error = MaterialTheme.colorScheme.error
+    val verdict = networkVerdict(net, bind)
     Column(
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
             .padding(10.dp),
     ) {
-        Text("网络通道", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-        Text("物理网络: ${net.physical.ifEmpty { "未选到" }}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-        if (!net.vpnApplies) {
-            Text("VPN: 没有 VPN 接管 Attaché", fontSize = 12.sp)
-        } else {
-            val where = listOf(net.vpnInterface.ifEmpty { "未知网卡" }) + net.vpnAddresses
-            Text("VPN: 有 VPN 接管 Attaché · ${where.joinToString(" · ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-            val bypass = when (net.vpnBypassable) {
-                true -> "允许"
-                false -> "不允许"
-                null -> "系统没有说明"
-            }
-            Text("这个 VPN 是否允许 app 绕开: $bypass", fontSize = 12.sp, color = if (net.vpnBypassable == false) error else Color.Unspecified)
+        // The verdict first: everything below only explains it.
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("网络通道", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, modifier = Modifier.weight(1f))
+            VerdictChip(verdict)
         }
-        val bindText = when {
-            bind.handle == 0L -> "没有选到物理网络，没有尝试绕开 VPN"
-            bind.failed > 0 -> "绕开 VPN 失败 ${bind.failed} 次" +
-                (if (bind.ok > 0) "，成功 ${bind.ok} 次" else "") +
-                (if (bind.lastError.isNotEmpty()) "（${bind.lastError}）" else "")
-            bind.ok > 0 -> "绕开 VPN 成功：${bind.ok} 个连接直接走物理网络"
-            else -> "还没有建立过连接"
-        }
-        Text("Tailscale 的连接: $bindText", fontSize = 12.sp, color = if (bind.failed > 0) error else Color.Unspecified)
-        if (net.vpnApplies && (bind.failed > 0 || net.vpnBypassable == false)) {
-            Text(
-                "这个 VPN 不让 Attaché 绕开它，Attaché 的 Tailscale 只能经过它走，" +
-                    "UDP 常常不通，就连不上电脑或者非常慢。请在这个 VPN app 里把 Attaché " +
-                    "设成不走代理，或者打开它的「允许应用绕过 VPN」，然后重新打开 Attaché。",
-                fontSize = 12.sp,
-                color = error,
+        PathRow("物理网络", net.physical.ifEmpty { "未选到" })
+        PathRow(
+            "VPN",
+            if (net.vpnApplies) (listOf(net.vpnInterface.ifEmpty { "未知网卡" }) + net.vpnAddresses).joinToString(" · ") else "无",
+        )
+        if (net.vpnApplies) {
+            PathRow(
+                "允许绕开",
+                when (net.vpnBypassable) {
+                    true -> "允许"
+                    false -> "不允许"
+                    null -> "系统没有说明"
+                },
+                alarm = net.vpnBypassable == false,
             )
         }
+        PathRow(
+            "绕开结果",
+            when (bind.last) {
+                "ok" -> if (net.vpnApplies) "已绕开 VPN" else "直接走物理网络"
+                "failed" -> "没有绕开 VPN" +
+                    (if (bind.lastError.isNotEmpty()) "（${bind.lastError}）" else "") +
+                    "，已失败 ${bind.failed} 次"
+                else -> if (bind.handle == 0L) "没有选到物理网络" else "还没有试过"
+            },
+            alarm = bind.last == "failed",
+        )
+        if (verdict == Verdict.BLOCKED) {
+            Text(
+                "Attaché 的 Tailscale 只能经过这个 VPN 走，UDP 常常不通，所以连不上电脑或者很慢。" +
+                    "请在这个 VPN app 里把 Attaché 设成不走代理，或者打开它的「允许应用绕过 VPN」，然后重新打开 Attaché。",
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+private enum class Verdict { DIRECT, BLOCKED, UNKNOWN }
+
+/** What the card leads with, from the latest bind and the VPN in the way. */
+private fun networkVerdict(net: PhoneNetwork, bind: BindStatus): Verdict = when {
+    bind.last == "failed" && net.vpnApplies -> Verdict.BLOCKED
+    bind.last == "ok" -> Verdict.DIRECT
+    net.vpnApplies && net.vpnBypassable == false -> Verdict.BLOCKED
+    else -> Verdict.UNKNOWN
+}
+
+@Composable
+private fun VerdictChip(verdict: Verdict) {
+    val (label, bg, fg) = when (verdict) {
+        Verdict.DIRECT -> Triple("直连物理网络", Color(0xFF2E7D32).copy(alpha = 0.16f), Color(0xFF2E7D32))
+        Verdict.BLOCKED -> Triple("被 VPN 拦住", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+        Verdict.UNKNOWN -> Triple("还不知道", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Text(
+        label,
+        fontSize = 11.5.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = fg,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(bg)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    )
+}
+
+/** A label in a fixed muted column, its value beside it in the text colour. */
+@Composable
+private fun PathRow(label: String, value: String, alarm: Boolean = false) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(64.dp),
+        )
+        Text(
+            value,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

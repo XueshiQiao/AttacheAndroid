@@ -47,9 +47,9 @@ class TailscaleManagerTest {
     fun `reads what binding to the physical network did`() {
         val st = TailscaleManager.parseStatusJson(
             """{"running":true,"backendState":"Running","peers":[],"health":[],"error":"",
-               "bind":{"handle":772204843021,"ok":0,"failed":37,"lastError":"operation not permitted"}}""",
+               "bind":{"handle":772204843021,"ok":0,"failed":37,"lastError":"operation not permitted","last":"failed"}}""",
         )
-        assertEquals(BindStatus(772204843021, 0, 37, "operation not permitted"), st.bind)
+        assertEquals(BindStatus(772204843021, 0, 37, "operation not permitted", "failed"), st.bind)
         // A bridge from before the field: nothing tried, nothing failed.
         assertEquals(BindStatus(), TailscaleManager.parseStatusJson("""{"running":false}""").bind)
     }

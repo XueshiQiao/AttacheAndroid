@@ -114,6 +114,10 @@ var (
 	bindOK      atomic.Uint64
 	bindFailed  atomic.Uint64
 	bindLastErr atomic.Value // string
+	// The latest bind: 0 none yet, 1 worked, 2 refused. The counts only
+	// grow — tsnet opens sockets for every netcheck — so what the dialog
+	// leads with is this.
+	bindLast atomic.Int32
 
 	ifacesMu     sync.RWMutex
 	cachedIfaces []netmon.Interface
@@ -143,8 +147,10 @@ func init() {
 				logf("Binding a socket to physical network handle=%d failed: %s; it goes through the VPN", handle, why)
 			}
 			bindLastErr.Store(why)
+			bindLast.Store(2)
 		} else {
 			bindOK.Add(1)
+			bindLast.Store(1)
 		}
 		return nil
 	})
@@ -359,6 +365,8 @@ type bindJSON struct {
 	OK        uint64 `json:"ok"`
 	Failed    uint64 `json:"failed"`
 	LastError string `json:"lastError"`
+	// "ok", "failed", or "" before the first bind on this network.
+	Last string `json:"last"`
 }
 
 func currentBind() bindJSON {
@@ -368,6 +376,7 @@ func currentBind() bindJSON {
 		OK:        bindOK.Load(),
 		Failed:    bindFailed.Load(),
 		LastError: why,
+		Last:      [...]string{"", "ok", "failed"}[bindLast.Load()],
 	}
 }
 
@@ -835,6 +844,7 @@ func Java_org_attache_tailscale_TsnetNative_nativeSetNetworkHandle(
 		bindOK.Store(0)
 		bindFailed.Store(0)
 		bindLastErr.Store("")
+		bindLast.Store(0)
 		logf("Updated active physical network handle=%d if=%s gw=%s", handle, ifName, gw)
 		injectNetMonEvent()
 	}
