@@ -140,4 +140,15 @@ class ChatMarkdownTest {
         assertEquals("[logo]", paragraph("![logo](https://example.com/a.png)").text)
         assertEquals(1, blocks("[notes](file:///tmp/notes.md) and [site](https://example.com/a.png)").size)
     }
+
+    @Test
+    fun aMermaidBlockIsADiagramOnlyOnceItsFenceIsClosed() {
+        val source = "flowchart TD\n    A[\"每 5 分钟\"] --> B"
+        assertEquals(listOf(MdBlock.Diagram(source)), blocks("```mermaid\n$source\n```"))
+        assertEquals(listOf(MdBlock.Diagram(source)), blocks("``` Mermaid title\n$source\n```"))
+        // Still being written: the fence is open, and it stays code.
+        assertEquals(listOf(MdBlock.Preformatted(source)), blocks("```mermaid\n$source"))
+        assertEquals(listOf(MdBlock.Preformatted(source)), blocks("```\n$source\n```"))
+        assertEquals(listOf(MdBlock.Preformatted(source)), blocks("```mermaidx\n$source\n```"))
+    }
 }

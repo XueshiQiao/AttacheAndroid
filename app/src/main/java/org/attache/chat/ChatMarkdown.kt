@@ -105,6 +105,11 @@ internal sealed interface MdBlock {
     /** Code keeps its columns, so it is monospace. */
     data class Preformatted(val text: String, val indent: Int = 0) : MdBlock
 
+    /** A ```mermaid block whose closing fence has arrived: drawn as a
+     * picture when attache-cli on the host can lay it out, and as the code
+     * it is until then ([ChatDiagram]). */
+    data class Diagram(val source: String, val indent: Int = 0) : MdBlock
+
     /** Every row has as many cells as [header], one [align] per column. */
     data class Table(
         val header: List<AnnotatedString>,
@@ -225,7 +230,15 @@ internal object ChatMarkdown {
                 }
             }
 
-            is FencedCodeBlock -> out += MdBlock.Preformatted(node.literal.trimEnd('\n'), indent)
+            is FencedCodeBlock -> {
+                val text = node.literal.trimEnd('\n')
+                // Only a closed fence is a diagram: a reply still being
+                // written ends inside its fence, and drawing that would be
+                // asking for a picture of half a diagram on every token.
+                val diagram = node.closingFenceLength != null && text.isNotBlank() &&
+                    node.info.orEmpty().trim().substringBefore(' ').equals("mermaid", ignoreCase = true)
+                out += if (diagram) MdBlock.Diagram(text, indent) else MdBlock.Preformatted(text, indent)
+            }
 
             is IndentedCodeBlock -> out += MdBlock.Preformatted(node.literal.trimEnd('\n'), indent)
 
@@ -441,6 +454,8 @@ private fun MarkdownBlocks(blocks: List<MdBlock>, badge: MdBadge? = null) {
 
                 is MdBlock.Preformatted -> CodeBlock(block.text, Modifier.padding(start = under(block.indent)))
 
+                is MdBlock.Diagram -> ChatDiagram(block, Modifier.padding(start = under(block.indent)))
+
                 is MdBlock.Table -> MarkdownTable(block, Modifier.padding(start = under(block.indent)))
 
                 is MdBlock.Quote -> Row(Modifier.height(IntrinsicSize.Min)) {
@@ -476,6 +491,7 @@ private fun MdBlock.indentOf(): Int = when (this) {
     is MdBlock.Paragraph -> indent
     is MdBlock.Bullet -> indent
     is MdBlock.Preformatted -> indent
+    is MdBlock.Diagram -> indent
     is MdBlock.Table -> indent
     is MdBlock.Media -> indent
     else -> 0
