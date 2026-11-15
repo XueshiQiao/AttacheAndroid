@@ -23,7 +23,10 @@ sealed interface ChatItem {
 
     data class UserText(override val key: String, val text: String, val queued: Boolean = false) : ChatItem
 
-    data class AgentText(override val key: String, val text: String) : ChatItem
+    /** What the agent said. [narration]: a line written along the way that
+     * Claude Code files as a thinking block — it reads and carries its run
+     * like any other line, and is drawn with a bar before it. */
+    data class AgentText(override val key: String, val text: String, val narration: Boolean = false) : ChatItem
 
     data class Thinking(override val key: String, val text: String) : ChatItem
 

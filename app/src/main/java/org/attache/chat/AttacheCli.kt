@@ -441,6 +441,18 @@ object AttacheCli {
         )
     }.sortedWith(compareBy<AgentPane>({ it.phase.ordinal }, { -(it.sinceEpochSec ?: 0L) }))
 
+    /**
+     * The rows after an `items` event: rows [from]… replaced, or all of them
+     * on a [fresh] read. A row this app cannot read stays as null, because
+     * `from` counts it: dropping it made every later `from` land a row off,
+     * so rows went missing or showed twice — what a client one release
+     * behind did the day `narration` was added.
+     */
+    fun splice(rows: List<ChatItem?>, from: Int, items: JSONArray, fresh: Boolean): List<ChatItem?> {
+        val parsed = (0 until items.length()).map { i -> items.optJSONObject(i)?.let(::item) }
+        return if (fresh) parsed else rows.take(from) + parsed
+    }
+
     /** One row of a conversation, as `follow` sends it. */
     fun item(o: JSONObject): ChatItem? {
         val key = o.optString("key").ifEmpty { return null }
@@ -448,6 +460,10 @@ object AttacheCli {
             "user" -> ChatItem.UserText(key, o.optString("text"), queued = o.optBoolean("queued"))
 
             "agent" -> ChatItem.AgentText(key, o.optString("text"))
+
+            // attache-cli 0.3.16: a line written to the person that the
+            // transcript files as thinking. Shown, not folded with the work.
+            "narration" -> ChatItem.AgentText(key, o.optString("text"), narration = true)
 
             "thinking" -> ChatItem.Thinking(key, o.optString("text"))
 

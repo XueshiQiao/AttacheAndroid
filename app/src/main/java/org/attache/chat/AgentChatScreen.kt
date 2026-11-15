@@ -598,7 +598,7 @@ internal fun Conversation(state: AgentChatUiState, follow: FollowState, onLoadEa
 
                     is ToolGroup -> ToolGroupCard(row)
 
-                    is ChatItem.AgentText -> MarkdownText(row.text, Modifier.fillMaxWidth())
+                    is ChatItem.AgentText -> MarkdownText(row.text, Modifier.fillMaxWidth().narrationBar(row.narration))
 
                     is MarkedText -> MarkedReply(row, hold)
 
@@ -898,10 +898,24 @@ private fun MarkedReply(row: MarkedText, hold: RowHold) {
             .testTag("line:${row.key}")
             .then(fold.measure),
     ) {
-        MarkdownText(row.text.text, Modifier.fillMaxWidth(), badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle, tag = "fold:${row.key}"))
-        row.running?.let { RunningLine(it) }
+        MarkdownText(row.text.text, Modifier.fillMaxWidth().narrationBar(row.text.narration), badge = runBadge(row.steps, row.thoughts, row.failed, row.live, toggle, tag = "fold:${row.key}"))
+        row.running?.let { RunningLine(it, Modifier.padding(start = if (row.text.narration) 12.dp else 0.dp)) }
         if (open || fold.measuring) RunSteps(row.run, fold.steps)
     }
+}
+
+/** Narration is set apart from a reply by a grey bar before it (asked for
+ * on 2026-11-15), the same as on the desktop. */
+@Composable
+private fun Modifier.narrationBar(narration: Boolean): Modifier {
+    if (!narration) return this
+    val bar = MaterialTheme.colorScheme.outlineVariant
+    return this
+        .drawBehind {
+            val x = 1.dp.toPx()
+            drawLine(bar, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+        }
+        .padding(start = 12.dp)
 }
 
 /** A run nothing was said beside: the badge on a line of its own. */
@@ -964,7 +978,7 @@ private fun runBadge(steps: Int, thoughts: Int, failed: Int, live: Boolean, onTa
 
 /** The step still out, under its line, while the run goes on. */
 @Composable
-private fun RunningLine(step: ChatItem.ToolStep) {
+private fun RunningLine(step: ChatItem.ToolStep, modifier: Modifier = Modifier) {
     Text(
         "…  ${step.name}  ${step.summary}",
         style = MaterialTheme.typography.labelMedium,
@@ -972,7 +986,8 @@ private fun RunningLine(step: ChatItem.ToolStep) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(top = 4.dp),
+        // Under the text it belongs to, past a narration's bar.
+        modifier = modifier.padding(top = 4.dp),
     )
 }
 

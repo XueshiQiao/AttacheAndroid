@@ -108,8 +108,9 @@ class LiveConversation internal constructor(
     private val _view = MutableStateFlow(ConversationView())
     val view: StateFlow<ConversationView> = _view.asStateFlow()
 
-    // What the current follow has sent. On the lane only.
-    private var items: List<ChatItem> = emptyList()
+    // What the current follow has sent, indexed as attache-cli indexes it
+    // (see [AttacheCli.splice]). On the lane only.
+    private var items: List<ChatItem?> = emptyList()
     private var status: AgentStatus? = null
     private var start: Long? = null
 
@@ -171,8 +172,7 @@ class LiveConversation internal constructor(
                         "items" -> {
                             val from = event.optInt("from")
                             val rows = event.optJSONArray("items") ?: JSONArray()
-                            val parsed = (0 until rows.length()).mapNotNull { i -> rows.optJSONObject(i)?.let(AttacheCli::item) }
-                            items = if (fresh) parsed else items.take(from) + parsed
+                            items = AttacheCli.splice(items, from, rows, fresh)
                             fresh = false
                             before = null
                             publish()
@@ -194,7 +194,7 @@ class LiveConversation internal constructor(
     }
 
     private fun publish() {
-        _view.value = ConversationView(items, status, start, TranscriptStatus.LIVE)
+        _view.value = ConversationView(items.filterNotNull(), status, start, TranscriptStatus.LIVE)
     }
 
     /**

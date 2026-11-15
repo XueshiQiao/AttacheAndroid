@@ -46,6 +46,15 @@ class WorkRunsTest {
     }
 
     @Test
+    fun narrationCarriesItsRunLikeAnyLine() {
+        val n = ChatItem.AgentText("n1", "said n1", narration = true)
+        assertEquals(
+            "u1 a1{w:a1 t0 s1 f0} n1{w:n1 t0 s1 f0} a2",
+            show(WorkRuns.attach(listOf(u("u1"), a("a1"), tl("x1"), n, tl("x2"), a("a2")), working = false)),
+        )
+    }
+
+    @Test
     fun aRunBeforeAnyLineJoinsTheNextLine() {
         assertEquals(
             "u1 a1{run:x0 t0 s2 f0} a2",

@@ -18,6 +18,7 @@
 package org.attache.chat
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -138,6 +139,14 @@ class AttacheCliTest {
         )
         assertEquals(ChatItem.Note("n", "Interrupted"), AttacheCli.item(JSONObject("""{"type":"note","key":"n","text":"Interrupted"}""")))
         assertNull(AttacheCli.item(JSONObject("""{"type":"future-kind","key":"z"}""")))
+        // `from` counts the rows this app cannot read too.
+        val first = JSONArray("""[{"type":"user","key":"u","text":"hi"},{"type":"future-kind","key":"f"},{"type":"agent","key":"a","text":"one"}]""")
+        val rows = AttacheCli.splice(AttacheCli.splice(emptyList(), 0, first, fresh = true), 2, JSONArray("""[{"type":"agent","key":"a","text":"one, two"}]"""), fresh = false)
+        assertEquals(listOf(ChatItem.UserText("u", "hi"), ChatItem.AgentText("a", "one, two")), rows.filterNotNull())
+        assertEquals(
+            ChatItem.AgentText("n-1", "Built; now the fonts.", narration = true),
+            AttacheCli.item(JSONObject("""{"type":"narration","key":"n-1","text":"Built; now the fonts."}""")),
+        )
     }
 
     @Test
