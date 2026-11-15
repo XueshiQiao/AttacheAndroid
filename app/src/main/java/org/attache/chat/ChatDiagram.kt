@@ -74,7 +74,7 @@ import org.json.JSONObject
 
 /**
  * A ```` ```mermaid ```` block as a picture. attache-cli on the host draws
- * it (`mermaid`, 0.3.15) as a PNG, so the desktop shows the same one, and
+ * it (`mermaid`, 0.3.17) as a PNG, so the desktop shows the same one, and
  * this shows that PNG. No WebView draws anything here and none may: the
  * owner's ruling of 2026-11-15, after a first version that loaded an SVG
  * into one.
@@ -109,7 +109,7 @@ internal object ChatDiagrams {
     const val SCALE = 3
 
     /** Raised by hand when attache-cli's defaults change what it draws for the same source. */
-    private const val GENERATION = 2
+    private const val GENERATION = 3
 
     private val refused = ConcurrentHashMap.newKeySet<String>()
     private val unanswered = ConcurrentHashMap<String, Long>()
