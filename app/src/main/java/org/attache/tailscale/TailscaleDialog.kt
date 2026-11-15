@@ -222,6 +222,8 @@ fun TailscaleDialog(
                     }
                 }
 
+                if (state.enabled) NetworkPathCard(state.network, state.status.bind)
+
                 // Login / Logout actions
                 if (state.enabled) {
                     if (!state.status.running) {
@@ -383,6 +385,66 @@ fun TailscaleDialog(
             }
         },
     )
+}
+
+/**
+ * Which way the embedded Tailscale's packets leave the phone: the physical
+ * network it binds to, any VPN that carries this app, and whether binding
+ * past that VPN worked. When it did not, the packets ride the VPN — on
+ * 2026-11-15 that was FlClash with UDP blocked, so the desktop was reached
+ * only through a DERP relay in Europe and chat never connected, with
+ * nothing on screen to say why.
+ */
+@Composable
+private fun NetworkPathCard(net: PhoneNetwork, bind: BindStatus) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val error = MaterialTheme.colorScheme.error
+    Column(
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .padding(10.dp),
+    ) {
+        Text("网络通道", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+        Text("物理网络: ${net.physical.ifEmpty { "未选到" }}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        if (!net.vpnApplies) {
+            Text("VPN: 没有 VPN 接管 Attaché", fontSize = 12.sp)
+        } else {
+            val where = listOf(net.vpnInterface.ifEmpty { "未知网卡" }) + net.vpnAddresses
+            Text("VPN: 有 VPN 接管 Attaché · ${where.joinToString(" · ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+            val bypass = when (net.vpnBypassable) {
+                true -> "允许"
+                false -> "不允许"
+                null -> "系统没有说明"
+            }
+            Text("这个 VPN 是否允许 app 绕开: $bypass", fontSize = 12.sp, color = if (net.vpnBypassable == false) error else Color.Unspecified)
+        }
+        val bindText = when {
+            bind.handle == 0L -> "没有选到物理网络，没有尝试绕开 VPN"
+            bind.failed > 0 -> "绕开 VPN 失败 ${bind.failed} 次" +
+                (if (bind.ok > 0) "，成功 ${bind.ok} 次" else "") +
+                (if (bind.lastError.isNotEmpty()) "（${bind.lastError}）" else "")
+            bind.ok > 0 -> "绕开 VPN 成功：${bind.ok} 个连接直接走物理网络"
+            else -> "还没有建立过连接"
+        }
+        Text("Tailscale 的连接: $bindText", fontSize = 12.sp, color = if (bind.failed > 0) error else Color.Unspecified)
+        if (net.vpnApplies && (bind.failed > 0 || net.vpnBypassable == false)) {
+            Text(
+                "这个 VPN 不让 Attaché 绕开它，Attaché 的 Tailscale 只能经过它走，" +
+                    "UDP 常常不通，就连不上电脑或者非常慢。请在这个 VPN app 里把 Attaché " +
+                    "设成不走代理，或者打开它的「允许应用绕过 VPN」，然后重新打开 Attaché。",
+                fontSize = 12.sp,
+                color = error,
+            )
+        }
+        Text(
+            "手机上装的 VPN app: ${net.vpnApps.ifEmpty { listOf("无") }.joinToString("、")}",
+            fontSize = 11.5.sp,
+            color = muted,
+        )
+    }
 }
 
 private fun openBrowserUrl(context: Context, url: String) {

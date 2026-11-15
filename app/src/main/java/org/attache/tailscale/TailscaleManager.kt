@@ -1,12 +1,14 @@
 package org.attache.tailscale
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.VpnService
 import android.os.Build
 import androidx.preference.PreferenceManager
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +43,35 @@ data class TailscalePeer(
     val direct: String,
 )
 
+/** What binding tsnet's sockets to the physical network has done since that
+ * network was chosen ([handle] 0: none was chosen, so nothing was tried). */
+data class BindStatus(
+    val handle: Long = 0,
+    val ok: Long = 0,
+    val failed: Long = 0,
+    val lastError: String = "",
+)
+
+/**
+ * The phone's network as it bears on the embedded Tailscale: which physical
+ * network tsnet is told to use, and whether a VPN carries this app's traffic.
+ * Android does not tell an app which app runs a VPN (the owner is redacted
+ * for everyone but that app), so the VPN is named by its interface and
+ * addresses, next to the VPN apps installed.
+ */
+data class PhoneNetwork(
+    /** e.g. "Wi-Fi · wlan0 · 192.168.8.157"; empty when none was chosen. */
+    val physical: String = "",
+    /** A VPN is this app's default network. */
+    val vpnApplies: Boolean = false,
+    val vpnInterface: String = "",
+    val vpnAddresses: List<String> = emptyList(),
+    /** Whether that VPN lets apps bypass it; null when the system did not say. */
+    val vpnBypassable: Boolean? = null,
+    /** Labels of the installed apps that offer a VPN, this one excluded. */
+    val vpnApps: List<String> = emptyList(),
+)
+
 data class TailscaleStatus(
     val running: Boolean = false,
     val backendState: String = "Stopped",
@@ -54,6 +85,7 @@ data class TailscaleStatus(
     val peers: List<TailscalePeer> = emptyList(),
     val health: List<String> = emptyList(),
     val error: String = "",
+    val bind: BindStatus = BindStatus(),
 )
 
 data class TailscaleUiState(
@@ -64,6 +96,7 @@ data class TailscaleUiState(
     val controlUrl: String = "",
     val isStartingLogin: Boolean = false,
     val status: TailscaleStatus = TailscaleStatus(),
+    val network: PhoneNetwork = PhoneNetwork(),
 )
 
 /**
@@ -95,6 +128,10 @@ object TailscaleManager {
     private var networkCallbackRegistered = false
 
     private val availablePhysicalNetworks = ConcurrentHashMap<Network, Boolean>()
+
+    /** The physical network last handed to tsnet, as the dialog shows it. */
+    @Volatile
+    private var chosenPhysical: String = ""
 
     private var pollJob: Job? = null
 
@@ -353,6 +390,10 @@ object TailscaleManager {
 
     fun refreshStatusNow() {
         if (!TsnetNative.isAvailable) return
+        val network = appContext?.let { runCatching { readPhoneNetwork(it) }.getOrNull() }
+        if (network != null && network != _uiState.value.network) {
+            _uiState.update { it.copy(network = network) }
+        }
         val raw = runCatching { TsnetNative.nativeStatusJson() }.getOrDefault("")
         if (raw.isBlank()) return
         val parsed = parseStatusJson(raw)
@@ -360,6 +401,45 @@ object TailscaleManager {
             _uiState.update { it.copy(status = parsed) }
         }
     }
+
+    private fun readPhoneNetwork(context: Context): PhoneNetwork {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        // The default network the system gives this app: a VPN here is one
+        // that carries this app, not merely one running for another user.
+        val active = cm?.activeNetwork
+        val caps = active?.let { runCatching { cm.getNetworkCapabilities(it) }.getOrNull() }
+        val vpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        val lp = if (vpn) runCatching { cm?.getLinkProperties(active) }.getOrNull() else null
+        val bypassable = if (vpn && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            parseVpnBypassable(runCatching { caps?.transportInfo?.toString() }.getOrNull())
+        } else {
+            null
+        }
+        val apps = runCatching {
+            context.packageManager.queryIntentServices(Intent(VpnService.SERVICE_INTERFACE), 0)
+                .filter { it.serviceInfo.packageName != context.packageName }
+                .map { it.loadLabel(context.packageManager).toString() }
+                .distinct()
+                .sorted()
+        }.getOrDefault(emptyList())
+        return PhoneNetwork(
+            physical = chosenPhysical,
+            vpnApplies = vpn,
+            vpnInterface = lp?.interfaceName.orEmpty(),
+            vpnAddresses = lp?.linkAddresses.orEmpty().mapNotNull { it.address?.hostAddress?.substringBefore('%') },
+            vpnBypassable = bypassable,
+            vpnApps = apps,
+        )
+    }
+
+    /**
+     * Whether a VPN lets apps bypass it, from its transport info's text:
+     * `VpnTransportInfo{type=1, sessionId=…, bypassable=false, …}`, as
+     * measured with adb on 2026-11-15 (FlClash: false). The class is not
+     * public API, so this reads the text and gives up on anything else.
+     */
+    internal fun parseVpnBypassable(info: String?): Boolean? =
+        info?.let { Regex("""\bbypassable=(true|false)\b""").find(it)?.groupValues?.get(1)?.toBooleanStrictOrNull() }
 
     internal fun parseStatusJson(raw: String): TailscaleStatus {
         return try {
@@ -416,6 +496,14 @@ object TailscaleManager {
                 peers = peers,
                 health = health,
                 error = obj.optString("error"),
+                bind = obj.optJSONObject("bind")?.let { b ->
+                    BindStatus(
+                        handle = b.optLong("handle"),
+                        ok = b.optLong("ok"),
+                        failed = b.optLong("failed"),
+                        lastError = b.optString("lastError"),
+                    )
+                } ?: BindStatus(),
             )
         } catch (t: Throwable) {
             Timber.w(t, "Failed to parse Tailscale status JSON")
@@ -531,8 +619,19 @@ object TailscaleManager {
                     ?.hostAddress
                     .orEmpty()
                 TsnetNative.nativeSetNetworkHandle(bestNetwork.networkHandle, ifName, gw)
+                val caps = cm.getNetworkCapabilities(bestNetwork)
+                val kind = when {
+                    caps == null -> "Network"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "移动数据"
+                    else -> "Network"
+                }
+                val v4 = lp?.linkAddresses?.firstOrNull { it.address is Inet4Address }?.address?.hostAddress
+                chosenPhysical = listOfNotNull(kind, ifName.ifEmpty { null }, v4).joinToString(" · ")
             } else {
                 TsnetNative.nativeSetNetworkHandle(0L, "", "")
+                chosenPhysical = ""
             }
             pushAndroidInterfaces()
         } catch (t: Throwable) {

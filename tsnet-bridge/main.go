@@ -104,6 +104,17 @@ var (
 
 	activeNetworkHandle atomic.Uint64
 
+	// How binding sockets to the physical network has gone since the handle
+	// last changed. A VPN that does not allow apps to bypass it (Android's
+	// "bypassable" off, as FlClash runs) refuses every bind with EPERM, and
+	// the socket then rides the VPN: on 2026-11-15 that put every packet
+	// through FlClash's tun0, where UDP was blocked, so the phone reached
+	// the desktop only through a DERP relay in Nuremberg and chat never
+	// connected. The failure used to be dropped silently; now the app shows it.
+	bindOK      atomic.Uint64
+	bindFailed  atomic.Uint64
+	bindLastErr atomic.Value // string
+
 	ifacesMu     sync.RWMutex
 	cachedIfaces []netmon.Interface
 
@@ -113,6 +124,7 @@ var (
 
 func init() {
 	latestAuthURL.Store("")
+	bindLastErr.Store("")
 	netmon.RegisterInterfaceGetter(getAndroidInterfaces)
 	registerPlatformHooks(func(fd int) error {
 		handle := activeNetworkHandle.Load()
@@ -122,7 +134,18 @@ func init() {
 		// Best-effort bind to the physical non-VPN network handle.
 		// If a strict lockdown VPN denies binding (EPERM), do not fail the socket
 		// so tsnet can still fall back to dialing through the default network/DERP.
-		_ = C.bind_socket_to_network(C.uint64_t(handle), C.int(fd))
+		if r, err := C.bind_socket_to_network(C.uint64_t(handle), C.int(fd)); r != 0 {
+			why := "bind refused"
+			if err != nil {
+				why = err.Error()
+			}
+			if bindFailed.Add(1) == 1 || bindLastErr.Load() != why {
+				logf("Binding a socket to physical network handle=%d failed: %s; it goes through the VPN", handle, why)
+			}
+			bindLastErr.Store(why)
+		} else {
+			bindOK.Add(1)
+		}
 		return nil
 	})
 }
@@ -326,6 +349,26 @@ type statusJSON struct {
 	Peers          []peerInfoJSON `json:"peers"`
 	Health         []string       `json:"health"`
 	Error          string         `json:"error"`
+	Bind           bindJSON       `json:"bind"`
+}
+
+// What binding to the physical network has done since the handle changed.
+// handle 0: no physical network was chosen, so nothing was attempted.
+type bindJSON struct {
+	Handle    uint64 `json:"handle"`
+	OK        uint64 `json:"ok"`
+	Failed    uint64 `json:"failed"`
+	LastError string `json:"lastError"`
+}
+
+func currentBind() bindJSON {
+	why, _ := bindLastErr.Load().(string)
+	return bindJSON{
+		Handle:    activeNetworkHandle.Load(),
+		OK:        bindOK.Load(),
+		Failed:    bindFailed.Load(),
+		LastError: why,
+	}
 }
 
 //export Java_org_attache_tailscale_TsnetNative_nativeStart
@@ -536,6 +579,7 @@ func Java_org_attache_tailscale_TsnetNative_nativeStatusJson(
 		Peers:        []peerInfoJSON{},
 		Health:       []string{},
 		Error:        initErr,
+		Bind:         currentBind(),
 	}
 
 	if s == nil {
@@ -787,6 +831,10 @@ func Java_org_attache_tailscale_TsnetNative_nativeSetNetworkHandle(
 	updatePlatformDefaultGateway(gw)
 
 	if old != handle {
+		// The counts describe the network now in use, not the last one.
+		bindOK.Store(0)
+		bindFailed.Store(0)
+		bindLastErr.Store("")
 		logf("Updated active physical network handle=%d if=%s gw=%s", handle, ifName, gw)
 		injectNetMonEvent()
 	}

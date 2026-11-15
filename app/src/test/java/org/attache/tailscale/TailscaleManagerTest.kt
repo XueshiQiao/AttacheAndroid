@@ -2,6 +2,7 @@ package org.attache.tailscale
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,6 +33,26 @@ class TailscaleManagerTest {
             direct = "",
         ),
     )
+
+    @Test
+    fun `reads whether a VPN lets apps bypass it from its transport info`() {
+        // As adb printed FlClash's and v2rayNG's on 2026-11-15.
+        assertEquals(false, TailscaleManager.parseVpnBypassable("VpnTransportInfo{type=1, sessionId=FlClash, bypassable=false longLivedTcpConnectionsExpensive=false}"))
+        assertEquals(true, TailscaleManager.parseVpnBypassable("VpnTransportInfo{type=1, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=false}"))
+        assertNull(TailscaleManager.parseVpnBypassable("VpnTransportInfo{type=1, sessionId=null}"))
+        assertNull(TailscaleManager.parseVpnBypassable(null))
+    }
+
+    @Test
+    fun `reads what binding to the physical network did`() {
+        val st = TailscaleManager.parseStatusJson(
+            """{"running":true,"backendState":"Running","peers":[],"health":[],"error":"",
+               "bind":{"handle":772204843021,"ok":0,"failed":37,"lastError":"operation not permitted"}}""",
+        )
+        assertEquals(BindStatus(772204843021, 0, 37, "operation not permitted"), st.bind)
+        // A bridge from before the field: nothing tried, nothing failed.
+        assertEquals(BindStatus(), TailscaleManager.parseStatusJson("""{"running":false}""").bind)
+    }
 
     @Test
     fun `routes Tailscale CGNAT IPv4 100_64_0_0 slash 10 via Tailscale`() {
