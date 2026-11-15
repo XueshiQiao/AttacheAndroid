@@ -461,7 +461,7 @@ object AttacheCli {
 
             "agent" -> ChatItem.AgentText(key, o.optString("text"))
 
-            // attache-cli 0.3.16: a line written to the person that the
+            // attache-cli 0.3.17: a line written to the person that the
             // transcript files as thinking. Shown, not folded with the work.
             "narration" -> ChatItem.AgentText(key, o.optString("text"), narration = true)
 
