@@ -56,3 +56,7 @@ Do not overwrite unrelated local changes. Keep edits scoped to the requested beh
    - The debug build type runs R8 code shrinking (`isMinifyEnabled = true`) and has no test coverage instrumentation, so the APK sent to the phone is about 28 MB instead of 61 MB. Measured from clean packages: 61.1 MB as it was, 50.2 MB without coverage, 28.4 MB with R8 too.
    - Resource shrinking (`isShrinkResources`) is left off on purpose: it only took the APK to 26.1 MB. Do not turn it on, and do not put coverage back, without the owner asking.
    - When measuring APK sizes, delete the old APK first: debug packaging edits the previous file in place and the space freed by removed entries stays in it, so an incremental build reads tens of MB too large.
+
+## No WebView, anywhere, for anything
+
+No `android.webkit.WebView`, not as a renderer for one widget and not "only as a drawing engine with JavaScript off". The owner ruled this on 2026-11-15: the chat page is exactly the kind of view a WebView suits and it was built in Compose on purpose, so a WebView does not come in through the side door for a diagram, a table, a preview or anything else. A feature that can only be had with one is a feature this app does not have. The worked example: Mermaid diagrams were first drawn by loading attache-cli's SVG into a WebView (b115); that was thrown out, and attache-cli draws a PNG that `ChatDiagram` shows as a bitmap. When Compose cannot draw something, move the rendering to attache-cli and ship pixels, or leave the content as text. The desktop app's CLAUDE.md has the same rule.

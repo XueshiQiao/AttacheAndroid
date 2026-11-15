@@ -186,7 +186,8 @@ internal object ChatMedia {
     fun anyCopy(folder: File): File? = folder.listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }?.maxByOrNull { it.lastModified() }
 
     // One at a time: they share one transfer connection with the inbox.
-    private val downloading = Mutex()
+    // [ChatDiagrams] fetches its pictures over the same one, under this.
+    internal val downloading = Mutex()
 
     suspend fun download(
         control: TmuxControl,
