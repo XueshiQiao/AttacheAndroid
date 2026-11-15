@@ -1,14 +1,12 @@
 package org.attache.tailscale
 
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.net.VpnService
 import android.os.Build
 import androidx.preference.PreferenceManager
 import kotlinx.coroutines.CoroutineScope
@@ -57,7 +55,8 @@ data class BindStatus(
  * network tsnet is told to use, and whether a VPN carries this app's traffic.
  * Android does not tell an app which app runs a VPN (the owner is redacted
  * for everyone but that app), so the VPN is named by its interface and
- * addresses, next to the VPN apps installed.
+ * addresses. A list of installed VPN apps stood beside it in b120 and was
+ * taken out: on the owner's phone it named the wrong apps.
  */
 data class PhoneNetwork(
     /** e.g. "Wi-Fi · wlan0 · 192.168.8.157"; empty when none was chosen. */
@@ -68,8 +67,6 @@ data class PhoneNetwork(
     val vpnAddresses: List<String> = emptyList(),
     /** Whether that VPN lets apps bypass it; null when the system did not say. */
     val vpnBypassable: Boolean? = null,
-    /** Labels of the installed apps that offer a VPN, this one excluded. */
-    val vpnApps: List<String> = emptyList(),
 )
 
 data class TailscaleStatus(
@@ -415,20 +412,12 @@ object TailscaleManager {
         } else {
             null
         }
-        val apps = runCatching {
-            context.packageManager.queryIntentServices(Intent(VpnService.SERVICE_INTERFACE), 0)
-                .filter { it.serviceInfo.packageName != context.packageName }
-                .map { it.loadLabel(context.packageManager).toString() }
-                .distinct()
-                .sorted()
-        }.getOrDefault(emptyList())
         return PhoneNetwork(
             physical = chosenPhysical,
             vpnApplies = vpn,
             vpnInterface = lp?.interfaceName.orEmpty(),
             vpnAddresses = lp?.linkAddresses.orEmpty().mapNotNull { it.address?.hostAddress?.substringBefore('%') },
             vpnBypassable = bypassable,
-            vpnApps = apps,
         )
     }
 

@@ -397,7 +397,6 @@ fun TailscaleDialog(
  */
 @Composable
 private fun NetworkPathCard(net: PhoneNetwork, bind: BindStatus) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val error = MaterialTheme.colorScheme.error
     Column(
         verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -439,11 +438,6 @@ private fun NetworkPathCard(net: PhoneNetwork, bind: BindStatus) {
                 color = error,
             )
         }
-        Text(
-            "手机上装的 VPN app: ${net.vpnApps.ifEmpty { listOf("无") }.joinToString("、")}",
-            fontSize = 11.5.sp,
-            color = muted,
-        )
     }
 }
 

@@ -31,11 +31,6 @@
 
 	<queries>
 		<package android:name="org.connectbot.debug" />
-		<!-- The VPN apps installed, named in the Tailscale dialog when a VPN
-		     will not let the embedded Tailscale bypass it. -->
-		<intent>
-			<action android:name="android.net.VpnService" />
-		</intent>
 	</queries>
 
 	<uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
