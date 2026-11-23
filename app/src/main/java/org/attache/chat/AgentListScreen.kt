@@ -200,6 +200,19 @@ fun AgentListScreen(
             onDismiss = { renaming = null },
         )
     }
+    var closing by remember { mutableStateOf<AgentPane?>(null) }
+    closing?.let { agent ->
+        CloseAgentDialog(
+            agent = agent,
+            onConfirm = {
+                closing = null
+                viewModel.close(agent) { ok ->
+                    if (!ok) Toast.makeText(context, "Could not close: the host did not answer", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { closing = null },
+        )
+    }
 
     Scaffold(
         modifier = modifier,
@@ -259,7 +272,7 @@ fun AgentListScreen(
                 ChatConnection.READY -> if (state.agents.isEmpty()) {
                     CenteredMessage("No agents are running in tmux.")
                 } else {
-                    AgentList(state.agents, onOpenAgent, onRename = { renaming = it })
+                    AgentList(state.agents, onOpenAgent, onRename = { renaming = it }, onClose = { closing = it })
                 }
             }
         }
@@ -277,7 +290,12 @@ private fun subtitle(state: AgentListUiState): String = when (state.connection) 
 }
 
 @Composable
-private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit, onRename: (AgentPane) -> Unit) {
+private fun AgentList(
+    agents: List<AgentPane>,
+    onOpen: (AgentPane) -> Unit,
+    onRename: (AgentPane) -> Unit,
+    onClose: (AgentPane) -> Unit,
+) {
     // One clock for every row, ticking once a minute: the ages are whole
     // minutes, so a faster tick would redraw the list to change nothing.
     val nowSec by produceState(System.currentTimeMillis() / 1000) {
@@ -303,7 +321,16 @@ private fun AgentList(agents: List<AgentPane>, onOpen: (AgentPane) -> Unit, onRe
                 )
             }
             items(inPhase, key = { it.paneId }) { agent ->
-                AgentRow(agent, nowSec, onClick = { onOpen(agent) }, onLongClick = { onRename(agent) })
+                var menu by remember { mutableStateOf(false) }
+                Box {
+                    AgentRow(agent, nowSec, onClick = { onOpen(agent) }, onLongClick = { menu = true })
+                    AgentRowMenu(
+                        expanded = menu,
+                        onDismiss = { menu = false },
+                        onRename = { onRename(agent) },
+                        onClose = { onClose(agent) },
+                    )
+                }
             }
         }
     }
@@ -323,7 +350,7 @@ private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit, onLong
             // click handler outside it is drawn square, its corners showing
             // past the row's rounded ones. Clipped first, it stays inside.
             .clip(shape)
-            // A long press renames.
+            // A long press opens Rename and Close.
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {

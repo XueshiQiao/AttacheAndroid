@@ -106,6 +106,23 @@ class AgentListViewModel @Inject constructor(
         }
     }
 
+    /** Closes [agent]'s pane on the host, after the person confirmed it; the
+     * list's own watch then drops the row. [onDone] gets whether tmux took it. */
+    fun close(agent: AgentPane, onDone: (Boolean) -> Unit) {
+        val tmux = link.control.value
+        if (tmux == null) return onDone(false)
+        viewModelScope.launch {
+            val ok = try {
+                tmux.killPane(agent.paneId)
+                true
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                false
+            }
+            onDone(ok)
+        }
+    }
+
     /**
      * Pushed rather than polled: `attache-cli agents --watch` reads every
      * agent on the host every 1.5 s (0.08 s with 26 agents) and sends the

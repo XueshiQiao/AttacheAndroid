@@ -513,6 +513,25 @@ class AgentChatViewModel @Inject constructor(
         }
     }
 
+    /** Closes [agent]'s pane on the host, after the person confirmed it;
+     * the switcher's list is read again. [onDone] gets whether tmux took it. */
+    fun close(agent: AgentPane, onDone: (Boolean) -> Unit) {
+        val tmux = control
+        if (tmux == null) return onDone(false)
+        viewModelScope.launch {
+            val ok = try {
+                tmux.killPane(agent.paneId)
+                true
+            } catch (e: Exception) {
+                if (e is CancellationException) currentCoroutineContext().ensureActive()
+                Timber.w("kill-pane failed: %s", e.message)
+                false
+            }
+            if (ok) refreshAllAgents()
+            onDone(ok)
+        }
+    }
+
     fun refreshAllAgents() {
         val tmux = control ?: return
         if (agentsRefresh?.isActive == true) return

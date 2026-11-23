@@ -98,7 +98,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -271,18 +270,36 @@ fun AgentChatScreen(
         if (agent.paneId != viewModel.paneId) onOpenAgent(agent)
     }
     val haptics = LocalHapticFeedback.current
-    var renaming by remember { mutableStateOf(false) }
-    val renamed = state.agent
-    if (renaming && renamed != null) {
+    // The title's long press renames this page's agent; the switcher's
+    // long-press menu renames or closes any agent in it.
+    var renaming by remember { mutableStateOf<AgentPane?>(null) }
+    renaming?.let { renamed ->
         RenameAgentDialog(
             agent = renamed,
             onSave = { name ->
-                renaming = false
+                renaming = null
                 viewModel.rename(renamed, name) { ok ->
                     if (!ok) drawerScope.launch { snackbar.showSnackbar("Could not rename: the host did not answer") }
                 }
             },
-            onDismiss = { renaming = false },
+            onDismiss = { renaming = null },
+        )
+    }
+    var closing by remember { mutableStateOf<AgentPane?>(null) }
+    closing?.let { target ->
+        CloseAgentDialog(
+            agent = target,
+            onConfirm = {
+                closing = null
+                viewModel.close(target) { ok ->
+                    when {
+                        !ok -> drawerScope.launch { snackbar.showSnackbar("Could not close: the host did not answer") }
+                        // This page's own agent is gone: nothing is left here to read.
+                        target.paneId == viewModel.paneId -> onNavigateBack()
+                    }
+                }
+            },
+            onDismiss = { closing = null },
         )
     }
     // The "+" over the agent list: an empty window or a saved project, in
@@ -314,6 +331,8 @@ fun AgentChatScreen(
                     onPick = switchTo,
                     keepBottomInset = false,
                     onNewWindow = tmux?.let { { drawerScope.launch { drawer.close() }; newWindowSheet = true } },
+                    onRename = { renaming = it },
+                    onClose = { closing = it },
                     // A drag on the list, in any direction, means the person
                     // is after the list: the card gives its room back. A drag
                     // on the card itself scrolls the card and folds nothing.
@@ -346,7 +365,7 @@ fun AgentChatScreen(
                                     onLongClick = if (state.agent != null) {
                                         {
                                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            renaming = true
+                                            renaming = state.agent
                                         }
                                     } else {
                                         null
@@ -1930,9 +1949,14 @@ internal fun AgentDrawer(
     keepBottomInset: Boolean = true,
     modifier: Modifier = Modifier,
     onNewWindow: (() -> Unit)? = null,
+    onRename: ((AgentPane) -> Unit)? = null,
+    onClose: ((AgentPane) -> Unit)? = null,
 ) {
     val nowSec = System.currentTimeMillis() / 1000
     val groups = agents.groupBy { it.phase }
+    val haptics = LocalHapticFeedback.current
+    // The row whose long-press menu is open, by pane id.
+    var menuFor by remember { mutableStateOf<String?>(null) }
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp + if (keepBottomInset) bottomSafeInset() else 0.dp),
@@ -1967,19 +1991,45 @@ internal fun AgentDrawer(
                 )
             }
             items(inPhase, key = { it.paneId }) { agent ->
-                NavigationDrawerItem(
-                    selected = agent.paneId == current,
-                    onClick = { onPick(agent) },
-                    icon = {
+                // NavigationDrawerItem's look, drawn here because it takes no
+                // long press: that opens Rename and Close for this row.
+                val selected = agent.paneId == current
+                Box(Modifier.padding(horizontal = 12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .clip(CircleShape)
+                            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                            .combinedClickable(
+                                onClick = { onPick(agent) },
+                                onLongClick = if (onRename != null || onClose != null) {
+                                    {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        menuFor = agent.paneId
+                                    }
+                                } else {
+                                    null
+                                },
+                            )
+                            .padding(start = 16.dp, end = 24.dp)
+                            .testTag("agentDrawerRow-${agent.paneId}"),
+                    ) {
                         Box(
                             Modifier
                                 .size(8.dp)
                                 .background(phaseColor(agent.phase), CircleShape),
                         )
-                    },
-                    label = {
-                        Column {
-                            Text(agent.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                agent.title,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                             Text(
                                 listOf(agent.sessionName, agent.windowName).joinToString(" · "),
                                 style = MaterialTheme.typography.bodySmall,
@@ -1988,10 +2038,18 @@ internal fun AgentDrawer(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                    },
-                    badge = agent.sinceEpochSec?.let { since -> { Text(age(nowSec - since), style = MaterialTheme.typography.labelSmall) } },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
+                        agent.sinceEpochSec?.let { since ->
+                            Spacer(Modifier.width(12.dp))
+                            Text(age(nowSec - since), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    AgentRowMenu(
+                        expanded = menuFor == agent.paneId,
+                        onDismiss = { menuFor = null },
+                        onRename = { onRename?.invoke(agent) },
+                        onClose = { onClose?.invoke(agent) },
+                    )
+                }
             }
         }
     }

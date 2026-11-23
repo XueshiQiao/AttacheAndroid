@@ -524,6 +524,18 @@ class TmuxControl(
         send("select-window -t $id")
     }
 
+    /**
+     * Closes one pane and ends everything running in it, an agent mid-turn
+     * included; there is no undo, so callers ask first. A chat is a pane,
+     * not a window: the window's other panes stay, and tmux closes the
+     * window itself only when this was its last pane.
+     */
+    suspend fun killPane(paneId: String) {
+        require(PANE_ID.matches(paneId)) { "not a pane id: $paneId" }
+        send("kill-pane -t $paneId")
+        refresh()
+    }
+
     suspend fun renameWindow(windowId: String, newName: String) {
         require(WINDOW_ID.matches(windowId)) { "not a window id: $windowId" }
         val trimmed = newName.trim()
