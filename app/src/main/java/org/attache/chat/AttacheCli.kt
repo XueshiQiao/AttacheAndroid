@@ -17,6 +17,7 @@
 
 package org.attache.chat
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -57,6 +58,16 @@ data class ScreenReading(
 
 /** A saved project; [exists] is whether its folder was there when read. */
 data class Project(val id: String, val name: String, val path: String, val command: String, val exists: Boolean)
+
+/**
+ * A name put on a tmux window ("Follow up", "Daily") so a window worth
+ * coming back to stands apart from one to close when it is done. Which tags
+ * there are is attache-cli's, in the host's `~/.config/attache-tags.toml`;
+ * which window carries which is the window's own tmux option
+ * `@attache_tags`, tag ids joined by commas. [color] is one of
+ * [AttacheCli.TAG_COLORS].
+ */
+data class WindowTag(val id: String, val name: String, val color: String)
 
 /** What `projects` answers: the saved ones, and the commands to offer when one is saved. */
 data class ProjectList(val projects: List<Project>, val commands: List<String>)
@@ -190,6 +201,95 @@ object AttacheCli {
     suspend fun removeProject(tmux: TmuxControl, id: String): String? {
         if (!PROJECT_ID.matches(id)) return "not a project id"
         return refusal(lines(tmux, "project remove $id"), "removed")
+    }
+
+    // Window tags (attache-cli 0.3.22). Only ids and colour names are
+    // written into a command as themselves; a tag's name goes base64-encoded.
+
+    /** The colour names attache-cli accepts, in the order a picker offers them. */
+    val TAG_COLORS = listOf("gray", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink")
+
+    /** The host's tags in the file's order; null when the host could not be
+     * asked or its attache-cli does not know tags. */
+    suspend fun tags(tmux: TmuxControl): List<WindowTag>? = parseTags(lines(tmux, "tags") ?: return null)
+
+    internal fun parseTags(out: List<String>): List<WindowTag>? {
+        val list = out.firstNotNullOfOrNull {
+            try {
+                JSONObject(it).optJSONArray("tags")
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return null
+        return (0 until list.length()).mapNotNull { i ->
+            val o = list.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("id")
+            val name = o.optString("name")
+            if (!PROJECT_ID.matches(id) || name.isEmpty()) return@mapNotNull null
+            WindowTag(id, name, o.optString("color").takeIf { it in TAG_COLORS } ?: TAG_COLORS[0])
+        }
+    }
+
+    /** Makes a tag, or with [id] changes that one. The tag as kept, or why not. */
+    suspend fun saveTag(tmux: TmuxControl, id: String?, name: String, color: String): Pair<WindowTag?, String?> {
+        if (id != null && !PROJECT_ID.matches(id)) return null to "not a tag id"
+        if (color !in TAG_COLORS || name.isBlank()) return null to "a tag needs a name and one of the colours"
+        val idArg = id?.let { "--id $it " } ?: ""
+        val out = lines(tmux, "tag save $idArg--name ${b64(name.trim())} --color $color")
+        tagRefusal(out, "saved")?.let { return null to it }
+        val o = answer(out, "saved") ?: return null to "attache-cli answered without the tag"
+        val kept = o.optString("id")
+        if (!PROJECT_ID.matches(kept)) return null to "attache-cli answered without the tag"
+        return WindowTag(kept, o.optString("name"), o.optString("color")) to null
+    }
+
+    /** Forgets a tag and takes it off every window. Null when done, or why not. */
+    suspend fun removeTag(tmux: TmuxControl, id: String): String? {
+        if (!PROJECT_ID.matches(id)) return "not a tag id"
+        return tagRefusal(lines(tmux, "tag remove $id"), "removed")
+    }
+
+    private fun tagRefusal(lines: List<String>?, flag: String): String? {
+        if (lines == null) return "the host did not answer"
+        val o = answer(lines, flag) ?: return "attache-cli on the host does not know tags yet (it needs 0.3.22)"
+        return if (o.optBoolean(flag)) null else o.optString("why").ifEmpty { "attache-cli refused" }
+    }
+
+    /** Every window's tag ids on the server, keyed by window id; windows with
+     * none are absent. One `list-windows -a`, so every session's windows. */
+    suspend fun windowTags(tmux: TmuxControl): Map<String, List<String>>? = try {
+        parseWindowTags(tmux.query("list-windows -a -F '#{window_id}\u0001#{@attache_tags}'"))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    internal fun parseWindowTags(lines: List<String>): Map<String, List<String>> = lines.mapNotNull { line ->
+        val window = line.substringBefore('\u0001')
+        if (!WINDOW_ID.matches(window)) return@mapNotNull null
+        val ids = line.substringAfter('\u0001', "").split(',').filter { PROJECT_ID.matches(it) }.distinct()
+        if (ids.isEmpty()) null else window to ids
+    }.toMap()
+
+    /** Makes [window] carry exactly [ids], then tells every client a
+     * window's tags changed. False when tmux refused. */
+    suspend fun setWindowTags(tmux: TmuxControl, window: String, ids: List<String>): Boolean {
+        if (!WINDOW_ID.matches(window)) return false
+        val kept = ids.filter { PROJECT_ID.matches(it) }
+        return try {
+            if (kept.isEmpty()) {
+                tmux.query("set-option -wu -t $window @attache_tags")
+            } else {
+                tmux.query("set-option -w -t $window @attache_tags ${kept.joinToString(",")}")
+            }
+            tmux.query("set-option -g @attache_window_tags_rev ${System.currentTimeMillis()}")
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /** A new window in [session] (`$3`), in the project's folder, running

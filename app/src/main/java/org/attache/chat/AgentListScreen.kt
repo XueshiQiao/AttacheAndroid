@@ -200,6 +200,67 @@ fun AgentListScreen(
             onDismiss = { renaming = null },
         )
     }
+    // Tags: the dialog for one window, the form for making or editing a tag,
+    // and the confirmation before deleting one.
+    var tagging by remember { mutableStateOf<AgentPane?>(null) }
+    var editingTag by remember { mutableStateOf<WindowTag?>(null) }
+    var creatingTag by remember { mutableStateOf(false) }
+    var deletingTag by remember { mutableStateOf<WindowTag?>(null) }
+    val tagFailed: (String, String?) -> Unit = { what, why ->
+        if (why != null) Toast.makeText(context, "$what: $why", Toast.LENGTH_SHORT).show()
+    }
+    tagging?.takeIf { !creatingTag && editingTag == null && deletingTag == null }?.let { agent ->
+        AgentTagsDialog(
+            agent = agent,
+            tags = state.tags,
+            carried = state.windowTags[agent.windowId].orEmpty().toSet(),
+            onToggle = { tag ->
+                viewModel.toggleTag(agent, tag) { ok ->
+                    if (!ok) tagFailed("Could not change the tags", "tmux did not answer")
+                }
+            },
+            onNew = { creatingTag = true },
+            onEdit = { editingTag = it },
+            onDismiss = { tagging = null },
+        )
+    }
+    if (creatingTag) {
+        TagEditDialog(
+            tag = null,
+            onSave = { name, color ->
+                creatingTag = false
+                viewModel.createTag(name, color, applyTo = tagging) { tagFailed("Tag not created", it) }
+            },
+            onDelete = null,
+            onDismiss = { creatingTag = false },
+        )
+    }
+    editingTag?.takeIf { deletingTag == null }?.let { tag ->
+        TagEditDialog(
+            tag = tag,
+            onSave = { name, color ->
+                editingTag = null
+                if (name != tag.name || color != tag.color) {
+                    viewModel.updateTag(tag, name, color) { tagFailed("Tag not changed", it) }
+                }
+            },
+            onDelete = { deletingTag = tag },
+            onDismiss = { editingTag = null },
+        )
+    }
+    deletingTag?.let { tag ->
+        DeleteTagDialog(
+            tag = tag,
+            windows = state.windowTags.values.count { tag.id in it },
+            onConfirm = {
+                deletingTag = null
+                editingTag = null
+                viewModel.deleteTag(tag) { tagFailed("Tag not deleted", it) }
+            },
+            onDismiss = { deletingTag = null },
+        )
+    }
+
     var closing by remember { mutableStateOf<AgentPane?>(null) }
     closing?.let { agent ->
         CloseAgentDialog(
@@ -272,7 +333,14 @@ fun AgentListScreen(
                 ChatConnection.READY -> if (state.agents.isEmpty()) {
                     CenteredMessage("No agents are running in tmux.")
                 } else {
-                    AgentList(state.agents, onOpenAgent, onRename = { renaming = it }, onClose = { closing = it })
+                    AgentList(
+                        state.agents,
+                        tagsOf = state::tagsOf,
+                        onOpen = onOpenAgent,
+                        onRename = { renaming = it },
+                        onClose = { closing = it },
+                        onTags = { tagging = it },
+                    )
                 }
             }
         }
@@ -292,9 +360,11 @@ private fun subtitle(state: AgentListUiState): String = when (state.connection) 
 @Composable
 private fun AgentList(
     agents: List<AgentPane>,
+    tagsOf: (AgentPane) -> List<WindowTag>,
     onOpen: (AgentPane) -> Unit,
     onRename: (AgentPane) -> Unit,
     onClose: (AgentPane) -> Unit,
+    onTags: (AgentPane) -> Unit,
 ) {
     // One clock for every row, ticking once a minute: the ages are whole
     // minutes, so a faster tick would redraw the list to change nothing.
@@ -323,12 +393,13 @@ private fun AgentList(
             items(inPhase, key = { it.paneId }) { agent ->
                 var menu by remember { mutableStateOf(false) }
                 Box {
-                    AgentRow(agent, nowSec, onClick = { onOpen(agent) }, onLongClick = { menu = true })
+                    AgentRow(agent, tagsOf(agent), nowSec, onClick = { onOpen(agent) }, onLongClick = { menu = true })
                     AgentRowMenu(
                         expanded = menu,
                         onDismiss = { menu = false },
                         onRename = { onRename(agent) },
                         onClose = { onClose(agent) },
+                        onTags = { onTags(agent) },
                     )
                 }
             }
@@ -337,7 +408,7 @@ private fun AgentList(
 }
 
 @Composable
-private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun AgentRow(agent: AgentPane, tags: List<WindowTag>, nowSec: Long, onClick: () -> Unit, onLongClick: () -> Unit) {
     val emphasised = agent.phase == AgentPhase.NEEDS_YOU
     val haptics = LocalHapticFeedback.current
     val shape = RoundedCornerShape(14.dp)
@@ -350,7 +421,7 @@ private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit, onLong
             // click handler outside it is drawn square, its corners showing
             // past the row's rounded ones. Clipped first, it stays inside.
             .clip(shape)
-            // A long press opens Rename and Close.
+            // A long press opens Tags, Rename and Close.
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {
@@ -385,6 +456,10 @@ private fun AgentRow(agent: AgentPane, nowSec: Long, onClick: () -> Unit, onLong
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (tags.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    TagChips(tags)
+                }
             }
             agent.sinceEpochSec?.let { since ->
                 Spacer(Modifier.width(8.dp))

@@ -46,7 +46,17 @@ data class AgentListUiState(
     val connection: ChatConnection = ChatConnection.CONNECTING,
     val agents: List<AgentPane> = emptyList(),
     val error: String? = null,
-)
+    /** The host's window tags, in its list's order. */
+    val tags: List<WindowTag> = emptyList(),
+    /** Each window's tag ids, keyed by window id (`@7`). */
+    val windowTags: Map<String, List<String>> = emptyMap(),
+) {
+    /** The tags [agent]'s window carries, in the list's order. */
+    fun tagsOf(agent: AgentPane): List<WindowTag> {
+        val ids = windowTags[agent.windowId] ?: return emptyList()
+        return tags.filter { it.id in ids }
+    }
+}
 
 /** The chat mode's first screen: every agent in tmux, by what it needs. */
 @HiltViewModel
@@ -60,11 +70,18 @@ class AgentListViewModel @Inject constructor(
     // What this host's list was when last read, shown at once on return.
     private val agents = MutableStateFlow(AgentDirectory.get(hostId))
     private val pollError = MutableStateFlow<String?>(null)
+    private val tagList = MutableStateFlow<List<WindowTag>>(emptyList())
+    private val windowTags = MutableStateFlow<Map<String, List<String>>>(emptyMap())
 
     val uiState: StateFlow<AgentListUiState> =
-        combine(link.hostName, link.connection, agents, link.error, pollError) { host, connection, list, linkError, error ->
-            AgentListUiState(host, connection, list, error ?: linkError)
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, AgentListUiState())
+        combine(
+            combine(link.hostName, link.connection, agents, link.error, pollError) { host, connection, list, linkError, error ->
+                AgentListUiState(host, connection, list, error ?: linkError)
+            },
+            tagList,
+            windowTags,
+        ) { state, tags, byWindow -> state.copy(tags = tags, windowTags = byWindow) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, AgentListUiState())
 
     /** Whether the list is on screen. It polls only then: behind a chat page
      * it would run every agent's script on the channel the chat page is
@@ -80,6 +97,109 @@ class AgentListViewModel @Inject constructor(
         viewModelScope.launch {
             link.control.combine(shown) { tmux, visible -> tmux.takeIf { visible } }
                 .collectLatest { tmux -> if (tmux != null) poll(tmux) }
+        }
+        viewModelScope.launch {
+            link.control.combine(shown) { tmux, visible -> tmux.takeIf { visible } }
+                .collectLatest { tmux -> if (tmux != null) followTags(tmux) }
+        }
+    }
+
+    /**
+     * Reads the tags when the list appears and again each time tmux reports
+     * that they changed (`TmuxControl.tagRevisions`) — told, never asked on
+     * a timer. Each report rereads every window's tags; the tag list itself
+     * only when it is the list's revision that moved, or a window names a
+     * tag the list does not have yet (made on another client a moment ago).
+     */
+    private suspend fun followTags(tmux: TmuxControl) {
+        var listRevision: String? = null
+        var first = true
+        tmux.tagRevisions.collect { revisions ->
+            if (first || revisions.list != listRevision) {
+                listRevision = revisions.list
+                readTagList(tmux)
+            }
+            first = false
+            readWindowTags(tmux)
+        }
+    }
+
+    private suspend fun readTagList(tmux: TmuxControl) {
+        val read = try {
+            AttacheCli.tags(tmux)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        }
+        // A host that did not answer keeps the list it had.
+        if (read != null) tagList.value = read
+    }
+
+    private val askedAbout = mutableSetOf<String>()
+
+    private suspend fun readWindowTags(tmux: TmuxControl) {
+        val read = AttacheCli.windowTags(tmux) ?: return
+        windowTags.value = read
+        val known = tagList.value.map { it.id }.toSet()
+        val unknown = read.values.flatten().filter { it !in known && it !in askedAbout }
+        if (unknown.isNotEmpty()) {
+            askedAbout += unknown
+            readTagList(tmux)
+        }
+    }
+
+    /** Puts [tag] on [agent]'s window, or takes it off. */
+    fun toggleTag(agent: AgentPane, tag: WindowTag, onDone: (Boolean) -> Unit) {
+        val carried = windowTags.value[agent.windowId].orEmpty().toSet()
+        val wanted = if (tag.id in carried) carried - tag.id else carried + tag.id
+        setWindowTags(agent, wanted, onDone)
+    }
+
+    private fun setWindowTags(agent: AgentPane, wanted: Set<String>, onDone: (Boolean) -> Unit) {
+        val tmux = link.control.value ?: return onDone(false)
+        // In the list's order, so the chips do not reshuffle by which tag
+        // went on first.
+        val ordered = tagList.value.map { it.id }.filter { it in wanted }
+        viewModelScope.launch {
+            val ok = AttacheCli.setWindowTags(tmux, agent.windowId, ordered)
+            readWindowTags(tmux)
+            onDone(ok)
+        }
+    }
+
+    /** Makes a tag and, when [applyTo] is given, puts it on that agent's
+     * window. [onDone] gets why it was not made, or null. */
+    fun createTag(name: String, color: String, applyTo: AgentPane?, onDone: (String?) -> Unit) {
+        val tmux = link.control.value ?: return onDone("the host is not connected")
+        viewModelScope.launch {
+            val (tag, why) = AttacheCli.saveTag(tmux, null, name, color)
+            readTagList(tmux)
+            if (tag != null && applyTo != null) {
+                val carried = windowTags.value[applyTo.windowId].orEmpty().toSet()
+                setWindowTags(applyTo, carried + tag.id) {}
+            }
+            onDone(why)
+        }
+    }
+
+    /** Renames or recolours [tag]. [onDone] gets why not, or null. */
+    fun updateTag(tag: WindowTag, name: String, color: String, onDone: (String?) -> Unit) {
+        val tmux = link.control.value ?: return onDone("the host is not connected")
+        viewModelScope.launch {
+            val (_, why) = AttacheCli.saveTag(tmux, tag.id, name, color)
+            readTagList(tmux)
+            onDone(why)
+        }
+    }
+
+    /** Forgets [tag]; attache-cli takes it off every window. */
+    fun deleteTag(tag: WindowTag, onDone: (String?) -> Unit) {
+        val tmux = link.control.value ?: return onDone("the host is not connected")
+        viewModelScope.launch {
+            val why = AttacheCli.removeTag(tmux, tag.id)
+            readTagList(tmux)
+            readWindowTags(tmux)
+            onDone(why)
         }
     }
 

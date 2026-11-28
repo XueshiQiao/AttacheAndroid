@@ -28,13 +28,29 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 
 /**
- * What a long press on an agent's row offers. Renaming and closing are two
+ * What a long press on an agent's row offers: its window's tags, and
+ * renaming and closing. Renaming and closing are two
  * items worded as what they do, and closing only opens [CloseAgentDialog]:
  * nothing is ended from the menu itself.
  */
 @Composable
-fun AgentRowMenu(expanded: Boolean, onDismiss: () -> Unit, onRename: () -> Unit, onClose: () -> Unit) {
+fun AgentRowMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onClose: () -> Unit,
+    onTags: (() -> Unit)? = null,
+) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        if (onTags != null) {
+            DropdownMenuItem(
+                text = { Text("Tags…") },
+                onClick = {
+                    onDismiss()
+                    onTags()
+                },
+            )
+        }
         DropdownMenuItem(
             text = { Text("Rename…") },
             onClick = {

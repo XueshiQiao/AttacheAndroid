@@ -102,6 +102,10 @@ object TmuxTrial {
 
 data class TmuxWindow(val id: String, val index: Int, val name: String, val active: Boolean)
 
+/** What [TmuxControl.tagRevisions] last heard; [heard] counts the reports, so
+ * a report that repeats a value still reads as one more. */
+data class TagRevisions(val list: String? = null, val windows: String? = null, val heard: Int = 0)
+
 data class TmuxSession(val id: String, val name: String, val attached: Boolean, val windows: List<TmuxWindow>)
 
 /** A pane of the active window, in that window's cell coordinates. */
@@ -301,6 +305,19 @@ class TmuxControl(
     )
     private val pushCheckLock = Mutex()
 
+    private val _tagRevisions = MutableStateFlow(TagRevisions())
+
+    /**
+     * The two global options that say window tags changed: the host's tag
+     * list (`@attache_tags_rev`, set by attache-cli on every save and
+     * remove) and some window's tags (`@attache_window_tags_rev`, set by a
+     * client after `set-option @attache_tags`). Subscribed to rather than
+     * asked for: this one control client sits in one session, and a `@*`
+     * subscription would cover only that session's windows, while a global
+     * option's subscription fires from any session.
+     */
+    val tagRevisions: StateFlow<TagRevisions> = _tagRevisions.asStateFlow()
+
     private val _pushOffers = MutableStateFlow<List<PushOffer>>(emptyList())
 
     /** Files the computer pushed while the phone was away, found on
@@ -380,6 +397,16 @@ class TmuxControl(
                     throw e
                 } catch (e: Exception) {
                     Timber.w("no-output failed: %s", e.message)
+                }
+                // `refresh-client -B` is tmux 3.2; on an older server the
+                // tags show as they were when the list was last read.
+                try {
+                    send("refresh-client -B '$SUB_TAG_LIST::#{@attache_tags_rev}'")
+                    send("refresh-client -B '$SUB_WINDOW_TAGS::#{@attache_window_tags_rev}'")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.w("tag subscriptions failed: %s", e.message)
                 }
                 for (request in refreshRequests) {
                     while (true) {
@@ -1564,10 +1591,27 @@ class TmuxControl(
                         blockIsOurs = blockGuard.split(' ').getOrNull(2) == "1"
                     }
 
+                    text.startsWith("%subscription-changed ") -> heardSubscription(text)
+
                     REFRESH_ON.any { text.startsWith(it) } -> refreshRequests.trySend(Unit)
 
                     text.startsWith("%exit") -> Timber.i("tmux -C exited: %s", text)
                 }
+            }
+        }
+    }
+
+    /** `%subscription-changed <name> $S - - - : <value>` for the two
+     * session-scope tag subscriptions; every other subscription is ignored. */
+    private fun heardSubscription(text: String) {
+        val rest = text.removePrefix("%subscription-changed ")
+        val name = rest.substringBefore(' ')
+        val value = rest.substringAfter(" : ", "")
+        _tagRevisions.update {
+            when (name) {
+                SUB_TAG_LIST -> it.copy(list = value, heard = it.heard + 1)
+                SUB_WINDOW_TAGS -> it.copy(windows = value, heard = it.heard + 1)
+                else -> it
             }
         }
     }
@@ -1592,6 +1636,8 @@ class TmuxControl(
         const val EXTRA_SHARE_WINDOW_ID = "attache_share_window_id"
         const val EXTRA_SHARE_SESSION_NAME = "attache_share_session_name"
         private const val SEP = "\u0001"
+        private const val SUB_TAG_LIST = "attache-tags-rev"
+        private const val SUB_WINDOW_TAGS = "attache-window-tags-rev"
         private const val MIN_SCROLL_INTERVAL_MS = 8L
 
         /** An upload of a 0.6 MB binary over a relayed 5G link, with room. */

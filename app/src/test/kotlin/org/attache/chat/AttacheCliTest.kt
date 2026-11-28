@@ -260,4 +260,25 @@ class AttacheCliTest {
         assertTrue(review.review)
         assertEquals(listOf("Which sides?" to "Left"), review.answers)
     }
+
+    @Test
+    fun tagsReadTheirListAnUnknownColourAsGrayAndDropABadId() {
+        val tags = AttacheCli.parseTags(
+            listOf(
+                """{"tags":[{"id":"a1","name":"持续跟进","color":"orange"},""" +
+                    """{"id":"b2","name":"X","color":"mauve"},{"id":"bad id","name":"Y","color":"red"}],"colors":[]}""",
+            ),
+        )
+        assertEquals(listOf(WindowTag("a1", "持续跟进", "orange"), WindowTag("b2", "X", "gray")), tags)
+        assertNull("no answer is not an empty list", AttacheCli.parseTags(emptyList()))
+        assertEquals(emptyList<WindowTag>(), AttacheCli.parseTags(listOf("""{"tags":[],"colors":[]}""")))
+    }
+
+    @Test
+    fun windowTagsReadEveryWindowsIdsAndSkipWindowsWithNone() {
+        val read = AttacheCli.parseWindowTags(
+            listOf("@1\u0001a1,b2,a1", "@2\u0001", "@3\u0001bad id,c3", "garbage"),
+        )
+        assertEquals(mapOf("@1" to listOf("a1", "b2"), "@3" to listOf("c3")), read)
+    }
 }
