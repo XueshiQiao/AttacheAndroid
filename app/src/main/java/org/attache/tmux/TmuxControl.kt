@@ -95,7 +95,24 @@ object TmuxTrial {
     private const val ORPHAN_REAP =
         "ps -eo pid=,ppid=,command= 2>/dev/null | awk '\$2 == 1 && /tmux.*-C/ && !/attache-mobile-test/ { print \$1 }' | xargs kill -9 2>/dev/null || true"
 
-    fun controlCommand(t: Target) = "export $PATH_SETUP; $ORPHAN_REAP; exec tmux -u ${t.socketArg}-C new-session -A -s '${t.session}'"
+    // `no-output` and `ignore-size` go on the attach itself, never in a
+    // `refresh-client -f` sent after it. Measured and disassembled on tmux
+    // 3.6a by the desktop app (its AGENTS.md, 2026-11-01): when more than
+    // 8 KB of pane output arrives during the handshake, tmux queues it as
+    // blocks on the client, and a later `refresh-client -f no-output` frees
+    // the panes without unlinking those blocks; every reply after that waits
+    // behind them forever, so the control channel goes silent for good.
+    // Reproduced 4 runs in 5 that way, 0 in 5 with the flag on the attach.
+    // `new-session` takes `-f` from tmux 3.2; an older one would refuse the
+    // whole command and end the login shell, so it is asked for by version
+    // and `start()` falls back to the old way only where the flag is missing.
+    // Measured on 3.6a: `new-session -A -f no-output,ignore-size` reports
+    // `ignore-size,no-output` in `#{client_flags}`, attaching or creating.
+    private const val ATTACH_FLAGS =
+        "case \"\$(tmux -V 2>/dev/null)\" in 'tmux 1.'*|'tmux 2.'*|'tmux 3.0'*|'tmux 3.1'*) F= ;; *) F='-f no-output,ignore-size' ;; esac"
+
+    fun controlCommand(t: Target) =
+        "export $PATH_SETUP; $ORPHAN_REAP; $ATTACH_FLAGS; exec tmux -u ${t.socketArg}-C new-session -A \$F -s '${t.session}'"
 
     fun attachCommand(t: Target) = "export $PATH_SETUP; exec tmux ${t.socketArg}new-session -A -s '${t.session}'"
 }
@@ -389,7 +406,12 @@ class TmuxControl(
                 // `%output` lines on this control channel at all, while keeping
                 // command replies and layout/window notifications intact.
                 try {
-                    send("refresh-client -f no-output,ignore-size")
+                    // Already set by the attach on tmux 3.2 and later (see
+                    // `controlCommand`), and setting it again is the very
+                    // command that can stall this channel; only an older
+                    // tmux, which attached without it, is sent it here.
+                    val flags = send("display-message -p '#{client_flags}'").firstOrNull().orEmpty()
+                    if ("no-output" !in flags.split(',')) send("refresh-client -f no-output,ignore-size")
                     send(
                         "set-hook -g client-attached \"run-shell -b 'ps -eo pid=,ppid=,command= 2>/dev/null | awk \\\"\\\\\\\$2 == 1 && /tmux.*-C/ && !/attache-mobile-test/ { print \\\\\\\$1 }\\\" | xargs kill -9 2>/dev/null || true'\"",
                     )
