@@ -400,6 +400,7 @@ private fun AgentList(
                         onRename = { onRename(agent) },
                         onClose = { onClose(agent) },
                         onTags = { onTags(agent) },
+                        carried = tagsOf(agent),
                     )
                 }
             }
